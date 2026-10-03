@@ -1,12 +1,18 @@
 /* landinglab.c
  *
- * Landing Lab v0.1 (Captain Falcon).
+ * Landing Lab (Captain Falcon).
  *
  * While Falcon is airborne, this draws where he will touch down if the stick
  * stays where it is and no buttons are pressed, colored by what kind of
- * landing it will be: NIL, aerial interrupt, normal landing, L-cancel or full
- * aerial lag. After a landing, the prediction made when you last changed your
- * input stays on screen next to the path you really took.
+ * landing it will be: NIL, normal landing, L-cancel or full aerial lag. Ticks
+ * on that path mark the frames where pressing an aerial forces a touchdown
+ * (an aerial interrupt). After a landing, the prediction made when you last
+ * changed your input stays on screen next to the path you really took.
+ *
+ * An aerial interrupt: pressing an aerial swaps the ECB to the aerial's pose
+ * on that same frame. If the new ECB bottom ends up at or below a floor, you
+ * land right there. While the post-jump bottom lock is on, the swap waits
+ * until the lock ends and uses whatever aerial frame you're on by then.
  *
  * Whether a landing is a NIL or an aerial interrupt depends on the exact ECB
  * bottom on each frame of each animation, which the game only computes on
@@ -17,8 +23,9 @@
  * The physics and the floor test are ports of the game's own code, checked
  * against the decomp: ft_80084DB0 (air physics), ftCommon_CalcSelfAccel_
  * DriftFrom (drift), mpColl_LoadECB (ECB bottom lock), mpCheckFloor and
- * mpLineIntersection(H) (floor crossing), ft_80082B1C (NIL) and
- * ftCo_LandingAir_EnterWithLag (aerial lag, L-cancel).
+ * mpLineIntersection(H) (floor crossing), ft_80082B1C (NIL),
+ * ftCo_AttackAir_EnterFromMsid (aerial start) and ftCo_LandingAir_EnterWithLag
+ * (aerial lag, L-cancel).
  */
 
 #include "../MexTK/mex.h"
@@ -35,6 +42,9 @@
 #define COMMON_LCANCEL_WINDOW 0xE4  // int: L/R/Z within this many frames halves aerial lag
 #define COMMON_LCANCEL_DIV 0xE8     // float: aerial lag divisor for an L-cancel
 #define COMMON_PLATFORM_DROP 0x25C  // float: jump/fall pass through platforms at stick y <= this
+#define COMMON_AERIAL_STICK_X 0xDC  // float: |stick x| below this (and y below the next) is a nair
+#define COMMON_AERIAL_STICK_Y 0xE0  // float
+#define COMMON_AERIAL_ANGLE 0x20    // float, radians: steeper than this is an uair or dair
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
@@ -149,8 +159,8 @@ enum LandKind
 {
     LAND_NONE,    // no landing within LL_SIM_FRAMES
     LAND_NIL,     // jump/fall touching down slowly enough: straight to Wait
-    LAND_AI,      // aerial landing in its early auto-cancel window
-    LAND_NORMAL,  // normal landing lag (jump/fall, or late auto-cancel)
+    LAND_AI,      // aerial interrupt: an aerial's ECB touched down the first time it was used
+    LAND_NORMAL,  // normal landing lag (jump/fall, or an aerial's auto-cancel window)
     LAND_LCANCEL, // aerial lag, halved
     LAND_AERIAL,  // full aerial lag
     LAND_OTHER,   // left the air some other way (ledge grab, ...)
@@ -220,21 +230,6 @@ static EcbSample *Ecb_Get(int ts, int frame)
     if (frame >= LL_STATE_FRAMES)
         frame = LL_STATE_FRAMES - 1;
     return &ecb_table[ts * LL_STATE_FRAMES + frame];
-}
-
-// Landing in an aerial before its auto-cancel flag was ever set is an aerial
-// interrupt; landing after the flag cleared again is a plain auto-cancel.
-static int Aerial_InEarlyWindow(int ts, int frame)
-{
-    if (frame > LL_STATE_FRAMES)
-        frame = LL_STATE_FRAMES;
-    for (int i = 0; i < frame; i++)
-    {
-        EcbSample *s = Ecb_Get(ts, i);
-        if (s->seen && s->aerial_lag)
-            return 0;
-    }
-    return 1;
 }
 
 static float Aerial_LandingLag(FighterData *fp, int ts)
@@ -590,6 +585,37 @@ typedef struct SimStart
     int skip_line;
 } SimStart;
 
+// The simulated fighter between two frames.
+typedef struct SimState
+{
+    float x, y, vx, vy;
+    float bottom;         // ECB bottom used on the last frame
+    float prev_x, prev_y; // ECB bottom point of the last frame
+    int ts;
+    int frame;
+    int len;
+    int len_estimated;
+    int fastfall;
+    int tilt_timer;
+    int trigger_timer;
+    int lock;
+    int aerial_pending; // in an aerial whose own ECB bottom hasn't been used yet (lock)
+} SimState;
+
+// What happened on one simulated frame.
+typedef struct SimStep
+{
+    int landed;
+    int first_aerial_ecb; // the aerial's own ECB bottom was used for the first time
+    int unlearned;        // relied on data the event hasn't learned yet
+    int fastfall_started;
+    EcbSample *ecb;       // learned ECB for this frame
+} SimStep;
+
+// Aerials, as bits in the masks below
+#define AERIAL_BIT(ts) (1 << ((ts) - TS_AIRN))
+#define LL_AI_MAX_STEPS 12 // the bottom lock lasts at most 10 frames
+
 typedef struct Prediction
 {
     int num;            // last valid entry in the arrays below
@@ -604,6 +630,15 @@ typedef struct Prediction
     float bottom[LL_SIM_FRAMES + 1];   // ECB bottom per frame
     s8 ts[LL_SIM_FRAMES + 1];          // tracked state per frame
     EcbSample land_ecb;                // ECB at touchdown
+
+    // aerial interrupts: pressing an aerial on frame k whose ECB then
+    // touches down the first time it is used
+    u8 ai_mask[LL_SIM_FRAMES + 1];     // aerials that interrupt when pressed on frame k
+    u8 ai_lag_mask[LL_SIM_FRAMES + 1]; // ... of those, the ones that land with aerial lag
+    u8 ai_unlearned;                   // aerials skipped because their ECB isn't learned yet
+    int ai_first;                      // first frame of the first window, 0 = none
+    int ai_width;                      // frames in that window
+    u8 ai_aerials;                     // aerials that work somewhere in that window
 } Prediction;
 
 static float common_fastfall_stick;
@@ -611,6 +646,9 @@ static int common_fastfall_window;
 static int common_lcancel_window;
 static float common_lcancel_div;
 static float common_platform_drop;
+static float common_aerial_stick_x;
+static float common_aerial_stick_y;
+static float common_aerial_angle;
 
 static float Common_Float(int offset)
 {
@@ -720,76 +758,250 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->skip_line = cd->ignore_line;
 }
 
+static void Sim_Init(SimStart *start, SimState *s)
+{
+    s->x = start->pos.X;
+    s->y = start->pos.Y;
+    s->vx = start->vel.X;
+    s->vy = start->vel.Y;
+    s->bottom = start->bottom;
+    s->prev_x = s->x;
+    s->prev_y = s->y + s->bottom;
+    s->ts = start->ts;
+    s->frame = start->frame;
+    s->len = start->len;
+    s->len_estimated = start->len_estimated;
+    s->fastfall = start->fastfall;
+    s->tilt_timer = start->tilt_timer;
+    s->trigger_timer = start->trigger_timer;
+    s->lock = start->ecb_lock;
+    // an aerial is only ever entered in the air, after the lock was set, so
+    // a lock still running means its bones haven't moved the bottom yet
+    s->aerial_pending = Tracked_IsAerial(start->ts) && start->ecb_lock > 0;
+}
+
+// One frame, in the game's order: animation (the state can end), interrupt
+// (press, an aerial replaces the state), input timers, physics, ECB, floor
+// test. press is the aerial pressed this frame, or -1.
+static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, SimStep *out)
+{
+    out->landed = 0;
+    out->first_aerial_ecb = 0;
+    out->unlearned = 0;
+    out->fastfall_started = 0;
+
+    // animation: the state ends by itself when its animation runs out
+    s->frame++;
+    if (s->len > 0 && s->frame >= s->len)
+    {
+        int next = Tracked_Next(s->ts);
+        if (s->len_estimated)
+            out->unlearned = 1;
+
+        if (next == TS_FALL)
+        {
+            // ftCo_Fall_Enter clamps horizontal speed to the drift max
+            float max = fp->attr.aerial_drift_max;
+            if (s->vx < -max)
+                s->vx = -max;
+            else if (s->vx > max)
+                s->vx = max;
+        }
+        else if (next == TS_FALLAERIAL)
+        {
+            // ftCo_FallAerial_Enter doesn't keep a fastfall
+            s->fastfall = 0;
+        }
+
+        s->ts = next;
+        s->frame = 0;
+        s->len = 0;
+        s->len_estimated = 0;
+        s->aerial_pending = 0;
+    }
+
+    // interrupt: ftCo_AttackAir_EnterFromMsid keeps the fastfall and starts
+    // the aerial's animation on this frame, before physics and collision
+    if (press >= 0)
+    {
+        s->ts = press;
+        s->frame = 0;
+        s->len = state_len[press];
+        s->len_estimated = 0;
+        s->aerial_pending = 1;
+    }
+
+    // input: the stick is held, so its timers keep counting
+    if (s->tilt_timer < LL_TIMER_MAX)
+        s->tilt_timer++;
+    if (s->trigger_timer < LL_TIMER_MAX)
+        s->trigger_timer++;
+
+    // physics (ft_80084DB0)
+    if (!s->fastfall && s->vy < 0 && start->stick_y <= -common_fastfall_stick && s->tilt_timer < common_fastfall_window)
+    {
+        s->fastfall = 1;
+        s->tilt_timer = LL_TIMER_MAX;
+        out->fastfall_started = 1;
+    }
+    if (s->fastfall)
+        s->vy = -fp->attr.fastfall_velocity;
+    else
+    {
+        s->vy -= fp->attr.gravity;
+        if (s->vy < -fp->attr.terminal_velocity)
+            s->vy = -fp->attr.terminal_velocity;
+    }
+    s->vx += Drift_Accel(fp, s->vx, start->stick_x);
+    s->x += s->vx;
+    s->y += s->vy;
+
+    // ECB bottom: the lock counts down just before collision
+    EcbSample *e = Ecb_Get(s->ts, s->frame);
+    out->ecb = e;
+    if (s->lock > 0)
+        s->lock--;
+    if (s->lock > 0)
+        s->bottom = start->locked_bottom;
+    else if (e->has_bottom)
+        s->bottom = e->bottom;
+    else
+        out->unlearned = 1; // not learned yet: keep the last bottom
+    if (Tracked_IsAerial(s->ts))
+    {
+        if (!e->seen)
+            out->unlearned = 1;
+        if (s->aerial_pending && s->lock <= 0)
+        {
+            out->first_aerial_ecb = 1;
+            s->aerial_pending = 0;
+        }
+    }
+
+    // floor test (mpColl_80044628_Floor)
+    int pass_platforms = Tracked_UsesPlatformDrop(s->ts) && start->stick_y <= common_platform_drop;
+    float bx = s->x;
+    float by = s->y + s->bottom;
+    out->landed = Floor_Check(s->prev_x, s->prev_y, bx, by, pass_platforms, start->skip_line);
+    s->prev_x = bx;
+    s->prev_y = by;
+}
+
 static void Mark_Uncertain(Prediction *p, int frame)
 {
     if (p->uncertain_from > frame)
         p->uncertain_from = frame;
 }
 
-static void Classify(FighterData *fp, Prediction *p, int ts, int frame, float vel_y, int trigger_timer, EcbSample *s)
+// What a touchdown in state ts gives: ft_80082B1C for jumps and falls,
+// ftCo_LandingAir_EnterWithLag for aerials. An aerial whose own ECB touches
+// down the first time it's used is an aerial interrupt, whatever its lag.
+static int Landing_Kind(FighterData *fp, int ts, float vel_y, int trigger_timer, EcbSample *e,
+                        int first_aerial_ecb, int *lag, int *lcancel_lag)
 {
     float normal_lag = fp->attr.normal_landing_lag;
+    *lcancel_lag = 0;
 
     if (!Tracked_IsAerial(ts))
     {
-        // ft_80082B1C
         if (vel_y > Fighter_GetSoftLandVelocity(fp))
         {
-            p->land_kind = LAND_NIL;
-            p->lag = 0;
+            *lag = 0;
+            return LAND_NIL;
         }
-        else
+        *lag = (int)normal_lag;
+        return LAND_NORMAL;
+    }
+
+    if (!e->aerial_lag)
+    {
+        *lag = (int)normal_lag;
+        return first_aerial_ecb ? LAND_AI : LAND_NORMAL;
+    }
+
+    float full = Aerial_LandingLag(fp, ts);
+    int halved = (int)(full / common_lcancel_div);
+    if (halved == 0)
+        halved = 1;
+    *lcancel_lag = halved;
+
+    int lcancel = trigger_timer < common_lcancel_window;
+    *lag = lcancel ? halved : (int)full;
+    if (first_aerial_ecb)
+        return LAND_AI;
+    return lcancel ? LAND_LCANCEL : LAND_AERIAL;
+}
+
+// Would pressing each aerial on frame k force a touchdown? before is the
+// state just before frame k. The aerial's ECB is used right away, or when the
+// lock runs out; it's an aerial interrupt if that first use touches down.
+static void Branch_Aerials(FighterData *fp, SimStart *start, SimState *before, Prediction *p, int k)
+{
+    // aerials can't be interrupted by another aerial (until their IASA,
+    // which isn't tracked), but jumps and falls can on any frame
+    if (Tracked_IsAerial(p->ts[k]))
+        return;
+
+    for (int a = TS_AIRN; a <= TS_AIRLW; a++)
+    {
+        SimState b = *before;
+        SimStep step;
+
+        for (int n = 0; n < LL_AI_MAX_STEPS; n++)
         {
-            p->land_kind = LAND_NORMAL;
-            p->lag = (int)normal_lag;
+            Sim_Step(fp, start, &b, n == 0 ? a : -1, &step);
+
+            // the aerial's frames must have been seen, and its bottom too
+            // once the lock is over
+            if (!step.ecb->seen || (b.lock <= 0 && !step.ecb->has_bottom))
+            {
+                p->ai_unlearned |= AERIAL_BIT(a);
+                break;
+            }
+            if (step.landed)
+            {
+                if (step.first_aerial_ecb)
+                {
+                    p->ai_mask[k] |= AERIAL_BIT(a);
+                    if (step.ecb->aerial_lag)
+                        p->ai_lag_mask[k] |= AERIAL_BIT(a);
+                }
+                break; // touching down on the locked bottom isn't an interrupt
+            }
+            if (!b.aerial_pending)
+                break; // the aerial's ECB is in use and stayed in the air
         }
-        return;
-    }
-
-    // ftCo_LandingAir_EnterWithLag
-    if (!s->aerial_lag)
-    {
-        p->land_kind = Aerial_InEarlyWindow(ts, frame) ? LAND_AI : LAND_NORMAL;
-        p->lag = (int)normal_lag;
-        return;
-    }
-
-    float lag = Aerial_LandingLag(fp, ts);
-    int lcancel_lag = (int)(lag / common_lcancel_div);
-    if (lcancel_lag == 0)
-        lcancel_lag = 1;
-    p->lcancel_lag = lcancel_lag;
-
-    if (trigger_timer < common_lcancel_window)
-    {
-        p->land_kind = LAND_LCANCEL;
-        p->lag = lcancel_lag;
-    }
-    else
-    {
-        p->land_kind = LAND_AERIAL;
-        p->lag = (int)lag;
     }
 }
 
-// Simulate frame by frame, in the game's order: animation (state ends),
-// input timers, physics, ECB, floor test.
-static void Predict(FighterData *fp, SimStart *start, Prediction *p)
+// The first run of frames where some aerial interrupts.
+static void Ai_Summarize(Prediction *p)
 {
-    float x = start->pos.X;
-    float y = start->pos.Y;
-    float vx = start->vel.X;
-    float vy = start->vel.Y;
-    float bottom = start->bottom;
-    int ts = start->ts;
-    int frame = start->frame;
-    int len = start->len;
-    int len_estimated = start->len_estimated;
-    int fastfall = start->fastfall;
-    int tilt_timer = start->tilt_timer;
-    int trigger_timer = start->trigger_timer;
-    int lock = start->ecb_lock;
-    int pass_platforms_stick = start->stick_y <= common_platform_drop;
+    int last = p->land_frame ? p->land_frame - 1 : p->num;
+
+    p->ai_first = 0;
+    p->ai_width = 0;
+    p->ai_aerials = 0;
+    for (int k = 1; k <= last; k++)
+    {
+        if (p->ai_mask[k])
+        {
+            if (p->ai_first == 0)
+                p->ai_first = k;
+            p->ai_width++;
+            p->ai_aerials |= p->ai_mask[k];
+        }
+        else if (p->ai_first)
+            break;
+    }
+}
+
+// Simulate keeping the stick where it is and pressing nothing. With
+// branches, also try every aerial on every frame along the way.
+static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branches)
+{
+    SimState s;
+    Sim_Init(start, &s);
 
     p->num = 0;
     p->land_frame = 0;
@@ -799,102 +1011,48 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p)
     p->uncertain_from = LL_SIM_FRAMES + 1;
     p->fastfall_frame = 0;
     p->facing = start->facing;
-    p->pos[0].X = x;
-    p->pos[0].Y = y;
-    p->bottom[0] = bottom;
-    p->ts[0] = ts;
-
-    float prev_x = x;
-    float prev_y = y + bottom;
+    p->pos[0].X = s.x;
+    p->pos[0].Y = s.y;
+    p->bottom[0] = s.bottom;
+    p->ts[0] = s.ts;
+    p->ai_mask[0] = 0;
+    p->ai_lag_mask[0] = 0;
+    p->ai_unlearned = 0;
 
     for (int k = 1; k <= LL_SIM_FRAMES; k++)
     {
-        // animation: the state ends by itself when its animation runs out
-        frame++;
-        if (len > 0 && frame >= len)
-        {
-            int next = Tracked_Next(ts);
-            if (len_estimated)
-                Mark_Uncertain(p, k);
+        SimState before = s;
+        SimStep step;
+        Sim_Step(fp, start, &s, -1, &step);
 
-            if (next == TS_FALL)
-            {
-                // ftCo_Fall_Enter clamps horizontal speed to the drift max
-                float max = fp->attr.aerial_drift_max;
-                if (vx < -max)
-                    vx = -max;
-                else if (vx > max)
-                    vx = max;
-            }
-            else if (next == TS_FALLAERIAL)
-            {
-                // ftCo_FallAerial_Enter doesn't keep a fastfall
-                fastfall = 0;
-            }
-
-            ts = next;
-            frame = 0;
-            len = 0;
-            len_estimated = 0;
-        }
-
-        // input: the stick is held, so its timers keep counting
-        if (tilt_timer < LL_TIMER_MAX)
-            tilt_timer++;
-        if (trigger_timer < LL_TIMER_MAX)
-            trigger_timer++;
-
-        // physics (ft_80084DB0)
-        if (!fastfall && vy < 0 && start->stick_y <= -common_fastfall_stick && tilt_timer < common_fastfall_window)
-        {
-            fastfall = 1;
-            tilt_timer = LL_TIMER_MAX;
-            p->fastfall_frame = k;
-        }
-        if (fastfall)
-            vy = -fp->attr.fastfall_velocity;
-        else
-        {
-            vy -= fp->attr.gravity;
-            if (vy < -fp->attr.terminal_velocity)
-                vy = -fp->attr.terminal_velocity;
-        }
-        vx += Drift_Accel(fp, vx, start->stick_x);
-        x += vx;
-        y += vy;
-
-        // ECB bottom: the lock counts down just before collision
-        EcbSample *s = Ecb_Get(ts, frame);
-        if (lock > 0)
-            lock--;
-        if (lock > 0)
-            bottom = start->locked_bottom;
-        else if (s->has_bottom)
-            bottom = s->bottom;
-        else
-            Mark_Uncertain(p, k); // not learned yet: keep the last bottom
-        if (Tracked_IsAerial(ts) && !s->seen)
+        if (step.unlearned)
             Mark_Uncertain(p, k);
+        if (step.fastfall_started)
+            p->fastfall_frame = k;
 
-        p->pos[k].X = x;
-        p->pos[k].Y = y;
-        p->bottom[k] = bottom;
-        p->ts[k] = ts;
+        p->pos[k].X = s.x;
+        p->pos[k].Y = s.y;
+        p->bottom[k] = s.bottom;
+        p->ts[k] = s.ts;
+        p->ai_mask[k] = 0;
+        p->ai_lag_mask[k] = 0;
         p->num = k;
 
-        // floor test (mpColl_80044628_Floor)
-        int pass_platforms = Tracked_UsesPlatformDrop(ts) && pass_platforms_stick;
-        if (Floor_Check(prev_x, prev_y, x, y + bottom, pass_platforms, start->skip_line))
+        if (step.landed)
         {
             p->land_frame = k;
-            p->land_ecb = *s;
-            Classify(fp, p, ts, frame, vy, trigger_timer, s);
-            return;
+            p->land_ecb = *step.ecb;
+            p->land_kind = Landing_Kind(fp, s.ts, s.vy, s.trigger_timer, step.ecb,
+                                        step.first_aerial_ecb, &p->lag, &p->lcancel_lag);
+            break;
         }
 
-        prev_x = x;
-        prev_y = y + bottom;
+        // pressing an aerial on the frame you'd land anyway isn't an interrupt
+        if (branches)
+            Branch_Aerials(fp, start, &before, p, k);
     }
+
+    Ai_Summarize(p);
 }
 
 ///////////////////////
@@ -929,14 +1087,16 @@ static EventOption Options_Main[OPT_COUNT] = {
         .name = "Landing Path",
         .val = 1,
         .desc = {"Draw where Falcon lands if you keep holding the",
-                 "stick and press nothing, colored by landing type."},
+                 "stick and press nothing, colored by landing type.",
+                 "Ticks mark where pressing an aerial lands you."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Info Panel",
         .val = 1,
-        .desc = {"Show the predicted landing, how your last",
-                 "landing compared, and how often they matched."},
+        .desc = {"Show the predicted landing, which aerials can",
+                 "interrupt, how your last landing compared, and",
+                 "how often they matched."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -973,10 +1133,10 @@ static EventOption Options_Main[OPT_COUNT] = {
     {
         .kind = OPTKIND_INFO,
         .name = "Help",
-        .desc = {"Green NIL, cyan aerial interrupt, yellow normal",
-                 "landing, orange L-cancel, red full lag. Gray means",
-                 "still learning: do each jump and aerial once, high",
-                 "up. After landing, white shows your real path."},
+        .desc = {"Path: green NIL, yellow landing, orange L-cancel,",
+                 "red full lag. Cyan tick: an aerial pressed there",
+                 "lands you (AI). Gray: still learning, so do each",
+                 "jump and aerial once, high up. White: your path."},
     },
     {
         .kind = OPTKIND_FUNC,
@@ -997,9 +1157,9 @@ EventMenu *Event_Menu = &Menu_Main;
 // live tracking
 static int prev_state_id = -1;
 static int prev_ts = -1;
-static int prev_frame;
 static int prev_tracked_air;
 static int prev_tilt_timer;
+static int prev_lock;
 static int frame_in_state;
 static int attributes_logged;
 
@@ -1027,10 +1187,11 @@ static int ghost_visible;
 static int stat_total;
 static int stat_exact;
 static char text_predict[32] = "-";
+static char text_ai[32] = "-";
 static char text_last[32] = "-";
 static char text_exact[32] = "-";
-static char *panel_labels[] = {"Prediction", "Last landing", "Exact"};
-static char *panel_info[] = {text_predict, text_last, text_exact};
+static char *panel_labels[] = {"Prediction", "AI window", "Last landing", "Exact"};
+static char *panel_info[] = {text_predict, text_ai, text_last, text_exact};
 
 ///////////////////////
 /// Logging         ///
@@ -1063,6 +1224,9 @@ static void Log_Attributes(FighterData *fp)
     sprintf(buf, "LandingLab common: NIL above vel.y %.5f, fastfall stick %.4f window %d, platform drop stick %.4f, L-cancel window %d div %.2f\n",
             Fighter_GetSoftLandVelocity(fp), common_fastfall_stick, common_fastfall_window,
             common_platform_drop, common_lcancel_window, common_lcancel_div);
+    Log(buf);
+    sprintf(buf, "LandingLab common: nair below stick x %.4f y %.4f, uair/dair above %.4f rad\n",
+            common_aerial_stick_x, common_aerial_stick_y, common_aerial_angle);
     Log(buf);
 }
 
@@ -1178,6 +1342,49 @@ static void Text_Prediction(Prediction *p)
         sprintf(text_predict, "%s, %d lag", land_kind_names[p->land_kind], p->lag);
 }
 
+// Which aerials can interrupt in the first window ahead, and for how many
+// frames. Stays the same while the window comes closer.
+static void Text_Ai(Prediction *p)
+{
+    static const char letters[] = "NFBUD";
+    u8 mask = p->ai_aerials;
+    char *prefix = "";
+
+    if (p->ai_first && p->ai_first >= p->uncertain_from)
+    {
+        sprintf(text_ai, "Learning...");
+        return;
+    }
+    if (!p->ai_first)
+    {
+        if (!p->ai_unlearned)
+        {
+            sprintf(text_ai, "-");
+            return;
+        }
+        mask = p->ai_unlearned; // name the aerials still to learn
+        prefix = "Learn ";
+    }
+
+    int n = 0;
+    while (prefix[n])
+    {
+        text_ai[n] = prefix[n];
+        n++;
+    }
+    for (int a = 0; a < 5; a++)
+    {
+        if (!(mask & (1 << a)))
+            continue;
+        if (n > 0 && text_ai[n - 1] != ' ')
+            text_ai[n++] = ' ';
+        text_ai[n++] = letters[a];
+    }
+    text_ai[n] = 0;
+    if (p->ai_first)
+        sprintf(text_ai + n, ", %df", p->ai_width);
+}
+
 // L/R/Z doesn't change the path, so a full-lag prediction that you then
 // L-cancelled still counts as a match.
 static int Kind_Matches(int a, int b)
@@ -1192,23 +1399,65 @@ static void Text_Exact(void)
     sprintf(text_exact, "%d / %d", stat_exact, stat_total);
 }
 
+// The aerial an A press or C-stick flick starts on this frame, or -1
+// (ftCo_AttackAir_CheckItemThrowInput, ftCo_800DF478 and
+// ftCo_AttackAir_GetMsidFromCStick).
+static int Aerial_Pressed(FighterData *fp)
+{
+    float cx = fp->input.cstick.X;
+    float cy = fp->input.cstick.Y;
+    int cstick = (fabs(fp->input.cstick_prev.X) < common_aerial_stick_x && fabs(cx) >= common_aerial_stick_x) ||
+                 (fabs(fp->input.cstick_prev.Y) < common_aerial_stick_y && fabs(cy) >= common_aerial_stick_y);
+    if (!cstick && !(fp->input.down & HSD_BUTTON_A))
+        return -1;
+
+    float x = cstick ? cx : fp->input.lstick.X;
+    float y = cstick ? cy : fp->input.lstick.Y;
+    if (fabs(x) < common_aerial_stick_x && fabs(y) < common_aerial_stick_y)
+        return TS_AIRN;
+
+    float angle = atan2(y, fabs(x));
+    if (angle > common_aerial_angle)
+        return TS_AIRHI;
+    if (angle < -common_aerial_angle)
+        return TS_AIRLW;
+    return x * fp->facing_direction >= 0 ? TS_AIRF : TS_AIRB;
+}
+
+// An aerial pressed in the air, on a frame where the prediction said it would
+// interrupt, should have touched down right away. If its ECB isn't in use
+// yet (lock), the landing itself is judged later instead.
+static void Ai_CheckMissed(FighterData *fp, int ts)
+{
+    if (!seg_valid || !Tracked_IsAerial(ts) || Tracked_IsAerial(prev_ts))
+        return;
+    if (fp->coll_data.u.ecb_bot_lock_frames > 0)
+        return;
+
+    int k = event_vars->game_timer - seg_start_timer;
+    if (k < 1 || k > pred_seg->num || k >= pred_seg->uncertain_from)
+        return;
+    if (!(pred_seg->ai_mask[k] & AERIAL_BIT(ts)))
+        return;
+
+    stat_total++;
+    Text_Exact();
+    sprintf(text_last, "No AI, predicted");
+
+    char buf[200];
+    sprintf(buf, "LandingLab ai miss: %s at %d x %.4f y %.4f stayed in the air, predicted an aerial interrupt (from %d)\n",
+            tracked_state_names[ts], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, seg_start_timer);
+    Log(buf);
+}
+
 // The fighter left the tracked air states this frame: judge the landing.
 static void Landing_Resolve(FighterData *fp)
 {
     int sid = fp->state_id;
-    int kind;
+    int is_landing = sid == ASID_LANDING || (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW);
 
-    if (sid == ASID_WAIT)
-        kind = LAND_NIL;
-    else if (sid == ASID_LANDING)
-    {
-        // the aerial was still going if its animation hadn't run out
-        int in_aerial = Tracked_IsAerial(prev_ts) && (state_len[prev_ts] == 0 || prev_frame + 1 < state_len[prev_ts]);
-        kind = in_aerial && Aerial_InEarlyWindow(prev_ts, prev_frame + 1) ? LAND_AI : LAND_NORMAL;
-    }
-    else if (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW)
-        kind = (u8)fp->input.timer_trigger_any_ignore_hitlag < common_lcancel_window ? LAND_LCANCEL : LAND_AERIAL;
-    else
+    sprintf(text_ai, "-");
+    if (sid != ASID_WAIT && !is_landing)
     {
         // ledge grab, airdodge, special, ...: not a landing
         live_visible = 0;
@@ -1217,12 +1466,59 @@ static void Landing_Resolve(FighterData *fp)
         return;
     }
 
+    // An aerial pressed on this very frame from a jump or fall: its ECB
+    // touched down at once, so the event never saw the aerial itself. It's
+    // only an interrupt if keeping on holding wouldn't have landed here too.
+    int pressed = -1;
+    if (is_landing && !Tracked_IsAerial(prev_ts) && pred_live->land_frame != 1)
+        pressed = Aerial_Pressed(fp);
+
+    int kind;
+    if (sid == ASID_WAIT)
+        kind = LAND_NIL;
+    else if (pressed >= 0)
+        kind = LAND_AI;
+    else if (Tracked_IsAerial(prev_ts) && prev_lock == 1)
+        kind = LAND_AI; // aerial pressed during the lock; its ECB came in on this frame
+    else if (sid == ASID_LANDING)
+        kind = LAND_NORMAL;
+    else
+        kind = (u8)fp->input.timer_trigger_any_ignore_hitlag < common_lcancel_window ? LAND_LCANCEL : LAND_AERIAL;
+
     Segment_AddActual(fp);
     live_visible = 0;
     ghost_visible = seg_valid;
 
     if (Options_Main[OPT_SOUND].val && (kind == LAND_NIL || kind == LAND_AI))
         SFX_PlayRaw(303, 255, 128, 20, 3); // laserland's success sound
+
+    char buf[200];
+    int k = event_vars->game_timer - seg_start_timer;
+
+    if (pressed >= 0 && seg_valid)
+    {
+        // judged against the ticks the prediction drew
+        int in_range = k >= 1 && k <= pred_seg->num;
+        int predicted = in_range && (pred_seg->ai_mask[k] & AERIAL_BIT(pressed));
+        int learning = !predicted && (!in_range || k >= pred_seg->uncertain_from ||
+                                      (pred_seg->ai_unlearned & AERIAL_BIT(pressed)));
+        if (learning)
+            sprintf(text_last, "AI (learning)");
+        else
+        {
+            stat_total++;
+            if (predicted)
+                stat_exact++;
+            sprintf(text_last, predicted ? "AI, as predicted" : "AI, not predicted");
+            Text_Exact();
+        }
+
+        sprintf(buf, "LandingLab landing: AI with %s pressed at %d x %.4f y %.4f, %s (from %d)%s\n",
+                tracked_state_names[pressed], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y,
+                predicted ? "predicted" : "not predicted", seg_start_timer, learning ? " learning" : "");
+        Log(buf);
+        return;
+    }
 
     if (!seg_valid || pred_seg->land_frame == 0)
     {
@@ -1251,7 +1547,6 @@ static void Landing_Resolve(FighterData *fp)
         Text_Exact();
     }
 
-    char buf[200];
     sprintf(buf, "LandingLab landing: %s at %d x %.4f, predicted %s at %d x %.4f (from %d)%s\n",
             land_kind_names[kind], event_vars->game_timer, fp->phys.pos.X,
             land_kind_names[pred_seg->land_kind], predicted, pred_seg->pos[pred_seg->land_frame].X,
@@ -1299,6 +1594,51 @@ static void Draw_Ecb(Vec2 pos, float bottom, EcbSample *s, float facing, GXColor
     GFX_AddVtx(pos.X, pos.Y + s->top, 0, color);
 }
 
+// Ticks across the path on the frames where pressing an aerial forces a
+// touchdown: cyan, or orange if every aerial that works there would land
+// with aerial lag.
+static void Draw_AiMarks(Prediction *p, int last)
+{
+    int count = 0;
+    for (int k = 1; k <= last; k++)
+    {
+        if (p->ai_mask[k])
+            count += 2;
+    }
+    if (count == 0)
+        return;
+
+    event_vars->GFX_Start(count, (GFX_Params){.shape = GX_LINES, .size = 24});
+    for (int k = 1; k <= last; k++)
+    {
+        if (!p->ai_mask[k])
+            continue;
+
+        GXColor color = land_kind_colors[LAND_AI];
+        if (k >= p->uncertain_from)
+            color = color_learning;
+        else if (p->ai_lag_mask[k] == p->ai_mask[k])
+            color = land_kind_colors[LAND_LCANCEL];
+
+        // at right angles to the path, so ticks stay apart at any speed
+        int k1 = k < p->num ? k + 1 : k;
+        float dx = p->pos[k1].X - p->pos[k - 1].X;
+        float dy = (p->pos[k1].Y + p->bottom[k1]) - (p->pos[k - 1].Y + p->bottom[k - 1]);
+        float len = sqrtf(dx * dx + dy * dy);
+        float nx = 1, ny = 0;
+        if (len > 0.001f)
+        {
+            nx = -dy / len;
+            ny = dx / len;
+        }
+
+        float x = p->pos[k].X;
+        float y = p->pos[k].Y + p->bottom[k];
+        GFX_AddVtx(x - nx * 2.5f, y - ny * 2.5f, 0, color);
+        GFX_AddVtx(x + nx * 2.5f, y + ny * 2.5f, 0, color);
+    }
+}
+
 static void Draw_Prediction(Prediction *p)
 {
     int last = p->land_frame ? p->land_frame : p->num;
@@ -1311,6 +1651,7 @@ static void Draw_Prediction(Prediction *p)
     GXColor color = land_kind_colors[p->land_kind];
     Draw_Path(p->pos, p->bottom, 0, known, color, 24);
     Draw_Path(p->pos, p->bottom, known, last, color_learning, 24);
+    Draw_AiMarks(p, p->land_frame ? p->land_frame - 1 : p->num);
 
     if (p->land_frame)
     {
@@ -1363,6 +1704,9 @@ void Event_Init(GOBJ *gobj)
     common_lcancel_window = Common_Int(COMMON_LCANCEL_WINDOW);
     common_lcancel_div = Common_Float(COMMON_LCANCEL_DIV);
     common_platform_drop = Common_Float(COMMON_PLATFORM_DROP);
+    common_aerial_stick_x = Common_Float(COMMON_AERIAL_STICK_X);
+    common_aerial_stick_y = Common_Float(COMMON_AERIAL_STICK_Y);
+    common_aerial_angle = Common_Float(COMMON_AERIAL_ANGLE);
 
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     Learned_Clear();
@@ -1423,9 +1767,12 @@ void Event_Think(GOBJ *event)
         Floor_BuildCache();
         SimStart start;
         Sim_FromFighter(fp, ts, frame_in_state, &start);
-        Predict(fp, &start, pred_live);
+        Predict(fp, &start, pred_live, 1);
         Text_Prediction(pred_live);
+        Text_Ai(pred_live);
 
+        if (prev_tracked_air && ts != prev_ts)
+            Ai_CheckMissed(fp, ts);
         if (!prev_tracked_air || Segment_InputChanged(fp, ts))
             Segment_Start(fp);
         else
@@ -1440,13 +1787,14 @@ void Event_Think(GOBJ *event)
         // in the air but in a state we don't predict (airdodge, up-B, hitstun)
         live_visible = 0;
         seg_valid = 0;
+        sprintf(text_ai, "-");
     }
 
     prev_state_id = sid;
     prev_ts = ts;
-    prev_frame = frame_in_state;
     prev_tracked_air = tracked_air;
     prev_tilt_timer = (u8)fp->input.timer_lstick_tilt_y;
+    prev_lock = fp->coll_data.u.ecb_bot_lock_frames;
 }
 
 void Event_Update(void)

@@ -106,7 +106,16 @@ enum TrackedState
     TS_AIRLW,
     TS_ESCAPEAIR,
 
-    TS_COUNT
+    TS_COUNT,
+
+    // ECB rows only, not states: a fall's pose leaned all the way toward its
+    // forward or backward animation (FallF/FallB, FallAerialF/FallAerialB)
+    TS_FALL_F = TS_COUNT,
+    TS_FALL_B,
+    TS_FALLAERIAL_F,
+    TS_FALLAERIAL_B,
+
+    TS_ECB_COUNT
 };
 
 static const int tracked_state_ids[TS_COUNT] = {
@@ -243,7 +252,7 @@ typedef struct EcbSample
     u8 seen;        // times this frame has been seen (stops at 255)
 } EcbSample;
 
-static EcbSample *ecb_table;      // [TS_COUNT][LL_STATE_FRAMES]
+static EcbSample *ecb_table;      // [TS_ECB_COUNT][LL_STATE_FRAMES]
 static s16 state_len[TS_COUNT];   // frames a state lasts before ending by itself, 0 = not seen
 static s8 state_next[TS_COUNT];   // state that followed when it ended, -1 = not seen
 
@@ -261,7 +270,7 @@ static int Tracked_Next(int ts)
 
 static void Learned_Clear(void)
 {
-    memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
+    memset(ecb_table, 0, sizeof(EcbSample) * TS_ECB_COUNT * LL_STATE_FRAMES);
     memset(state_len, 0, sizeof(state_len));
     memset(state_next, -1, sizeof(state_next));
 }
@@ -1690,6 +1699,7 @@ typedef struct SimStart
     int trigger_timer;   // frames since L/R/Z
     int ecb_lock;
     int skip_line;
+    float lean;          // a fall's blend toward its leaning pose (mv.co.fall.x4)
 } SimStart;
 
 // The simulated fighter between two frames.
@@ -1710,6 +1720,8 @@ typedef struct SimState
     int lock;
     int ecb_pending; // in an aerial or airdodge whose own ECB bottom hasn't been used yet (lock)
     int dodge_flat;  // the airdodge started with no vertical speed
+    float lean;      // a fall's blend toward its leaning pose
+    int lean_row;    // the leaning pose's ECB row, or -1 for none
 } SimState;
 
 // What happened on one simulated frame.
@@ -1720,6 +1732,7 @@ typedef struct SimStep
     int unlearned;        // relied on data the event hasn't learned yet
     int fastfall_started;
     EcbSample *ecb;       // learned ECB for this frame
+    EcbSample lean_ecb;   // ... when it's a leaning fall's mix, it's kept here
 } SimStep;
 
 // Aerials, as bits in the masks below
@@ -1781,6 +1794,8 @@ static Vec2 common_dodge_deadzone;
 static float common_dodge_force;
 static float common_dodge_decay;
 static float common_waveland_lag;
+static float common_fall_lean_deadzone;
+static float common_fall_lean_rate;
 
 static int ai_show_all; // the AI Filter option is on All
 
@@ -1911,6 +1926,90 @@ static void Ecb_Fix(SimEcb *ecb)
         ecb->side = 0.5f * (ecb->top + ecb->bottom);
 }
 
+// A fall leans its pose toward a forward or backward version of its
+// animation as Falcon drifts (ftCo_Fall_Anim_Inner, also FallAerial): past a
+// deadzone, his x speed as a fraction of the drift max sets a target, the
+// blend moves part of the way there each frame, and the pose is the plain
+// one mixed with the leaning one by that blend. Entering the fall starts it
+// at 0, and the animation step that moves it runs before physics, so it
+// sees last frame's speed. Returns the leaning pose's ECB row, or -1.
+static int Lean_Target(FighterData *fp, int ts, float vx, float facing, float *target)
+{
+    float frac = vx / fp->attr.aerial_drift_max;
+    if (frac > 1.f)
+        frac = 1.f;
+    else if (frac < -1.f)
+        frac = -1.f;
+
+    *target = 0;
+    int row = -1;
+    if (fabs(frac) > common_fall_lean_deadzone)
+    {
+        int forward = frac * facing > 0;
+        if (ts == TS_FALL)
+            row = forward ? TS_FALL_F : TS_FALL_B;
+        else
+            row = forward ? TS_FALLAERIAL_F : TS_FALLAERIAL_B;
+        *target = (fabs(frac) - common_fall_lean_deadzone) / (1.f - common_fall_lean_deadzone);
+    }
+    return row;
+}
+
+static int Lean_Update(FighterData *fp, int ts, float vx, float facing, float *lean)
+{
+    float target;
+    int row = Lean_Target(fp, ts, vx, facing, &target);
+    *lean += common_fall_lean_rate * (target - *lean);
+    return row;
+}
+
+// The plain pose's ECB mixed with the leaning one's, if both are known.
+static EcbSample *Lean_Ecb(EcbSample *plain, int row, int frame, float lean, EcbSample *out)
+{
+    if (row < 0 || lean <= 0.f)
+        return plain;
+    EcbSample *l = Ecb_Get(row, frame);
+    if (!l->has_bottom || !l->has_shape || !plain->has_bottom || !plain->has_shape)
+        return plain;
+
+    float k = 1.f - lean;
+    *out = *plain;
+    out->bottom = plain->bottom * k + l->bottom * lean;
+    out->top = plain->top * k + l->top * lean;
+    out->side_y = plain->side_y * k + l->side_y * lean;
+    out->front = plain->front * k + l->front * lean;
+    out->back = plain->back * k + l->back * lean;
+    return out;
+}
+
+static int Is_Fall(int ts)
+{
+    return ts == TS_FALL || ts == TS_FALLAERIAL;
+}
+
+// The live fall's blend (mv.co.fall.x4, the second state variable).
+static float Lean_FromFighter(FighterData *fp, int ts)
+{
+    float lean = 0;
+    if (Is_Fall(ts))
+        memcpy(&lean, &fp->state_var.state_var2, sizeof(lean));
+    return lean;
+}
+
+// The ECB row the live frame's pose belongs to, or -1 when it's a mix of
+// two that says nothing about either. vx is the speed the animation saw
+// (last frame's).
+static int Lean_RecordRow(FighterData *fp, int ts, float vx)
+{
+    if (!Is_Fall(ts))
+        return ts;
+    float lean = Lean_FromFighter(fp, ts), target;
+    int row = Lean_Target(fp, ts, vx, fp->facing_direction, &target);
+    if (lean < 0.002f || row < 0)
+        return ts;
+    return lean > 0.998f ? row : -1;
+}
+
 static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
 {
     CollData *cd = &fp->coll_data;
@@ -1943,6 +2042,7 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->trigger_timer = (u8)fp->input.timer_trigger_any_ignore_hitlag;
     s->ecb_lock = cd->u.ecb_bot_lock_frames;
     s->skip_line = cd->ignore_line;
+    s->lean = Lean_FromFighter(fp, ts);
 }
 
 static void Sim_Init(SimStart *start, SimState *s)
@@ -1971,6 +2071,8 @@ static void Sim_Init(SimStart *start, SimState *s)
     // bottom yet
     s->ecb_pending = (Tracked_IsAerial(start->ts) || start->ts == TS_ESCAPEAIR) && start->ecb_lock > 0;
     s->dodge_flat = start->ts == TS_ESCAPEAIR && start->vel.Y == 0 && start->vel.X != 0;
+    s->lean = start->lean;
+    s->lean_row = -1;
 }
 
 // One frame, in the game's order: animation (the state can end), interrupt
@@ -2034,6 +2136,18 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
         }
     }
 
+    // a fall's lean: back to plain on entering, then toward the drift speed
+    if (Is_Fall(s->ts))
+    {
+        if (s->frame == 0)
+        {
+            s->lean = 0;
+            s->lean_row = -1;
+        }
+        else
+            s->lean_row = Lean_Update(fp, s->ts, s->vx, start->facing, &s->lean);
+    }
+
     // input: the stick is held, so its timers keep counting
     if (s->tilt_timer < LL_TIMER_MAX)
         s->tilt_timer++;
@@ -2043,6 +2157,8 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     // this frame's learned ECB; for the airdodge, its first command variable
     // is the flag that ends the speed decay
     EcbSample *e = Ecb_Get(s->ts, s->frame);
+    if (Is_Fall(s->ts))
+        e = Lean_Ecb(e, s->lean_row, s->frame, s->lean, &out->lean_ecb);
     out->ecb = e;
 
     if (s->ts == TS_ESCAPEAIR && !e->aerial_lag)
@@ -2797,7 +2913,7 @@ static void Log_Attributes(FighterData *fp)
             common_aerial_stick_x, common_aerial_stick_y, common_aerial_angle);
     Log(buf);
     sprintf(buf, "LandingLab common: fall lean deadzone %.5f rate %.5f, max jumps %d\n",
-            Common_Float(COMMON_FALL_LEAN_DEADZONE), Common_Float(COMMON_FALL_LEAN_RATE), fp->attr.max_jumps);
+            common_fall_lean_deadzone, common_fall_lean_rate, fp->attr.max_jumps);
     Log(buf);
 }
 
@@ -4906,6 +5022,8 @@ void Event_Init(GOBJ *gobj)
     common_dodge_force = Common_Float(COMMON_DODGE_FORCE);
     common_dodge_decay = Common_Float(COMMON_DODGE_DECAY);
     common_waveland_lag = Common_Float(COMMON_WAVELAND_LAG);
+    common_fall_lean_deadzone = Common_Float(COMMON_FALL_LEAN_DEADZONE);
+    common_fall_lean_rate = Common_Float(COMMON_FALL_LEAN_RATE);
 
     for (int i = 0; i <= LL_CIRCLE_SEGS; i++)
     {
@@ -4914,7 +5032,7 @@ void Event_Init(GOBJ *gobj)
         circle[i].Y = sin(t);
     }
 
-    ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
+    ecb_table = calloc(sizeof(EcbSample) * TS_ECB_COUNT * LL_STATE_FRAMES);
     Learned_Clear();
     Learned_Bake();
     pred_live = calloc(sizeof(Prediction));
@@ -4999,7 +5117,9 @@ void Event_Think(GOBJ *event)
 
     if (tracked_air)
     {
-        Ecb_Record(fp, ts, frame_in_state);
+        int ecb_row = Lean_RecordRow(fp, ts, prev_vel.X);
+        if (ecb_row >= 0)
+            Ecb_Record(fp, ecb_row, frame_in_state);
         if (logging)
         {
             if (!stage_logged)

@@ -219,12 +219,6 @@ static const GXColor land_kind_colors[LAND_KIND_COUNT] = {
 };
 static const GXColor color_learning = {130, 130, 130, 255};
 
-// Only NILs, aerial interrupts and perfect wavelands are worth practicing
-// toward.
-static int Kind_Highlighted(int kind)
-{
-    return kind == LAND_NIL || kind == LAND_AI || kind == LAND_PERFECT_WL;
-}
 static const GXColor color_actual = {255, 255, 255, 255};
 
 ///////////////////////
@@ -2759,9 +2753,10 @@ static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, P
 
 // Which aerial interrupts are worth showing, and the first window of each
 // kind. An AI that lands with aerial lag (uair, or a lock that ran into a
-// fair's or bair's lag frames) never helps, and one that finishes its
-// landing lag barely sooner than just holding would (an aerial near the end
-// of a fall) isn't worth the press. The AI Filter option can show them all.
+// fair's or bair's lag frames) never helps, one that finishes its landing
+// lag barely sooner than just holding would isn't worth the press, and
+// neither is one that lands while falling. The AI Filter option can show
+// them all.
 static void Windows_Summarize(FighterData *fp, Prediction *p)
 {
     int normal_lag = (int)fp->attr.normal_landing_lag;
@@ -2779,6 +2774,14 @@ static void Windows_Summarize(FighterData *fp, Prediction *p)
         {
             m &= ~p->ai_lag_mask[k];
             if (m && hold_done - (k + p->ai_delay[k] + normal_lag) < LL_AI_MIN_GAIN)
+                m = 0;
+            // falling, an aerial's ECB is at most about a unit lower than
+            // the fall's: a frame sooner at best, and no better than a
+            // NIL. The ones that look like big savings while falling are
+            // platform catches (holding down drops through a platform an
+            // aerial lands on). Only rising ones are worth the press.
+            int t = k + p->ai_delay[k];
+            if (m && t <= p->num && p->pos[t].Y <= p->pos[t - 1].Y)
                 m = 0;
         }
         p->ai_show[k] = m;
@@ -2976,20 +2979,12 @@ static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
 static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
-static const char *cue_names[] = {"AI + waveland", "AI only", "Waveland only"};
 static const char *sound_names[] = {"Hit and miss", "Hit only", "Off"};
 static const char *ai_filter_names[] = {"Useful", "All"};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
 static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
 #define LL_SCRIPT_MAX 48 // scripts read from the script file
 static const char *script_names[LL_SCRIPT_MAX + 2] = {"Off"}; // and All
-
-enum cue_kind
-{
-    CUES_BOTH,
-    CUES_AI,
-    CUES_WAVELAND,
-};
 
 enum sound_kind
 {
@@ -3018,7 +3013,9 @@ enum options_main
     OPT_PATH,
     OPT_BODY,
     OPT_TICKS,
-    OPT_CUES,
+    OPT_NIL_CUES,
+    OPT_AI_CUES,
+    OPT_WL_CUES,
     OPT_AI_FILTER,
     OPT_PREVIEW,
     OPT_RING,
@@ -3044,10 +3041,10 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Landing Path",
         .val = 1,
-        .desc = {"Draw where Falcon's ECB bottom lands if you keep",
-                 "holding the stick and press nothing. Green for a",
-                 "NIL, pink for an aerial interrupt, white for a",
-                 "perfect waveland, thin gray for anything else."},
+        .desc = {"Draw where Falcon's ECB bottom goes if you keep",
+                 "holding the stick and press nothing, colored by",
+                 "the landing when its cue is on (green NIL, pink",
+                 "AI, white perfect waveland), gray otherwise."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -3064,23 +3061,36 @@ static EventOption Options_Main[OPT_COUNT] = {
                  "across them. Closer marks mean slower movement."},
     },
     {
-        .kind = OPTKIND_STRING,
-        .name = "Cues",
-        .value_num = countof(cue_names),
-        .values = cue_names,
-        .desc = {"Which windows to mark on the path: pink where an",
-                 "aerial lands you (AI), white where a sideways",
-                 "airdodge lands you with full speed (perfect",
-                 "waveland), or both."},
+        .kind = OPTKIND_TOGGLE,
+        .name = "NIL Cues",
+        .val = 1,
+        .desc = {"Color the path green when holding the stick lands",
+                 "you with no landing lag (NIL)."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "AI Cues",
+        .val = 1,
+        .desc = {"Mark where pressing an aerial lands you (aerial",
+                 "interrupt) with a pink bar and the aerials that",
+                 "work there, and count down to it."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Waveland Cues",
+        .val = 1,
+        .desc = {"Mark where a sideways airdodge lands you with",
+                 "full speed (perfect waveland) with a white bar,",
+                 "and count down to it."},
     },
     {
         .kind = OPTKIND_STRING,
         .name = "AI Filter",
         .value_num = countof(ai_filter_names),
         .values = ai_filter_names,
-        .desc = {"Useful hides aerial interrupts that save fewer",
-                 "than 4 frames over just landing, and ones that",
-                 "land with aerial lag (uair). All shows them all."},
+        .desc = {"Useful shows only aerial interrupts that land",
+                 "while Falcon is still rising and save 4 frames or",
+                 "more without aerial lag. All shows them all."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -3514,14 +3524,29 @@ static void Text_Prediction(Prediction *p)
         sprintf(text_predict, "%s, %d lag", land_kind_names[p->land_kind], p->lag);
 }
 
+// Each of the three things worth practicing has its own toggle, so one can
+// be practiced alone.
+static int Cues_Nil(void)
+{
+    return Options_Main[OPT_NIL_CUES].val;
+}
+
 static int Cues_Ai(void)
 {
-    return Options_Main[OPT_CUES].val != CUES_WAVELAND;
+    return Options_Main[OPT_AI_CUES].val;
 }
 
 static int Cues_Waveland(void)
 {
-    return Options_Main[OPT_CUES].val != CUES_AI;
+    return Options_Main[OPT_WL_CUES].val;
+}
+
+// Only NILs, aerial interrupts and perfect wavelands are worth practicing
+// toward, and only the ones whose cues are on are highlighted.
+static int Kind_Shown(int kind)
+{
+    return (kind == LAND_NIL && Cues_Nil()) || (kind == LAND_AI && Cues_Ai()) ||
+           (kind == LAND_PERFECT_WL && Cues_Waveland());
 }
 
 static char *Append(char *t, const char *str)
@@ -3602,7 +3627,7 @@ static const char *Kind_Short(Prediction *p)
         return "?";
     if (p->land_kind == LAND_PERFECT_WL)
         return "PWL";
-    if (Kind_Highlighted(p->land_kind))
+    if (Kind_Shown(p->land_kind))
         return land_kind_names[p->land_kind];
     return "-";
 }
@@ -3883,7 +3908,7 @@ static void Landing_Resolve(FighterData *fp)
 
     // keep the attempt on screen for a moment, but only when a NIL, an
     // aerial interrupt or a perfect waveland was predicted or happened
-    ghost_visible = seg_valid && (Kind_Highlighted(kind) || Kind_Highlighted(pred_seg->land_kind));
+    ghost_visible = seg_valid && (Kind_Shown(kind) || Kind_Shown(pred_seg->land_kind));
     ghost_timer = LL_GHOST_FRAMES;
 
     // an AI into aerial lag (uair) is still an AI, but nothing to cheer
@@ -4254,14 +4279,16 @@ static void Draw_Prediction(Prediction *p, int body, int style)
 {
     int last = p->land_frame ? p->land_frame : p->num;
     int certain = p->land_frame && p->uncertain_from > p->land_frame;
-    int highlight = certain && Kind_Highlighted(p->land_kind);
+    int highlight = certain && Kind_Shown(p->land_kind);
+
+    int line = Options_Main[OPT_PATH].val;
 
     if (body && Options_Main[OPT_BODY].val)
         Draw_BodyPath(p, last);
 
-    if (highlight)
+    if (line && highlight)
         Draw_Line(p, 0, last, land_kind_colors[p->land_kind], 24, style);
-    else
+    else if (line)
     {
         int known = p->uncertain_from - 1;
         if (known > last)
@@ -4281,7 +4308,7 @@ static void Draw_Prediction(Prediction *p, int body, int style)
     }
 
     // short white tick where a pending fastfall kicks in
-    if (p->fastfall_frame && p->fastfall_frame <= last)
+    if (line && p->fastfall_frame && p->fastfall_frame <= last)
     {
         int k = p->fastfall_frame;
         float y = p->pos[k].Y + p->bottom[k];
@@ -4423,9 +4450,6 @@ static void World_GX(GOBJ *gobj, int pass)
     if (Options_Main[OPT_COLL].val)
         Draw_CurrentEcb(Fighter_GetGObj(0)->userdata);
 
-    if (!Options_Main[OPT_PATH].val)
-        return;
-
     if (live_visible)
     {
         Draw_Prediction(pred_live, 1, LINE_SOLID);
@@ -4437,7 +4461,8 @@ static void World_GX(GOBJ *gobj, int pass)
     else if (ghost_visible)
     {
         Draw_Prediction(pred_seg, 0, LINE_SOLID);
-        Draw_Path(actual_pos, actual_bottom, 0, actual_num - 1, color_actual, 12);
+        if (Options_Main[OPT_PATH].val)
+            Draw_Path(actual_pos, actual_bottom, 0, actual_num - 1, color_actual, 12);
     }
     else
     {

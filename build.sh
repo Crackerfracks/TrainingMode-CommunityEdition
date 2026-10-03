@@ -136,6 +136,7 @@ ${gc_fst} fs TM-CE.iso \
     insert TM/sweetspot.dat build/sweetspot.dat \
     insert TM/laserland.dat build/laserland.dat \
     insert TM/landinglab.dat build/landinglab.dat \
+    insert TM/llscript.txt src/landinglab_tests.txt \
     insert TM/eggs.dat build/eggs.dat \
     insert TM/techchase.dat build/techchase.dat \
     insert TM/slalom.dat build/slalom.dat \

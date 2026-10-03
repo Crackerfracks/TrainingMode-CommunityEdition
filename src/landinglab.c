@@ -22,9 +22,9 @@
  *
  * Whether a landing is a NIL or an interrupt depends on the exact ECB on
  * each frame of each animation, which the game only computes on the frame
- * itself. Falcon's jumps, falls and aerials are built in (baked from logged
- * sessions); everything else is learned while you play, keyed by (state,
- * frame in state). Parts of a prediction that rely on frames it hasn't seen
+ * itself. Falcon's jumps, falls, aerials and airdodge are built in (baked
+ * from logged sessions); everything else is learned while you play, keyed by
+ * (state, frame in state). Parts of a prediction that rely on frames it hasn't seen
  * yet are drawn gray.
  *
  * The physics and collision are ports of the game's own code, checked
@@ -277,10 +277,12 @@ static EcbSample *Ecb_Get(int ts, int frame)
 // them. Fall's pose blends from whatever came before, so its row is the
 // typical frame, not an exact one; play replaces it with what it sees.
 // Aerials were only seen up to their landing, so their last frames are still
-// learned. The airdodge has to be learned.
+// learned. The airdodge comes from a v0.4 session; its frames don't depend on
+// the state it was pressed from.
 #define BAKED_BOTTOM 1
 #define BAKED_SHAPE 2
-#define BAKED_LAG 4 // landing on this aerial frame takes aerial lag
+#define BAKED_LAG 4 // landing on this aerial frame takes aerial lag; on an
+                    // airdodge frame, its speed no longer decays
 
 typedef struct BakedEcb
 {
@@ -602,6 +604,55 @@ static const BakedEcb baked_ecb[] = {
     {TS_AIRLW, 17, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.834f, 11.154f, 5.994f, 4.424f, -4.424f},
     {TS_AIRLW, 18, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.435f, 11.568f, 6.501f, 4.319f, -4.319f},
     {TS_AIRLW, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.827f, 13.237f, 7.532f, 4.733f, -4.733f},
+    {TS_ESCAPEAIR, 0, BAKED_BOTTOM|BAKED_SHAPE, 1.7125f, 11.2112f, 6.4618f, 2.1920f, -2.1920f},
+    {TS_ESCAPEAIR, 1, BAKED_BOTTOM|BAKED_SHAPE, 1.5205f, 12.0751f, 6.7978f, 2.7077f, -2.7077f},
+    {TS_ESCAPEAIR, 2, BAKED_BOTTOM|BAKED_SHAPE, 1.5984f, 12.7514f, 7.1749f, 3.9936f, -3.9936f},
+    {TS_ESCAPEAIR, 3, BAKED_BOTTOM|BAKED_SHAPE, 1.8968f, 13.0760f, 7.4864f, 3.5424f, -3.5424f},
+    {TS_ESCAPEAIR, 4, BAKED_BOTTOM|BAKED_SHAPE, 2.0405f, 13.1340f, 7.5872f, 3.4526f, -3.4526f},
+    {TS_ESCAPEAIR, 5, BAKED_BOTTOM|BAKED_SHAPE, 2.0366f, 13.0670f, 7.5518f, 3.4632f, -3.4632f},
+    {TS_ESCAPEAIR, 6, BAKED_BOTTOM|BAKED_SHAPE, 2.0215f, 13.0307f, 7.5261f, 3.4800f, -3.4800f},
+    {TS_ESCAPEAIR, 7, BAKED_BOTTOM|BAKED_SHAPE, 1.9961f, 13.0072f, 7.5016f, 3.4972f, -3.4972f},
+    {TS_ESCAPEAIR, 8, BAKED_BOTTOM|BAKED_SHAPE, 1.9618f, 12.9879f, 7.4749f, 3.5085f, -3.5085f},
+    {TS_ESCAPEAIR, 9, BAKED_BOTTOM|BAKED_SHAPE, 1.9202f, 12.9719f, 7.4461f, 3.5073f, -3.5073f},
+    {TS_ESCAPEAIR, 10, BAKED_BOTTOM|BAKED_SHAPE, 1.8727f, 12.9581f, 7.4154f, 3.4955f, -3.4955f},
+    {TS_ESCAPEAIR, 11, BAKED_BOTTOM|BAKED_SHAPE, 1.8210f, 12.9497f, 7.3853f, 3.4806f, -3.4806f},
+    {TS_ESCAPEAIR, 12, BAKED_BOTTOM|BAKED_SHAPE, 1.7665f, 12.9486f, 7.3576f, 3.4634f, -3.4634f},
+    {TS_ESCAPEAIR, 13, BAKED_BOTTOM|BAKED_SHAPE, 1.7108f, 12.9507f, 7.3308f, 3.4433f, -3.4433f},
+    {TS_ESCAPEAIR, 14, BAKED_BOTTOM|BAKED_SHAPE, 1.6552f, 12.9550f, 7.3051f, 3.4210f, -3.4210f},
+    {TS_ESCAPEAIR, 15, BAKED_BOTTOM|BAKED_SHAPE, 1.6009f, 12.9604f, 7.2807f, 3.3973f, -3.3973f},
+    {TS_ESCAPEAIR, 16, BAKED_BOTTOM|BAKED_SHAPE, 1.5491f, 12.9663f, 7.2577f, 3.3730f, -3.3730f},
+    {TS_ESCAPEAIR, 17, BAKED_BOTTOM|BAKED_SHAPE, 1.5007f, 12.9723f, 7.2365f, 3.3488f, -3.3488f},
+    {TS_ESCAPEAIR, 18, BAKED_BOTTOM|BAKED_SHAPE, 1.4558f, 12.9780f, 7.2169f, 3.3251f, -3.3251f},
+    {TS_ESCAPEAIR, 19, BAKED_BOTTOM|BAKED_SHAPE, 1.4139f, 12.9834f, 7.1986f, 3.3010f, -3.3010f},
+    {TS_ESCAPEAIR, 20, BAKED_BOTTOM|BAKED_SHAPE, 1.3750f, 12.9895f, 7.1822f, 3.2761f, -3.2761f},
+    {TS_ESCAPEAIR, 21, BAKED_BOTTOM|BAKED_SHAPE, 1.3390f, 12.9976f, 7.1683f, 3.2499f, -3.2499f},
+    {TS_ESCAPEAIR, 22, BAKED_BOTTOM|BAKED_SHAPE, 1.3064f, 13.0088f, 7.1576f, 3.2219f, -3.2219f},
+    {TS_ESCAPEAIR, 23, BAKED_BOTTOM|BAKED_SHAPE, 1.2777f, 13.0239f, 7.1508f, 3.1916f, -3.1916f},
+    {TS_ESCAPEAIR, 24, BAKED_BOTTOM|BAKED_SHAPE, 1.2541f, 13.0509f, 7.1525f, 3.1586f, -3.1586f},
+    {TS_ESCAPEAIR, 25, BAKED_BOTTOM|BAKED_SHAPE, 1.2452f, 13.0902f, 7.1677f, 3.1588f, -3.1588f},
+    {TS_ESCAPEAIR, 26, BAKED_BOTTOM|BAKED_SHAPE, 1.2525f, 13.1428f, 7.1976f, 3.1434f, -3.1434f},
+    {TS_ESCAPEAIR, 27, BAKED_BOTTOM|BAKED_SHAPE, 1.2625f, 13.1851f, 7.2238f, 3.0896f, -3.0896f},
+    {TS_ESCAPEAIR, 28, BAKED_BOTTOM|BAKED_SHAPE, 1.2418f, 13.1735f, 7.2076f, 2.9275f, -2.9275f},
+    {TS_ESCAPEAIR, 29, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.1859f, 13.0525f, 7.1192f, 3.1029f, -3.1029f},
+    {TS_ESCAPEAIR, 30, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.0186f, 12.7096f, 6.8641f, 3.7882f, -3.7882f},
+    {TS_ESCAPEAIR, 31, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.7817f, 11.8884f, 6.3350f, 4.0406f, -4.0406f},
+    {TS_ESCAPEAIR, 32, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.6813f, 11.2458f, 5.9635f, 3.7472f, -3.7472f},
+    {TS_ESCAPEAIR, 33, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.6630f, 10.6904f, 5.6767f, 4.3554f, -4.3554f},
+    {TS_ESCAPEAIR, 34, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.7088f, 10.3973f, 5.5530f, 4.3448f, -4.3448f},
+    {TS_ESCAPEAIR, 35, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.7792f, 10.2622f, 5.5207f, 4.5438f, -4.5438f},
+    {TS_ESCAPEAIR, 36, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.8813f, 10.5350f, 5.7082f, 5.4860f, -5.2777f},
+    {TS_ESCAPEAIR, 37, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.3755f, 10.9383f, 6.1569f, 6.7767f, -5.6612f},
+    {TS_ESCAPEAIR, 38, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.1522f, 11.2475f, 6.1998f, 7.2082f, -6.0917f},
+    {TS_ESCAPEAIR, 39, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.8826f, 11.2995f, 6.0910f, 7.2594f, -5.9332f},
+    {TS_ESCAPEAIR, 40, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.9024f, 11.3121f, 6.1073f, 7.3281f, -5.9779f},
+    {TS_ESCAPEAIR, 41, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.2359f, 11.3083f, 6.2721f, 7.4785f, -5.8770f},
+    {TS_ESCAPEAIR, 42, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.5895f, 11.2966f, 6.4431f, 7.6400f, -5.4653f},
+    {TS_ESCAPEAIR, 43, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.9857f, 11.2457f, 6.6157f, 7.9126f, -4.8335f},
+    {TS_ESCAPEAIR, 44, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.8570f, 11.1147f, 6.4858f, 8.0217f, -4.3561f},
+    {TS_ESCAPEAIR, 45, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.8211f, 11.7621f, 6.7916f, 7.8098f, -3.8454f},
+    {TS_ESCAPEAIR, 46, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.9671f, 12.5610f, 7.2640f, 7.5193f, -3.2823f},
+    {TS_ESCAPEAIR, 47, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.1325f, 13.4229f, 7.7777f, 7.4470f, -2.5792f},
+    {TS_ESCAPEAIR, 48, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.2812f, 14.2740f, 8.2776f, 4.4994f, -4.4994f},
 };
 
 static void Learned_Bake(void)
@@ -2403,6 +2454,7 @@ static int Sim_GroundJump(FighterData *fp, int short_hop, SimStart *s)
 void Event_Exit(GOBJ *menu);
 void Event_ClearLearned(GOBJ *menu);
 void Event_ChangeCollDisplay(GOBJ *menu, int value);
+void Event_ChangeScript(GOBJ *menu, int value);
 
 static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
@@ -2411,6 +2463,10 @@ static const char *panel_side_names[] = {"Auto", "Right", "Left"};
 static const char *cue_names[] = {"AI + waveland", "AI only", "Waveland only"};
 static const char *sound_names[] = {"Hit and miss", "Hit only", "Off"};
 static const char *ai_filter_names[] = {"Useful", "All"};
+static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
+static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
+#define LL_SCRIPT_MAX 48 // scripts read from the script file
+static const char *script_names[LL_SCRIPT_MAX + 2] = {"Off"}; // and All
 
 enum cue_kind
 {
@@ -2454,8 +2510,11 @@ enum options_main
     OPT_PANEL_SIDE,
     OPT_SOUND,
     OPT_SPEED,
+    OPT_FRAME_ADV,
+    OPT_ADV_BUTTON,
     OPT_COLL,
     OPT_LOG,
+    OPT_SCRIPT,
     OPT_CLEAR,
     OPT_HELP,
     OPT_EXIT,
@@ -2496,9 +2555,8 @@ static EventOption Options_Main[OPT_COUNT] = {
         .value_num = countof(ai_filter_names),
         .values = ai_filter_names,
         .desc = {"Useful hides aerial interrupts that save fewer",
-                 "than 4 frames over just landing (most near the",
-                 "end of a fall) and ones that land with aerial lag",
-                 "(uair). All shows every one."},
+                 "than 4 frames over just landing, and ones that",
+                 "land with aerial lag (uair). All shows them all."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -2513,10 +2571,10 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Timing Ring",
         .val = 1,
-        .desc = {"Count down to the next window. AI: a pink ring",
-                 "shrinks around Falcon; press the aerial as it meets",
-                 "the inner ring. Waveland: white arrows slide in at",
-                 "his feet; airdodge as they meet the posts."},
+        .desc = {"Count down to the next window: a pink ring closes",
+                 "in on Falcon (AI), white arrows slide in to posts",
+                 "at his feet (waveland). Press while it's lit. A",
+                 "thin target is 1 frame, a thick one is longer."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -2558,6 +2616,21 @@ static EventOption Options_Main[OPT_COUNT] = {
     },
     {
         .kind = OPTKIND_TOGGLE,
+        .name = "Frame Advance",
+        .desc = {"Freeze the game and step one frame per press of",
+                 "the Advance Button, or hold it to keep going.",
+                 "D-pad down turns this on and off at any time."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Advance Button",
+        .value_num = countof(adv_button_names),
+        .values = adv_button_names,
+        .desc = {"The button that steps a frame while Frame",
+                 "Advance is on. The game doesn't see it."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
         .name = "Collision Display",
         .desc = {"Show stage collision, Falcon's ECB, hitboxes and",
                  "hurtboxes, and hide his model so it doesn't",
@@ -2572,12 +2645,22 @@ static EventOption Options_Main[OPT_COUNT] = {
                  "report a wrong prediction."},
     },
     {
+        .kind = OPTKIND_STRING,
+        .name = "Script",
+        .value_num = 1,
+        .values = script_names,
+        .desc = {"For testing: play inputs from TM/llscript.txt,",
+                 "from a fixed spot and exact to the frame, with",
+                 "Debug Log on. D-pad left plays it again. A shot",
+                 "step freezes the game until D-pad down."},
+        .OnChange = Event_ChangeScript,
+    },
+    {
         .kind = OPTKIND_FUNC,
         .name = "Forget Learned ECBs",
-        .desc = {"Falcon's jumps, falls and aerials are built in;",
-                 "his airdodge is learned as you play. This forgets",
-                 "what was learned and goes back to the built-in",
-                 "data."},
+        .desc = {"Falcon's jumps, falls, aerials and airdodge are",
+                 "built in. This forgets what was learned while",
+                 "playing and goes back to the built-in data."},
         .OnSelect = Event_ClearLearned,
     },
     {
@@ -2586,7 +2669,7 @@ static EventOption Options_Main[OPT_COUNT] = {
         .desc = {"Pink bar: an aerial there lands you (arrows: the",
                  "C-stick aerials, square: nair). White bar: sideways",
                  "airdodge there. Dim bars come after the next one.",
-                 "Gray: still learning; airdodge once, high up."},
+                 "Gray: still learning. Short hop path: ticked line."},
     },
     {
         .kind = OPTKIND_FUNC,
@@ -2650,6 +2733,8 @@ static float body_offset = 9.f;
 #define LL_RING_FRAMES 24 // the countdown starts this many frames before the press
 static int ring_frames; // frames until the aerial press, 0 = no ring
 static int slide_frames; // frames until the airdodge press, 0 = none
+static int ring_wide;    // the window lasts more than one frame
+static int slide_wide;
 static u8 slide_dirs;    // DODGE_RIGHT / DODGE_LEFT
 static Vec2 ring_center;  // Falcon's body
 static Vec2 slide_center; // Falcon's ECB bottom
@@ -3065,9 +3150,26 @@ static int Jump_Or_Fall(int ts)
     return ts >= 0 && !Tracked_IsAerial(ts) && ts != TS_ESCAPEAIR;
 }
 
+#define LL_NEAR_MISS 4 // how far from a window a press still counts as aimed at it
+
+// How many frames a press on frame k missed the nearest window in mask by:
+// negative is early, positive is late, 0 is none within LL_NEAR_MISS.
+static int Window_Offset(Prediction *p, u8 *mask, int k, u8 bit)
+{
+    for (int d = 1; d <= LL_NEAR_MISS; d++)
+    {
+        if (k + d <= p->num && k + d < p->uncertain_from && (mask[k + d] & bit))
+            return -d;
+        if (k - d >= 1 && (mask[k - d] & bit))
+            return d;
+    }
+    return 0;
+}
+
 // An aerial or sideways airdodge pressed in the air, on a frame where the
 // prediction said it would touch down, should have landed right away. If its
 // ECB isn't in use yet (lock), the landing itself is judged later instead.
+// Pressed a few frames off a window instead, the panel says by how much.
 static void Press_CheckMissed(FighterData *fp, int ts)
 {
     if (!seg_valid || !Jump_Or_Fall(prev_ts) || Jump_Or_Fall(ts))
@@ -3079,19 +3181,37 @@ static void Press_CheckMissed(FighterData *fp, int ts)
     if (k < 1 || k > pred_seg->num || k >= pred_seg->uncertain_from)
         return;
 
-    char *what;
-    if (ts == TS_ESCAPEAIR)
+    int dodge = ts == TS_ESCAPEAIR;
+    u8 bit = dodge ? Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y) : AERIAL_BIT(ts);
+    u8 *mask = dodge ? pred_seg->wl_mask : pred_seg->ai_mask;
+    u8 *shown = dodge ? pred_seg->wl_mask : pred_seg->ai_show;
+    char *name = dodge ? "WL" : "AI";
+    char buf[200];
+    if (!bit)
+        return;
+    if (!(mask[k] & bit))
     {
-        int dir = Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y);
-        if (!(pred_seg->wl_mask[k] & dir))
+        if (!(dodge ? Cues_Waveland() : Cues_Ai()))
             return;
+        int off = Window_Offset(pred_seg, shown, k, bit);
+        if (off == 0)
+            return;
+        sprintf(text_last, "No %s, %df %s", name, off < 0 ? -off : off, off < 0 ? "early" : "late");
+        sprintf(buf, "LandingLab press: %s at %d stayed in the air, %df %s for the window (from %d)\n",
+                tracked_state_names[ts], event_vars->game_timer, off < 0 ? -off : off, off < 0 ? "early" : "late",
+                seg_start_timer);
+        Log(buf);
+        return;
+    }
+
+    char *what;
+    if (dodge)
+    {
         what = "perfect waveland";
         sprintf(text_last, "No WL, predicted");
     }
     else
     {
-        if (!(pred_seg->ai_mask[k] & AERIAL_BIT(ts)))
-            return;
         what = "aerial interrupt";
         sprintf(text_last, "No AI, predicted");
     }
@@ -3099,7 +3219,6 @@ static void Press_CheckMissed(FighterData *fp, int ts)
     stat_total++;
     Text_Exact();
 
-    char buf[200];
     sprintf(buf, "LandingLab ai miss: %s at %d x %.4f y %.4f stayed in the air, predicted a %s (from %d)\n",
             tracked_state_names[ts], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, what, seg_start_timer);
     Log(buf);
@@ -3229,7 +3348,7 @@ static void Landing_Resolve(FighterData *fp)
             predicted = in_range && (pred_seg->wl_mask[k] & dodge);
             learning = !predicted && (!in_range || k >= pred_seg->uncertain_from || pred_seg->wl_unlearned);
         }
-        char *name = pressed >= 0 ? "AI" : "WL";
+        const char *name = pressed >= 0 ? "AI" : land_kind_names[kind];
         if (learning)
             sprintf(text_last, "%s (learning)", name);
         else
@@ -3314,6 +3433,43 @@ static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color,
     event_vars->GFX_Start(count, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
     for (int i = from; i <= to; i++)
         GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, color);
+}
+
+// A path with a short tick across it on every frame: the short hop
+// preview, so it stays readable where it runs along the full hop's solid
+// line (a straight-up jump). The spacing of the ticks shows the speed.
+#define LL_TICK 1.2f
+
+static void Draw_Ticked(Vec2 *pos, float *bottom, int from, int to, GXColor color, u8 size)
+{
+    int count = to - from + 1;
+    if (count < 2)
+        return;
+
+    Draw_Path(pos, bottom, from, to, color, 8);
+    event_vars->GFX_Start(count * 2, (GFX_Params){.shape = GX_LINES, .size = size});
+    for (int i = from; i <= to; i++)
+    {
+        int a = i > from ? i - 1 : i;
+        int b = i < to ? i + 1 : i;
+        float dx = pos[b].X - pos[a].X;
+        float dy = pos[b].Y + bottom[b] - pos[a].Y - bottom[a];
+        float len = sqrtf(dx * dx + dy * dy);
+        float nx = len > 0.001f ? -dy / len : 0.f;
+        float ny = len > 0.001f ? dx / len : 1.f;
+        float x = pos[i].X;
+        float y = pos[i].Y + bottom[i];
+        GFX_AddVtx(x - nx * LL_TICK, y - ny * LL_TICK, 0, color);
+        GFX_AddVtx(x + nx * LL_TICK, y + ny * LL_TICK, 0, color);
+    }
+}
+
+static void Draw_Line(Prediction *p, int from, int to, GXColor color, u8 size, int ticked)
+{
+    if (ticked)
+        Draw_Ticked(p->pos, p->bottom, from, to, color, size);
+    else
+        Draw_Path(p->pos, p->bottom, from, to, color, size);
 }
 
 // The fighter's position raised by a fixed amount: a smooth arc through his
@@ -3503,7 +3659,7 @@ static void Draw_Windows(Prediction *p)
     }
 }
 
-static void Draw_Prediction(Prediction *p, int body)
+static void Draw_Prediction(Prediction *p, int body, int ticked)
 {
     int last = p->land_frame ? p->land_frame : p->num;
     int certain = p->land_frame && p->uncertain_from > p->land_frame;
@@ -3513,7 +3669,7 @@ static void Draw_Prediction(Prediction *p, int body)
         Draw_BodyPath(p, last);
 
     if (highlight)
-        Draw_Path(p->pos, p->bottom, 0, last, land_kind_colors[p->land_kind], 24);
+        Draw_Line(p, 0, last, land_kind_colors[p->land_kind], 24, ticked);
     else
     {
         int known = p->uncertain_from - 1;
@@ -3521,8 +3677,8 @@ static void Draw_Prediction(Prediction *p, int body)
             known = last;
         if (known < 0)
             known = 0;
-        Draw_Path(p->pos, p->bottom, 0, known, color_neutral, 12);
-        Draw_Path(p->pos, p->bottom, known, last, color_learning, 12);
+        Draw_Line(p, 0, known, color_neutral, 12, ticked);
+        Draw_Line(p, known, last, color_learning, 12, ticked);
     }
 
     Draw_Windows(p);
@@ -3544,31 +3700,73 @@ static void Draw_Prediction(Prediction *p, int body)
     }
 }
 
-// AI: the outer ring closes in on the inner one around Falcon's body,
-// meeting it on the frame before the press, so the press lands as the rings
-// touch.
+// The countdowns share one look. Before a window, the target says what kind
+// it is: thin with small ticks for a 1-frame window, thick for a longer one.
+// While a press works (the frame on screen is the one to press on, so the
+// press lands on the next), the target lights up and stays lit until the
+// window is gone.
 #define LL_RING_INNER 4.f
 #define LL_RING_STEP 0.75f
 
+// A color at a fraction of its strength, for fills (colors are
+// premultiplied).
+static GXColor Color_Fill(GXColor c, float a)
+{
+    c.r = c.r * a;
+    c.g = c.g * a;
+    c.b = c.b * a;
+    c.a = 255 * a;
+    return c;
+}
+
+static void Draw_Disc(float x, float y, float r, GXColor color)
+{
+    event_vars->GFX_Start(LL_CIRCLE_SEGS * 3, (GFX_Params){.shape = GX_TRIANGLES});
+    for (int i = 0; i < LL_CIRCLE_SEGS; i++)
+    {
+        GFX_AddVtx(x, y, 0, color);
+        GFX_AddVtx(x + circle[i].X * r, y + circle[i].Y * r, 0, color);
+        GFX_AddVtx(x + circle[i + 1].X * r, y + circle[i + 1].Y * r, 0, color);
+    }
+}
+
+// AI: the outer ring closes in on the inner one around Falcon's body and
+// meets it on the frame to press.
 static void Draw_TimingRing(void)
 {
     GXColor color = land_kind_colors[LAND_AI];
     float x = ring_center.X;
     float y = ring_center.Y;
+    float r = LL_RING_INNER;
 
     if (ring_frames <= 1)
     {
-        Draw_Circle(x, y, LL_RING_INNER, color, 72);
+        Draw_Disc(x, y, r, Color_Fill(color, 0.35f));
+        Draw_Circle(x, y, r, color, ring_wide ? 96 : 60);
         return;
     }
-    Draw_Circle(x, y, LL_RING_INNER, color, 12);
-    Draw_Circle(x, y, LL_RING_INNER + (ring_frames - 1) * LL_RING_STEP, color, 36);
+
+    if (ring_wide)
+        Draw_Circle(x, y, r, color, 48);
+    else
+    {
+        // thin, with four ticks pointing out: a 1-frame window
+        Draw_Circle(x, y, r, color, 12);
+        event_vars->GFX_Start(8, (GFX_Params){.shape = GX_LINES, .size = 12});
+        for (int i = 0; i < 4; i++)
+        {
+            Vec2 *c = &circle[(i * 2 + 1) * LL_CIRCLE_SEGS / 8];
+            GFX_AddVtx(x + c->X * r, y + c->Y * r, 0, color);
+            GFX_AddVtx(x + c->X * (r + 1.f), y + c->Y * (r + 1.f), 0, color);
+        }
+    }
+    Draw_Circle(x, y, r + (ring_frames - 1) * LL_RING_STEP, color, 36);
 }
 
 // Waveland: at Falcon's feet, an arrow slides in from the side toward a
 // post for each direction that works (the left one points right: dodge
 // right), on the same clock as the ring. Low and sideways, so it never sits
-// on the ring.
+// on the ring. While the window is open, the strip between the posts is lit.
 #define LL_SLIDE_POST 6.f
 #define LL_SLIDE_SIZE 1.6f
 
@@ -3580,13 +3778,33 @@ static void Draw_SlideArrows(void)
     int now = slide_frames <= 1;
     float d = LL_SLIDE_POST + (now ? 0 : (slide_frames - 1) * LL_RING_STEP);
     float h = LL_SLIDE_SIZE;
+    float p = LL_SLIDE_POST;
 
-    // the posts
-    event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINES, .size = now ? 48 : 12});
-    GFX_AddVtx(x - LL_SLIDE_POST, y - h, 0, color);
-    GFX_AddVtx(x - LL_SLIDE_POST, y + h, 0, color);
-    GFX_AddVtx(x + LL_SLIDE_POST, y - h, 0, color);
-    GFX_AddVtx(x + LL_SLIDE_POST, y + h, 0, color);
+    if (now)
+    {
+        GXColor fill = Color_Fill(color, 0.3f);
+        event_vars->GFX_Start(4, (GFX_Params){.shape = GX_QUADS});
+        GFX_AddVtx(x - p, y - h, 0, fill);
+        GFX_AddVtx(x - p, y + h, 0, fill);
+        GFX_AddVtx(x + p, y + h, 0, fill);
+        GFX_AddVtx(x + p, y - h, 0, fill);
+    }
+
+    // the posts: thin with a notch for a 1-frame window, thick for longer
+    u8 post = now ? (slide_wide ? 72 : 48) : (slide_wide ? 48 : 12);
+    event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINES, .size = post});
+    GFX_AddVtx(x - p, y - h, 0, color);
+    GFX_AddVtx(x - p, y + h, 0, color);
+    GFX_AddVtx(x + p, y - h, 0, color);
+    GFX_AddVtx(x + p, y + h, 0, color);
+    if (!now && !slide_wide)
+    {
+        event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINES, .size = 12});
+        GFX_AddVtx(x - p - 0.8f, y + h, 0, color);
+        GFX_AddVtx(x - p + 0.8f, y + h, 0, color);
+        GFX_AddVtx(x + p - 0.8f, y + h, 0, color);
+        GFX_AddVtx(x + p + 0.8f, y + h, 0, color);
+    }
 
     // the arrows, tip toward the post
     for (int side = -1; side <= 1; side += 2)
@@ -3615,7 +3833,7 @@ static void World_GX(GOBJ *gobj, int pass)
 
     if (live_visible)
     {
-        Draw_Prediction(pred_live, 1);
+        Draw_Prediction(pred_live, 1, 0);
         if (Options_Main[OPT_RING].val && slide_frames)
             Draw_SlideArrows();
         if (Options_Main[OPT_RING].val && ring_frames)
@@ -3623,15 +3841,17 @@ static void World_GX(GOBJ *gobj, int pass)
     }
     else if (ghost_visible)
     {
-        Draw_Prediction(pred_seg, 0);
+        Draw_Prediction(pred_seg, 0, 0);
         Draw_Path(actual_pos, actual_bottom, 0, actual_num - 1, color_actual, 12);
     }
     else
     {
+        // the short hop is ticked, and only has a body line of its own
+        // when the full hop isn't shown
         if (preview_fh)
-            Draw_Prediction(pred_fh, 1);
+            Draw_Prediction(pred_fh, 1, 0);
         if (preview_sh)
-            Draw_Prediction(pred_sh, 1);
+            Draw_Prediction(pred_sh, !preview_fh, 1);
     }
 }
 
@@ -3642,6 +3862,882 @@ static void Hud_GX(GOBJ *gobj, int pass)
 
     float x = panel_left ? -26.7f : 18.f;
     event_vars->HUD_DrawInfoPanelAt((const char **)panel_labels, (const char **)panel_info, countof(panel_labels), x);
+}
+
+///////////////////////
+/// Frame advance   ///
+///////////////////////
+
+// The game's debug pause, as the lab uses it: while Frame Advance is on the
+// game stays paused, and each press of the advance button runs one frame
+// (holding it runs frames at full speed after half a second). The pause and
+// step checks run every frame, paused or not; the scene resets them when the
+// event ends.
+#define LL_ADVANCE_HOLD 30
+
+static int Advance_Port(void)
+{
+    return Fighter_GetControllerPort(0);
+}
+
+static int Advance_CheckPause(void)
+{
+    HSD_Update *update = stc_hsd_update;
+    int paused = update->pause_kind & 1;
+    return paused != (Options_Main[OPT_FRAME_ADV].val != 0);
+}
+
+static int Advance_CheckStep(void)
+{
+    static int timer;
+    int port = Advance_Port();
+    HSD_Pad *pad = PadGetMaster(port);
+    HSD_Pad *engine = PadGetEngine(port);
+    int button = adv_button_masks[Options_Main[OPT_ADV_BUTTON].val];
+
+    if (Pause_CheckStatus(1) == 2 || !(pad->held & button))
+    {
+        timer = 0;
+        return 0;
+    }
+    timer++;
+    if (timer != 1 && timer <= LL_ADVANCE_HOLD)
+        return 0;
+
+    // the game doesn't see the advance button
+    pad->down &= ~button;
+    pad->held &= ~button;
+    engine->down &= ~button;
+    engine->held &= ~button;
+    if (button == HSD_TRIGGER_L)
+    {
+        pad->triggerLeft = 0;
+        pad->ftriggerLeft = 0;
+        engine->triggerLeft = 0;
+        engine->ftriggerLeft = 0;
+    }
+    else if (button == HSD_TRIGGER_R)
+    {
+        pad->triggerRight = 0;
+        pad->ftriggerRight = 0;
+        engine->triggerRight = 0;
+        engine->ftriggerRight = 0;
+    }
+    return 1;
+}
+
+///////////////////////
+/// Test scripts    ///
+///////////////////////
+
+// Input scripts for testing, read from TM/llscript.txt on the disc. A script
+// stands Falcon at a fixed spot, then feeds exact inputs into his controller
+// port frame by frame, so it plays out the same way every time. One line per
+// step; '#' starts a comment:
+//   script <name>              starts a script (the name shows in the menu)
+//   start <x> <y> <left|right> stand Falcon on the floor at x, at height y,
+//                              facing that way, as if nothing was held
+//   air <x> <y> <left|right> [<vx> <vy> [<jumps used> [<lock>]]]
+//                              put Falcon in the air at (x, y), falling, with
+//                              that speed (0 0), jumps used (1) and frames of
+//                              ECB bottom lock (0)
+//   <n> [inputs]               hold the inputs for n frames (none: let go)
+//   wl <offset> [inputs]       keep the stick of the step before until the
+//                              next perfect waveland window, then press the
+//                              inputs for one frame, offset frames after the
+//                              window's first (-1: a frame early)
+//   ai <offset> [inputs]       the same for the next aerial interrupt window
+//   land <max> [inputs]        hold the inputs until Falcon is on the ground
+//   shot [label]               freeze the game after the frame before; D-pad
+//                              down goes on, the advance button steps
+//   mark [label]               only write a line to the log
+//   autorun                    (anywhere) play All, or the only script, as
+//                              soon as the event starts
+// Inputs: A B X Y Z L R (L and R fully pressed), s:x,y (stick), c:x,y
+// (C-stick), lt:v (light press, no click), with x, y, v from -1 to 1. A
+// stick value is round(80 v), pulled back onto the rim if it's past it.
+// Every script starts from a clean slate: what Falcon's ECB was learned
+// while playing is forgotten, so a script plays the same alone or in All.
+#define LL_SCRIPT_FILE "TM/llscript.txt"
+#define LL_SCRIPT_BYTES 0x30000 // the biggest script file read
+#define LL_SCRIPT_WAIT 300 // frames a wl/ai/land step waits at most
+
+enum script_op_kind
+{
+    SOP_INPUT,
+    SOP_START,
+    SOP_AIR,
+    SOP_WL,
+    SOP_AI,
+    SOP_LAND,
+    SOP_SHOT,
+    SOP_MARK,
+};
+
+typedef struct ScriptInput
+{
+    s8 lx, ly, cx, cy; // as the controller reads them, 80 is all the way
+    u8 trigger;        // light press, 0 to 140
+    u16 buttons;
+} ScriptInput;
+
+typedef struct ScriptOp
+{
+    u8 kind;
+    s8 facing;
+    s16 count; // frames, window offset, most frames or jumps used
+    s16 lock;
+    ScriptInput in;
+    float x, y, vx, vy;
+    char *label;
+} ScriptOp;
+
+typedef struct Script
+{
+    char *name;
+    int first;
+    int num;
+} Script;
+
+static char *script_text;
+static ScriptOp *script_ops;
+static int script_op_num;
+static Script *scripts;
+static int script_num;
+static int script_shown; // the first ones are listed in the menu
+static int script_autorun;
+
+static int script_cur = -1; // running script, -1 = none
+static int script_pc;       // its current step
+static int script_left;     // frames left in that step
+static int script_wait;     // frames a wl/ai/land step has waited
+static int script_air;      // Falcon has been in the air during a land step
+static int script_window;   // the frame a wl/ai step's window opened, -1 = not yet
+static int script_width;    // how many frames the prediction gave it
+static int script_pending;  // start the chosen script on the next frame
+static ScriptInput script_last; // the last frame's inputs
+static int live_timer;      // the frame pred_live was made on
+
+static int Script_Is(const char *a, const char *b)
+{
+    while (*a && *a == *b)
+        a++, b++;
+    return *a == *b;
+}
+
+static char *Script_Skip(char *t)
+{
+    while (*t == ' ' || *t == '\t' || *t == '\r')
+        t++;
+    return t;
+}
+
+// The rest of a line without the spaces around it.
+static char *Script_Trim(char *t)
+{
+    t = Script_Skip(t);
+    char *e = t + strlen(t);
+    while (e > t && (e[-1] == ' ' || e[-1] == '\t' || e[-1] == '\r'))
+        *--e = 0;
+    return t;
+}
+
+// The next word of a line, cut off in place, or 0 at the end.
+static char *Script_Word(char **t)
+{
+    char *s = Script_Skip(*t);
+    if (*s == 0)
+        return 0;
+    char *e = s;
+    while (*e && *e != ' ' && *e != '\t' && *e != '\r')
+        e++;
+    if (*e)
+        *e++ = 0;
+    *t = e;
+    return s;
+}
+
+static float Script_Number(char **t)
+{
+    char *s = *t;
+    float sign = 1.f, v = 0.f;
+    if (*s == '-' || *s == '+')
+        sign = *s++ == '-' ? -1.f : 1.f;
+    while (*s >= '0' && *s <= '9')
+        v = v * 10 + (*s++ - '0');
+    if (*s == '.')
+    {
+        float f = 0.1f;
+        for (s++; *s >= '0' && *s <= '9'; s++, f *= 0.1f)
+            v += (*s - '0') * f;
+    }
+    *t = s;
+    return v * sign;
+}
+
+static int Script_Pair(char *t, float *x, float *y)
+{
+    *x = Script_Number(&t);
+    if (*t++ != ',')
+        return 0;
+    *y = Script_Number(&t);
+    return *t == 0;
+}
+
+static s8 Script_Round(float v)
+{
+    return (s8)(v < 0 ? v - 0.5f : v + 0.5f);
+}
+
+static int Script_Stick(char *t, s8 *x, s8 *y)
+{
+    float fx, fy;
+    if (!Script_Pair(t, &fx, &fy))
+        return 0;
+    fx *= 80.f;
+    fy *= 80.f;
+    float r = sqrtf(fx * fx + fy * fy);
+    if (r > 80.f)
+    {
+        fx *= 80.f / r;
+        fy *= 80.f / r;
+    }
+    *x = Script_Round(fx);
+    *y = Script_Round(fy);
+    if (*x * *x + *y * *y > 80 * 80)
+    {
+        *x = (s8)fx;
+        *y = (s8)fy;
+    }
+    return 1;
+}
+
+static int Script_Input(char *w, ScriptInput *in)
+{
+    static const char names[] = "ABXYZLR";
+    static const u16 bits[] = {HSD_BUTTON_A, HSD_BUTTON_B, HSD_BUTTON_X, HSD_BUTTON_Y,
+                               HSD_TRIGGER_Z, HSD_TRIGGER_L, HSD_TRIGGER_R};
+    if (w[1] == 0)
+    {
+        for (int i = 0; i < 7; i++)
+        {
+            if (w[0] == names[i])
+            {
+                in->buttons |= bits[i];
+                return 1;
+            }
+        }
+        return 0;
+    }
+    if (w[0] == 's' && w[1] == ':')
+        return Script_Stick(w + 2, &in->lx, &in->ly);
+    if (w[0] == 'c' && w[1] == ':')
+        return Script_Stick(w + 2, &in->cx, &in->cy);
+    if (w[0] == 'l' && w[1] == 't' && w[2] == ':')
+    {
+        char *t = w + 3;
+        float v = Script_Number(&t) * 140.f;
+        in->trigger = v < 0 ? 0 : v > 140.f ? 140 : (u8)(v + 0.5f);
+        return *t == 0;
+    }
+    return 0;
+}
+
+static void Script_Error(int line, char *what)
+{
+    char buf[120];
+    sprintf(buf, "LLSCRIPT error on line %d: %s\n", line, what);
+    Log(buf);
+}
+
+static void Script_Parse(void)
+{
+    char *t = script_text;
+    for (int line = 1; *t; line++)
+    {
+        // cut the line off, and its comment
+        char *end = t;
+        while (*end && *end != '\n')
+            end++;
+        char *next = *end ? end + 1 : end;
+        *end = 0;
+        for (char *c = t; *c; c++)
+        {
+            if (*c == '#')
+            {
+                *c = 0;
+                break;
+            }
+        }
+
+        char *rest = t;
+        char *w = Script_Word(&rest);
+        t = next;
+        if (!w)
+            continue;
+
+        if (Script_Is(w, "script"))
+        {
+            // the rest of the line is the name
+            char *name = Script_Trim(rest);
+            scripts[script_num].name = *name ? name : "Unnamed";
+            scripts[script_num].first = script_op_num;
+            scripts[script_num].num = 0;
+            script_num++;
+            continue;
+        }
+        if (Script_Is(w, "autorun"))
+        {
+            script_autorun = 1;
+            continue;
+        }
+        if (script_num == 0)
+        {
+            Script_Error(line, "step before the first script line");
+            continue;
+        }
+        ScriptOp *op = &script_ops[script_op_num];
+        memset(op, 0, sizeof(*op));
+        int ok = 1;
+        int inputs = 0;
+        if (Script_Is(w, "start"))
+        {
+            char *x = Script_Word(&rest), *y = Script_Word(&rest), *f = Script_Word(&rest);
+            op->kind = SOP_START;
+            ok = x && y && f && (Script_Is(f, "left") || Script_Is(f, "right"));
+            if (ok)
+            {
+                op->x = Script_Number(&x);
+                op->y = Script_Number(&y);
+                op->facing = f[0] == 'l' ? -1 : 1;
+            }
+        }
+        else if (Script_Is(w, "air"))
+        {
+            char *x = Script_Word(&rest), *y = Script_Word(&rest), *f = Script_Word(&rest);
+            char *vx = Script_Word(&rest), *vy = Script_Word(&rest);
+            char *jumps = Script_Word(&rest), *lock = Script_Word(&rest);
+            op->kind = SOP_AIR;
+            ok = x && y && f && (Script_Is(f, "left") || Script_Is(f, "right")) && (vx == 0) == (vy == 0);
+            if (ok)
+            {
+                op->x = Script_Number(&x);
+                op->y = Script_Number(&y);
+                op->facing = f[0] == 'l' ? -1 : 1;
+                op->vx = vx ? Script_Number(&vx) : 0;
+                op->vy = vy ? Script_Number(&vy) : 0;
+                op->count = jumps ? (int)Script_Number(&jumps) : 1;
+                op->lock = lock ? (int)Script_Number(&lock) : 0;
+            }
+        }
+        else if (Script_Is(w, "shot") || Script_Is(w, "mark"))
+        {
+            op->kind = w[0] == 's' ? SOP_SHOT : SOP_MARK;
+            op->label = Script_Trim(rest);
+        }
+        else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
+        {
+            char *n = Script_Word(&rest);
+            op->kind = w[0] == 'w' ? SOP_WL : w[0] == 'a' ? SOP_AI : SOP_LAND;
+            ok = n != 0;
+            if (ok)
+                op->count = (int)Script_Number(&n);
+            inputs = 1;
+        }
+        else if (w[0] >= '0' && w[0] <= '9')
+        {
+            op->kind = SOP_INPUT;
+            op->count = (int)Script_Number(&w);
+            ok = op->count > 0;
+            inputs = 1;
+        }
+        else
+            ok = 0;
+
+        for (char *in; ok && inputs && (in = Script_Word(&rest));)
+            ok = Script_Input(in, &op->in);
+
+        if (!ok)
+        {
+            Script_Error(line, "can't read this step");
+            continue;
+        }
+        script_op_num++;
+        scripts[script_num - 1].num++;
+    }
+}
+
+// Reads the script file if the disc has one, and lists its scripts in the
+// Script option, with All after them.
+static void Script_Load(void)
+{
+    char msg[120];
+    Options_Main[OPT_SCRIPT].value_num = 1;
+
+    int entry = DVDConvertPathToEntrynum(LL_SCRIPT_FILE);
+    if (entry < 0)
+        return;
+    int size = File_GetSize(LL_SCRIPT_FILE);
+    if (size <= 0 || size > LL_SCRIPT_BYTES)
+    {
+        sprintf(msg, "LLSCRIPT the script file is %d bytes, the most is %d\n", size, LL_SCRIPT_BYTES);
+        Log(msg);
+        return;
+    }
+
+    // the disc reads whole 32-byte blocks into a 32-byte aligned buffer
+    int read = (size + 31) & ~31;
+    char *buf = calloc(read + 64);
+    script_text = (char *)(((u32)buf + 31) & ~31);
+    DCFlushRange(script_text, read);
+    File_ReadSync(entry, 0, script_text, read, 0x21, 1);
+    DCInvalidateRange(script_text, read);
+    script_text[size] = 0;
+
+    // room for every line that isn't blank or a comment, and every script
+    int lines = 0, names = 0;
+    for (char *t = script_text; *t;)
+    {
+        t = Script_Skip(t);
+        if (*t && *t != '\n' && *t != '#')
+        {
+            lines++;
+            names += t[0] == 's' && t[1] == 'c' && t[2] == 'r' && t[3] == 'i' && t[4] == 'p' && t[5] == 't' &&
+                     (t[6] == ' ' || t[6] == '\t' || t[6] == '\r' || t[6] == '\n' || t[6] == 0);
+        }
+        while (*t && *t != '\n')
+            t++;
+        if (*t)
+            t++;
+    }
+    script_ops = calloc(sizeof(ScriptOp) * (lines + 1));
+    scripts = calloc(sizeof(Script) * (names + 1));
+    Script_Parse();
+
+    // the menu lists the first ones, and All plays every one
+    script_shown = script_num < LL_SCRIPT_MAX ? script_num : LL_SCRIPT_MAX;
+    for (int i = 0; i < script_shown; i++)
+        script_names[i + 1] = scripts[i].name;
+    if (script_num > 1)
+        script_names[script_shown + 1] = "All";
+    Options_Main[OPT_SCRIPT].value_num = script_shown + 1 + (script_num > 1);
+    if (script_autorun && script_num > 0)
+    {
+        Options_Main[OPT_SCRIPT].val = script_num > 1 ? script_shown + 1 : 1;
+        script_pending = 1;
+    }
+
+    sprintf(msg, "LLSCRIPT loaded %d scripts, %d steps, %d bytes\n", script_num, script_op_num, size);
+    Log(msg);
+}
+
+// The same as a recorded input playing back in the lab (Record_SetInputs):
+// the engine pad the fighter reads this frame, and the raw pad UCF reads.
+static void Script_Apply(FighterData *fp, ScriptInput *in)
+{
+    HSD_Pad *pad = PadGetEngine(fp->pad_index);
+    u8 left = in->buttons & HSD_TRIGGER_L ? 140 : in->trigger;
+    u8 right = in->buttons & HSD_TRIGGER_R ? 140 : 0;
+
+    pad->held = in->buttons;
+    pad->stickX = in->lx;
+    pad->stickY = in->ly;
+    pad->substickX = in->cx;
+    pad->substickY = in->cy;
+    pad->fstickX = pad->stickX / 80.f;
+    pad->fstickY = pad->stickY / 80.f;
+    pad->fsubstickX = pad->substickX / 80.f;
+    pad->fsubstickY = pad->substickY / 80.f;
+    pad->triggerLeft = left;
+    pad->triggerRight = right;
+    pad->ftriggerLeft = left / 140.f;
+    pad->ftriggerRight = right / 140.f;
+
+    PADStatus *raw = PadGetRaw(fp->pad_index);
+    raw->button = pad->held;
+    raw->stickX = pad->stickX;
+    raw->stickY = pad->stickY;
+    raw->substickX = pad->substickX;
+    raw->substickY = pad->substickY;
+    raw->triggerLeft = left;
+    raw->triggerRight = right;
+    raw->analogA = 0;
+    raw->analogB = 0;
+}
+
+static void Script_UpdatePosition(GOBJ *fighter)
+{
+    FighterData *data = fighter->userdata;
+
+    Vec3 pos = data->phys.pos;
+    data->coll_data.topN_Curr = pos;
+    data->coll_data.topN_CurrCorrect = pos;
+    data->coll_data.topN_Prev = pos;
+    data->coll_data.topN_Proj = pos;
+    data->coll_data.coll_test = *stc_colltest;
+
+    JOBJ *jobj = fighter->hsd_object;
+    jobj->trans = data->phys.pos;
+    JOBJ_SetMtxDirtySub(jobj);
+    Fighter_SetPosition(data->ply, data->flags.ms, &data->phys.pos);
+}
+
+// After Falcon is moved, the event starts over as if he'd just appeared:
+// no landing for where he was, no windows or ghost left from it.
+static void Script_ResetTracking(void)
+{
+    prev_state_id = -1;
+    prev_ts = -1;
+    prev_tracked_air = 0;
+    seg_valid = 0;
+    live_visible = 0;
+    ghost_visible = 0;
+    ring_frames = 0;
+    slide_frames = 0;
+    beep_target = -100;
+    Window_Forget();
+}
+
+// Input timers as if nothing had been touched for a while.
+static void Script_ResetTimers(FighterData *fp)
+{
+    char keep[3] = {fp->input.x679, fp->input.x67A, fp->input.x67B};
+    for (char *t = &fp->input.timer_lstick_tilt_x; t <= &fp->input.timer_specialn; t++)
+        *t = LL_TIMER_MAX;
+    fp->input.x679 = keep[0];
+    fp->input.x67A = keep[1];
+    fp->input.x67B = keep[2];
+    fp->input.timer_jump_lockout = 0;
+    fp->input.timer_specialhi_lockout = 0;
+}
+
+static void Script_FixCamera(GOBJ *ft)
+{
+    FighterData *fp = ft->userdata;
+    Fighter_UpdateCameraBox(ft);
+    CmSubject *subject = fp->camera_subject;
+    subject->boundleft_curr = subject->boundleft_proj;
+    subject->boundright_curr = subject->boundright_proj;
+    Match_CorrectCamera();
+}
+
+// Stand Falcon on the floor under (x, y), as techchase.c resets a player.
+static int Script_Place(GOBJ *ft, float x, float y, float facing)
+{
+    FighterData *fp = ft->userdata;
+    Vec3 ground, unk;
+    int line, kind;
+
+    if (!GrColl_RaycastGround(&ground, &line, &kind, &unk, -1, -1, -1, 0, x, y + 8.f, x, y - 8.f, 0))
+        return 0;
+
+    fp->phys.pos = ground;
+    fp->facing_direction = facing;
+    Fighter_KillAllVelocity(ft);
+    Script_UpdatePosition(ft);
+    fp->coll_data.ground_index = line;
+    EnvironmentCollision_WaitLanding(ft);
+    Fighter_SetGrounded(fp);
+    Fighter_EnterWait(ft);
+    fp->flags.is_fastfall = 0;
+    fp->jump.jumps_used = 0;
+    Script_ResetTimers(fp);
+    Script_FixCamera(ft);
+    Script_ResetTracking();
+    return 1;
+}
+
+// Put Falcon in the air at (x, y), falling with the given speed, as
+// ledgedash.c drops a player above the ledge.
+static void Script_PlaceAir(GOBJ *ft, ScriptOp *op)
+{
+    FighterData *fp = ft->userdata;
+
+    fp->phys.pos.X = op->x;
+    fp->phys.pos.Y = op->y;
+    fp->phys.pos.Z = 0;
+    fp->facing_direction = op->facing;
+    Fighter_KillAllVelocity(ft);
+    Script_UpdatePosition(ft);
+    Fighter_SetAirborne(fp);
+    Fighter_EnterFall(ft);
+    fp->phys.self_vel.X = op->vx;
+    fp->phys.self_vel.Y = op->vy;
+    fp->flags.is_fastfall = 0;
+    fp->jump.jumps_used = op->count;
+    fp->coll_data.u.ecb_bot_lock_frames = op->lock;
+    Script_ResetTimers(fp);
+    Script_FixCamera(ft);
+    Script_ResetTracking();
+}
+
+static void Script_Next(void);
+
+static void Script_Begin(int index)
+{
+    char buf[120];
+    script_cur = index;
+    script_pc = -1;
+    Script_Next();
+    memset(&script_last, 0, sizeof(script_last));
+    Learned_Clear();
+    Learned_Bake();
+    sprintf(text_last, "-");
+    sprintf(buf, "LLRUN %d %s at %d\n", index + 1, scripts[index].name, event_vars->game_timer);
+    Log(buf);
+}
+
+static void Script_End(void)
+{
+    char buf[120];
+    Script *sc = &scripts[script_cur];
+    sprintf(buf, "LLSCRIPT end %s at %d, last landing: %s\n", sc->name, event_vars->game_timer, text_last);
+    Log(buf);
+
+    // All plays every script in turn
+    int all = script_num > 1 && Options_Main[OPT_SCRIPT].val == script_shown + 1;
+    if (all && script_cur + 1 < script_num)
+    {
+        Script_Begin(script_cur + 1);
+        return;
+    }
+    if (all)
+    {
+        sprintf(buf, "LLDONE played all %d scripts at %d\n", script_num, event_vars->game_timer);
+        Log(buf);
+    }
+    script_cur = -1;
+}
+
+static ScriptOp *Script_Op(void)
+{
+    Script *sc = &scripts[script_cur];
+    return script_pc < sc->num ? &script_ops[sc->first + script_pc] : 0;
+}
+
+static void Script_Next(void)
+{
+    script_pc++;
+    script_wait = 0;
+    script_window = -1;
+    script_air = 0;
+    ScriptOp *op = Script_Op();
+    script_left = op ? op->count : 0;
+}
+
+// Steps that take no frame. Before a frame (pre) a start or air places
+// Falcon; after one, a shot or mark goes right after the inputs before it,
+// and a start or air waits for the next frame. Returns 0 once the script is over.
+static int Script_Instant(GOBJ *ft, int pre)
+{
+    char buf[160];
+    for (;;)
+    {
+        ScriptOp *op = Script_Op();
+        if (!op)
+        {
+            Script_End();
+            return 0;
+        }
+        if (op->kind == SOP_START)
+        {
+            if (!pre)
+                return 1;
+            if (!Script_Place(ft, op->x, op->y, op->facing))
+            {
+                sprintf(buf, "LLSCRIPT no floor at %.2f %.2f, skipping %s\n", op->x, op->y, scripts[script_cur].name);
+                Log(buf);
+                Script_End();
+                return 0;
+            }
+        }
+        else if (op->kind == SOP_AIR)
+        {
+            if (!pre)
+                return 1;
+            Script_PlaceAir(ft, op);
+        }
+        else if (op->kind == SOP_SHOT)
+        {
+            Options_Main[OPT_FRAME_ADV].val = 1;
+            sprintf(buf, "LLSHOT %s %s at %d\n", scripts[script_cur].name, op->label, event_vars->game_timer);
+            Log(buf);
+        }
+        else if (op->kind == SOP_MARK)
+        {
+            sprintf(buf, "LLMARK %s %s at %d\n", scripts[script_cur].name, op->label, event_vars->game_timer);
+            Log(buf);
+        }
+        else
+            return 1;
+        Script_Next();
+    }
+}
+
+// The aerial an input starts when pressed with nothing held before
+// (Aerial_Pressed), or -1.
+static int Script_Aerial(ScriptInput *in, float facing)
+{
+    float cx = in->cx / 80.f, cy = in->cy / 80.f;
+    int cstick = (fabs(script_last.cx / 80.f) < common_aerial_stick_x && fabs(cx) >= common_aerial_stick_x) ||
+                 (fabs(script_last.cy / 80.f) < common_aerial_stick_y && fabs(cy) >= common_aerial_stick_y);
+    if (!cstick && !(in->buttons & HSD_BUTTON_A))
+        return -1;
+
+    float x = cstick ? cx : in->lx / 80.f;
+    float y = cstick ? cy : in->ly / 80.f;
+    if (fabs(x) < common_aerial_stick_x && fabs(y) < common_aerial_stick_y)
+        return TS_AIRN;
+    float angle = atan2(y, fabs(x));
+    if (angle > common_aerial_angle)
+        return TS_AIRHI;
+    if (angle < -common_aerial_angle)
+        return TS_AIRLW;
+    return x * facing >= 0 ? TS_AIRF : TS_AIRB;
+}
+
+// The frame the next window for a wl/ai step's own airdodge or aerial opens
+// on, by the prediction made last frame (its step k is frame live_timer +
+// k), or -1. Every window counts, whatever the AI Filter shows. Its length
+// by that prediction goes in width.
+static int Script_WindowStart(ScriptOp *op, FighterData *fp, int *width)
+{
+    Prediction *p = pred_live;
+    if (!live_visible || live_timer != event_vars->game_timer - 1)
+        return -1;
+
+    int wl = op->kind == SOP_WL;
+    u8 *mask = wl ? p->wl_mask : p->ai_mask;
+    int last = p->land_frame ? p->land_frame - !wl : p->num;
+    int bit;
+    if (wl)
+        bit = Dodge_Dir(op->in.lx / 80.f, op->in.ly / 80.f);
+    else
+    {
+        int aerial = Script_Aerial(&op->in, fp->facing_direction);
+        bit = aerial >= 0 ? AERIAL_BIT(aerial) : 0;
+    }
+    if (!bit)
+        bit = 0xFF;
+
+    for (int k = 1; k <= last && k < p->uncertain_from; k++)
+    {
+        if (mask[k] & bit)
+        {
+            *width = 0;
+            while (k + *width <= last && k + *width < p->uncertain_from && (mask[k + *width] & bit))
+                (*width)++;
+            return live_timer + k;
+        }
+    }
+    return -1;
+}
+
+// Runs before the fighters read their controllers (the lab's Record_Think
+// slot), so the inputs count on this very frame.
+static void Script_Think(GOBJ *gobj)
+{
+    char buf[160];
+
+    // (autorun gives the match a moment to settle first)
+    if (script_pending && event_vars->game_timer >= 30)
+    {
+        script_pending = 0;
+        int sel = Options_Main[OPT_SCRIPT].val;
+        if (sel > 0 && script_num > 0)
+            Script_Begin(sel <= script_shown ? sel - 1 : 0);
+    }
+    if (script_cur < 0)
+        return;
+
+    GOBJ *ft = Fighter_GetGObj(0);
+    FighterData *fp = ft->userdata;
+    ScriptInput in;
+    int done = 0;
+    ScriptOp *op;
+
+    for (;;)
+    {
+        if (!Script_Instant(ft, 1))
+            return;
+        op = Script_Op();
+        // land: over once Falcon is back on the ground, and this frame is
+        // the next step's
+        if (op->kind == SOP_LAND && fp->phys.air_state == 1)
+            script_air = 1;
+        if (op->kind == SOP_LAND && script_air && fp->phys.air_state == 0)
+        {
+            Script_Next();
+            continue;
+        }
+        break;
+    }
+
+    switch (op->kind)
+    {
+    case SOP_INPUT:
+        in = op->in;
+        done = --script_left <= 0;
+        break;
+    case SOP_LAND:
+        in = op->in;
+        done = ++script_wait >= (op->count > 0 ? op->count : LL_SCRIPT_WAIT);
+        break;
+    default: // SOP_WL, SOP_AI
+    {
+        // once the window has opened, its start is kept: the predictions
+        // after it only see what's left of it
+        int width = script_width;
+        int start = script_window >= 0 ? script_window : Script_WindowStart(op, fp, &width);
+        if (start >= 0 && start <= event_vars->game_timer && script_window < 0)
+        {
+            script_window = start;
+            script_width = width;
+        }
+        int target = start >= 0 ? start + op->count : -1;
+        if (target >= 0 && event_vars->game_timer >= target)
+        {
+            in = op->in;
+            done = 1;
+            sprintf(buf, "LLSCRIPT %s window opens at %d, %d frames predicted, pressed at %d (offset %d)\n",
+                    op->kind == SOP_WL ? "wl" : "ai", start, width, event_vars->game_timer,
+                    event_vars->game_timer - start);
+            Log(buf);
+        }
+        else
+        {
+            // keep the stick, let go of the rest
+            memset(&in, 0, sizeof(in));
+            in.lx = script_last.lx;
+            in.ly = script_last.ly;
+            if (++script_wait >= LL_SCRIPT_WAIT)
+            {
+                sprintf(buf, "LLSCRIPT no %s window came, going on\n", op->kind == SOP_WL ? "wl" : "ai");
+                Log(buf);
+                done = 1;
+            }
+        }
+        break;
+    }
+    }
+
+    Script_Apply(fp, &in);
+    script_last = in;
+    sprintf(buf, "LLIN %d s %d %d c %d %d lt %d btn %x\n", event_vars->game_timer,
+            in.lx, in.ly, in.cx, in.cy, in.trigger, in.buttons);
+    Log(buf);
+
+    if (done)
+    {
+        Script_Next();
+        Script_Instant(ft, 0);
+    }
+}
+
+void Event_ChangeScript(GOBJ *menu, int value)
+{
+    script_cur = -1;
+    script_pending = value != 0;
 }
 
 ///////////////////////
@@ -3675,12 +4771,16 @@ static void Panel_UpdateSide(FighterData *fp)
         return;
     }
 
-    Vec3 eye;
-    COBJ_GetEyePosition(*stc_matchcam_cobj, &eye);
-    float dx = fp->phys.pos.X - eye.X;
-    if (dx > 4.f) // a little slack so it doesn't flicker near the middle
+    // where Falcon is on screen: the camera turns as well as moves, so
+    // comparing with its eye position isn't enough
+    COBJ *cobj = *stc_matchcam_cobj;
+    Vec3 pos = {fp->phys.pos.X, fp->phys.pos.Y + body_offset, 0};
+    Vec3 screen;
+    HSD_GXProject(cobj, &pos, &screen, 1);
+    float dx = screen.X - (cobj->viewport_left + cobj->viewport_right) / 2;
+    if (dx > 24.f) // a little slack so it doesn't flicker near the middle
         panel_left = 1;
-    else if (dx < -4.f)
+    else if (dx < -24.f)
         panel_left = 0;
 }
 
@@ -3690,24 +4790,32 @@ static void Timing_Update(FighterData *fp, Prediction *p)
 {
     static const int beats[3] = {21, 11, 1};
 
-    ring_frames = 0;
-    slide_frames = 0;
     int ai = Cues_Ai() && p->ai_first < p->uncertain_from ? p->ai_first : 0;
     int wl = Cues_Waveland() && p->wl_first < p->uncertain_from ? p->wl_first : 0;
 
+    // a window's width is fixed before it opens; once open, what's left of
+    // it shrinks, so keep the look it had
     if (ai && ai <= LL_RING_FRAMES)
     {
+        if (ai > 1 || ring_frames == 0)
+            ring_wide = p->ai_width > 1;
         ring_frames = ai;
         ring_center.X = fp->phys.pos.X;
         ring_center.Y = fp->phys.pos.Y + body_offset;
     }
+    else
+        ring_frames = 0;
     if (wl && wl <= LL_RING_FRAMES)
     {
+        if (wl > 1 || slide_frames == 0)
+            slide_wide = p->wl_width > 1;
         slide_frames = wl;
         slide_dirs = p->wl_dirs;
         slide_center.X = fp->phys.pos.X;
         slide_center.Y = fp->phys.pos.Y + fp->coll_data.ecbCurrCorrect_bot.Y;
     }
+    else
+        slide_frames = 0;
 
     int next = ai && (!wl || ai < wl) ? ai : wl;
     if (!next || !Options_Main[OPT_BEEPS].val)
@@ -3800,6 +4908,15 @@ void Event_Init(GOBJ *gobj)
     GObj_AddGXLink(gobj, Hud_GX, GXLINK_HUD, 80);
     GOBJ *draw_gobj = GObj_Create(0, 0, 0);
     GObj_AddGXLink(draw_gobj, World_GX, 5, 0);
+
+    // frame advance, and scripts fed in before the fighters read their
+    // controllers (like the lab's recordings)
+    HSD_Update *update = stc_hsd_update;
+    update->checkPause = Advance_CheckPause;
+    update->checkAdvance = Advance_CheckStep;
+    Script_Load();
+    GOBJ *script_gobj = GObj_Create(0, 7, 0);
+    GObj_AddProc(script_gobj, Script_Think, 3);
 }
 
 void Event_Think(GOBJ *event)
@@ -3814,6 +4931,7 @@ void Event_Think(GOBJ *event)
     }
 
     ai_show_all = Options_Main[OPT_AI_FILTER].val == 1;
+    int logging = Options_Main[OPT_LOG].val || script_cur >= 0;
 
     int sid = fp->state_id;
     int ts = Tracked_Index(sid);
@@ -3845,15 +4963,18 @@ void Event_Think(GOBJ *event)
     Panel_UpdateSide(fp);
     if (sid == ASID_WAIT && fp->coll_data.ecbCurr_right.Y > 1.f)
         body_offset = fp->coll_data.ecbCurr_right.Y;
-    ring_frames = 0;
-    slide_frames = 0;
+    if (!tracked_air)
+    {
+        ring_frames = 0;
+        slide_frames = 0;
+    }
     preview_fh = 0;
     preview_sh = 0;
 
     if (tracked_air)
     {
         Ecb_Record(fp, ts, frame_in_state);
-        if (Options_Main[OPT_LOG].val)
+        if (logging)
         {
             if (!stage_logged)
             {
@@ -3867,6 +4988,7 @@ void Event_Think(GOBJ *event)
         SimStart start;
         Sim_FromFighter(fp, ts, frame_in_state, &start);
         Predict(fp, &start, pred_live, 1);
+        live_timer = event_vars->game_timer;
         Text_Prediction(pred_live);
         Text_Windows(pred_live);
         Timing_Update(fp, pred_live);
@@ -3898,7 +5020,7 @@ void Event_Think(GOBJ *event)
         Window_Forget();
 
     // the jumpsquat and takeoff, to check the ground previews against
-    if (sid == ASID_KNEEBEND && Options_Main[OPT_LOG].val)
+    if (sid == ASID_KNEEBEND && logging)
         Log_Squat(fp);
 
     prev_state_id = sid;
@@ -3915,6 +5037,19 @@ void Event_Update(void)
         HSD_SetSpeedEasy(speed_values[Options_Main[OPT_SPEED].val]);
     else
         HSD_SetSpeedEasy(1.0);
+
+    // runs every frame, frozen or not: D-pad down toggles frame advance,
+    // D-pad left plays the chosen script again
+    if (Pause_CheckStatus(1) == 2)
+        return;
+    int down = PadGetMaster(Advance_Port())->down;
+    if (down & HSD_BUTTON_DPAD_DOWN)
+        Options_Main[OPT_FRAME_ADV].val ^= 1;
+    if ((down & HSD_BUTTON_DPAD_LEFT) && Options_Main[OPT_SCRIPT].val)
+    {
+        script_cur = -1;
+        script_pending = 1;
+    }
 }
 
 void Event_ChangeCollDisplay(GOBJ *menu, int value)

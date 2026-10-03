@@ -61,6 +61,8 @@
 #define COMMON_DODGE_FORCE 0x338    // float: airdodge starting speed
 #define COMMON_DODGE_DECAY 0x33C    // float: airdodge speed multiplier per frame
 #define COMMON_WAVELAND_LAG 0x344   // float: landing lag out of an airdodge
+#define COMMON_FALL_LEAN_DEADZONE 0x444 // float: |x speed / drift max| above this leans the fall pose
+#define COMMON_FALL_LEAN_RATE 0x448     // float: how fast the lean moves to its target each frame
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
@@ -2794,6 +2796,9 @@ static void Log_Attributes(FighterData *fp)
     sprintf(buf, "LandingLab common: nair below stick x %.4f y %.4f, uair/dair above %.4f rad\n",
             common_aerial_stick_x, common_aerial_stick_y, common_aerial_angle);
     Log(buf);
+    sprintf(buf, "LandingLab common: fall lean deadzone %.5f rate %.5f, max jumps %d\n",
+            Common_Float(COMMON_FALL_LEAN_DEADZONE), Common_Float(COMMON_FALL_LEAN_RATE), fp->attr.max_jumps);
+    Log(buf);
 }
 
 static void Log_Frame(FighterData *fp, int ts, int frame)
@@ -2809,6 +2814,16 @@ static void Log_Frame(FighterData *fp, int ts, int frame)
             cd->ecbCurrCorrect_bot.Y, fp->ftcmd_var.flag0 != 0,
             fp->input.lstick.X, fp->input.lstick.Y, fp->facing_direction > 0 ? 1 : -1);
     Log(buf);
+
+    // a fall leans its pose toward FallF or FallB with the drift speed
+    // (ftCo_Fall_Anim_Inner): which one, and how far
+    if (ts == TS_FALL || ts == TS_FALLAERIAL)
+    {
+        float weight;
+        memcpy(&weight, &fp->state_var.state_var2, sizeof(weight));
+        sprintf(buf, "LLLEAN %d sm %d w %.5f\n", event_vars->game_timer, fp->state_var.state_var1, weight);
+        Log(buf);
+    }
 }
 
 // A jumpsquat frame: animation frame, position, ground speed, stick and
@@ -3719,19 +3734,23 @@ static GXColor Color_Fill(GXColor c, float a)
     return c;
 }
 
-static void Draw_Disc(float x, float y, float r, GXColor color)
+// A ring band from r0 out to r1, open in the middle.
+static void Draw_Band(float x, float y, float r0, float r1, GXColor color)
 {
-    event_vars->GFX_Start(LL_CIRCLE_SEGS * 3, (GFX_Params){.shape = GX_TRIANGLES});
+    event_vars->GFX_Start(LL_CIRCLE_SEGS * 4, (GFX_Params){.shape = GX_QUADS});
     for (int i = 0; i < LL_CIRCLE_SEGS; i++)
     {
-        GFX_AddVtx(x, y, 0, color);
-        GFX_AddVtx(x + circle[i].X * r, y + circle[i].Y * r, 0, color);
-        GFX_AddVtx(x + circle[i + 1].X * r, y + circle[i + 1].Y * r, 0, color);
+        Vec2 *a = &circle[i], *b = &circle[i + 1];
+        GFX_AddVtx(x + a->X * r0, y + a->Y * r0, 0, color);
+        GFX_AddVtx(x + a->X * r1, y + a->Y * r1, 0, color);
+        GFX_AddVtx(x + b->X * r1, y + b->Y * r1, 0, color);
+        GFX_AddVtx(x + b->X * r0, y + b->Y * r0, 0, color);
     }
 }
 
 // AI: the outer ring closes in on the inner one around Falcon's body and
-// meets it on the frame to press.
+// meets it on the frame to press. While the window is open the ring glows
+// as a band, leaving Falcon himself in plain view.
 static void Draw_TimingRing(void)
 {
     GXColor color = land_kind_colors[LAND_AI];
@@ -3741,7 +3760,7 @@ static void Draw_TimingRing(void)
 
     if (ring_frames <= 1)
     {
-        Draw_Disc(x, y, r, Color_Fill(color, 0.35f));
+        Draw_Band(x, y, r, r + (ring_wide ? 2.f : 1.2f), Color_Fill(color, 0.45f));
         Draw_Circle(x, y, r, color, ring_wide ? 96 : 60);
         return;
     }
@@ -3938,9 +3957,10 @@ static int Advance_CheckStep(void)
 //   start <x> <y> <left|right> stand Falcon on the floor at x, at height y,
 //                              facing that way, as if nothing was held
 //   air <x> <y> <left|right> [<vx> <vy> [<jumps used> [<lock>]]]
-//                              put Falcon in the air at (x, y), falling, with
-//                              that speed (0 0), jumps used (1) and frames of
-//                              ECB bottom lock (0)
+//                              put Falcon in the air at (x, y), falling (out
+//                              of jumps: FallAerial), with that speed (0 0),
+//                              jumps used (1) and frames his ECB bottom stays
+//                              at his feet, as after leaving the ground (0)
 //   <n> [inputs]               hold the inputs for n frames (none: let go)
 //   wl <offset> [inputs]       keep the stick of the step before until the
 //                              next perfect waveland window, then press the
@@ -4460,12 +4480,18 @@ static void Script_PlaceAir(GOBJ *ft, ScriptOp *op)
     Fighter_KillAllVelocity(ft);
     Script_UpdatePosition(ft);
     Fighter_SetAirborne(fp);
-    Fighter_EnterFall(ft);
+    fp->jump.jumps_used = op->count;
+    if (op->count >= fp->attr.max_jumps)
+        Fighter_EnterFallAerial(ft);
+    else
+        Fighter_EnterFall(ft);
     fp->phys.self_vel.X = op->vx;
     fp->phys.self_vel.Y = op->vy;
     fp->flags.is_fastfall = 0;
-    fp->jump.jumps_used = op->count;
-    fp->coll_data.u.ecb_bot_lock_frames = op->lock;
+    // Leaving the ground locks the ECB bottom, and only the game's own
+    // countdown lets go of it (setting 0 here would keep it at the feet for
+    // good). It counts down before this frame's collision, so one extra.
+    fp->coll_data.u.ecb_bot_lock_frames = op->lock + 1;
     Script_ResetTimers(fp);
     Script_FixCamera(ft);
     Script_ResetTracking();

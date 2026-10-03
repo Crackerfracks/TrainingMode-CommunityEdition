@@ -3283,6 +3283,8 @@ static float body_offset = 9.f;
 #define LL_RING_FRAMES 24 // the countdown starts this many frames before the press
 static int ring_frames; // frames until the aerial press, 0 = no ring
 static int slide_frames; // frames until the airdodge press, 0 = none
+static int ring_span;    // frames the countdown had when it showed up
+static int slide_span;
 static int ring_wide;    // the window lasts more than one frame
 static int slide_wide;
 static u8 slide_dirs;    // DODGE_RIGHT / DODGE_LEFT
@@ -4370,6 +4372,16 @@ static void Draw_Band(float x, float y, float r0, float r1, GXColor color)
 // AI: the outer ring closes in on the inner one around Falcon's body and
 // meets it on the frame to press. While the window is open the ring glows
 // as a band, leaving Falcon himself in plain view.
+// How much of a countdown is left: 1 when it shows up, 0 on the frame to
+// press. Its full size always stands for LL_RING_FRAMES frames.
+static float Countdown_Left(int frames, int span)
+{
+    if (span <= 1)
+        return 0;
+    float t = (float)(frames - 1) / (span - 1);
+    return t > 1.f ? 1.f : t;
+}
+
 static void Draw_TimingRing(void)
 {
     GXColor color = land_kind_colors[LAND_AI];
@@ -4398,7 +4410,7 @@ static void Draw_TimingRing(void)
             GFX_AddVtx(x + c->X * (r + 1.f), y + c->Y * (r + 1.f), 0, color);
         }
     }
-    Draw_Circle(x, y, r + (ring_frames - 1) * LL_RING_STEP, color, 36);
+    Draw_Circle(x, y, r + Countdown_Left(ring_frames, ring_span) * (LL_RING_FRAMES - 1) * LL_RING_STEP, color, 36);
 }
 
 // Waveland: at Falcon's feet, an arrow slides in from the side toward a
@@ -4414,7 +4426,7 @@ static void Draw_SlideArrows(void)
     float x = slide_center.X;
     float y = slide_center.Y;
     int now = slide_frames <= 1;
-    float d = LL_SLIDE_POST + (now ? 0 : (slide_frames - 1) * LL_RING_STEP);
+    float d = LL_SLIDE_POST + (now ? 0 : Countdown_Left(slide_frames, slide_span) * (LL_RING_FRAMES - 1) * LL_RING_STEP);
     float h = LL_SLIDE_SIZE;
     float p = LL_SLIDE_POST;
 
@@ -4522,6 +4534,11 @@ static void World_GX(GOBJ *gobj, int pass)
             Draw_Prediction(pred_fh, 1, LINE_SOLID);
         if (preview_sh)
             Draw_Prediction(pred_sh, !preview_fh, LINE_DASHED);
+        // in the jumpsquat, the countdowns have already started
+        if (Options_Main[OPT_RING].val && slide_frames)
+            Draw_SlideArrows();
+        if (Options_Main[OPT_RING].val && ring_frames)
+            Draw_TimingRing();
     }
 }
 
@@ -5463,19 +5480,24 @@ static void Panel_UpdateSide(FighterData *fp)
 
 // The ring counts down to the next AI window, the slide-in arrows to the
 // next perfect waveland window, and the beeps to whichever comes first.
-static void Timing_Update(FighterData *fp, Prediction *p)
+// p starts lead frames from now (the rest of a jumpsquat, or 0 in the air).
+static void Timing_Update(FighterData *fp, Prediction *p, int lead)
 {
     static const int beats[3] = {21, 11, 1};
 
-    int ai = Cues_Ai() && p->ai_first < p->uncertain_from ? p->ai_first : 0;
-    int wl = Cues_Waveland() && p->wl_first < p->uncertain_from ? p->wl_first : 0;
+    int ai = Cues_Ai() && p->ai_first && p->ai_first < p->uncertain_from ? lead + p->ai_first : 0;
+    int wl = Cues_Waveland() && p->wl_first && p->wl_first < p->uncertain_from ? lead + p->wl_first : 0;
 
     // a window's width is fixed before it opens; once open, what's left of
-    // it shrinks, so keep the look it had
+    // it shrinks, so keep the look it had. A countdown that shows up with
+    // less lead than usual (or for a later window) starts full and closes
+    // over the time that's left.
     if (ai && ai <= LL_RING_FRAMES)
     {
         if (ai > 1 || ring_frames == 0)
             ring_wide = p->ai_width > 1;
+        if (ring_frames == 0 || ai > ring_frames + 1)
+            ring_span = ai;
         ring_frames = ai;
         ring_center.X = fp->phys.pos.X;
         ring_center.Y = fp->phys.pos.Y + body_offset;
@@ -5486,6 +5508,8 @@ static void Timing_Update(FighterData *fp, Prediction *p)
     {
         if (wl > 1 || slide_frames == 0)
             slide_wide = p->wl_width > 1;
+        if (slide_frames == 0 || wl > slide_frames + 1)
+            slide_span = wl;
         slide_frames = wl;
         slide_dirs = p->wl_dirs;
         slide_center.X = fp->phys.pos.X;
@@ -5523,21 +5547,38 @@ static void Ground_Preview(FighterData *fp)
 
     preview_fh = opt == PREVIEW_BOTH || opt == PREVIEW_FULL;
     preview_sh = opt == PREVIEW_BOTH || opt == PREVIEW_SHORT;
-    if (!preview_fh && !preview_sh)
+    if (!preview_fh && !preview_sh && fp->state_id != ASID_KNEEBEND)
         return;
 
+    // in the jumpsquat, count down to the hop's windows: a short hop once
+    // the jump is let go (ftCo_KneeBend_Check_ShortHop sets the first state
+    // variable), a full hop until then
+    int squat = fp->state_id == ASID_KNEEBEND;
+    int short_hop = squat && fp->state_var.state_var1;
+    int need_fh = preview_fh || (squat && !short_hop);
+    int need_sh = preview_sh || (squat && short_hop);
+    int lead_fh = 0, lead_sh = 0;
+
     Floor_BuildCache();
-    if (preview_fh)
+    if (need_fh)
     {
-        Sim_GroundJump(fp, 0, &start);
+        lead_fh = Sim_GroundJump(fp, 0, &start);
         Predict(fp, &start, pred_fh, 1);
     }
-    if (preview_sh)
+    if (need_sh)
     {
-        Sim_GroundJump(fp, 1, &start);
+        lead_sh = Sim_GroundJump(fp, 1, &start);
         Predict(fp, &start, pred_sh, 1);
     }
-    Text_Preview();
+    if (squat)
+        Timing_Update(fp, short_hop ? pred_sh : pred_fh, short_hop ? lead_sh : lead_fh);
+    else
+    {
+        ring_frames = 0;
+        slide_frames = 0;
+    }
+    if (preview_fh || preview_sh)
+        Text_Preview();
 }
 
 void Event_Init(GOBJ *gobj)
@@ -5643,7 +5684,7 @@ void Event_Think(GOBJ *event)
     Panel_UpdateSide(fp);
     if (sid == ASID_WAIT && fp->coll_data.ecbCurr_right.Y > 1.f)
         body_offset = fp->coll_data.ecbCurr_right.Y;
-    if (!tracked_air)
+    if (!tracked_air && (sid != ASID_KNEEBEND || disturbed))
     {
         ring_frames = 0;
         slide_frames = 0;
@@ -5672,7 +5713,7 @@ void Event_Think(GOBJ *event)
         live_timer = event_vars->game_timer;
         Text_Prediction(pred_live);
         Text_Windows(pred_live);
-        Timing_Update(fp, pred_live);
+        Timing_Update(fp, pred_live, 0);
 
         if (prev_tracked_air)
             Window_Feedback(fp, ts);

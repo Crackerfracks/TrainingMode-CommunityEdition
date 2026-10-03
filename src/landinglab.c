@@ -3,22 +3,27 @@
  * Landing Lab (Captain Falcon).
  *
  * While Falcon is airborne, this draws where he will touch down if the stick
- * stays where it is and no buttons are pressed. Only NILs and aerial
- * interrupts get color; other landings are a thin gray line. Thick stretches
- * of the path mark the frames where pressing an aerial forces a touchdown
- * (an aerial interrupt), with arrows for the aerials that do it, and a ring
- * counts down to the next one. On the ground it previews a full hop and a
- * short hop pressed right now.
+ * stays where it is and no buttons are pressed. Only NILs, aerial interrupts
+ * and perfect wavelands get color; other landings are a thin gray line.
+ * Thick stretches of the path mark the frames where pressing an aerial
+ * forces a touchdown (an aerial interrupt, pink, with arrows for the aerials
+ * that do it) or where a sideways airdodge does (a perfect waveland, white).
+ * A ring counts down to the next AI, arrows sliding in at his feet to the
+ * next waveland. On the ground it previews a full hop and a short hop
+ * pressed right now.
  *
  * An aerial interrupt: pressing an aerial swaps the ECB to the aerial's pose
  * on that same frame. If the new ECB bottom ends up at or below a floor, you
  * land right there. While the post-jump bottom lock is on, the swap waits
- * until the lock ends and uses whatever aerial frame you're on by then.
+ * until the lock ends and uses whatever aerial frame you're on by then. A
+ * perfect waveland is the same with an airdodge held fully sideways: it has
+ * no vertical speed, so only the ECB swap can land it, and it lands with all
+ * of the dodge's speed.
  *
- * Whether a landing is a NIL or an aerial interrupt depends on the exact ECB
- * on each frame of each animation, which the game only computes on the frame
- * itself. Falcon's jumps and falls are built in (baked from a logged
- * session); everything else is learned while you play, keyed by (state,
+ * Whether a landing is a NIL or an interrupt depends on the exact ECB on
+ * each frame of each animation, which the game only computes on the frame
+ * itself. Falcon's jumps, falls and aerials are built in (baked from logged
+ * sessions); everything else is learned while you play, keyed by (state,
  * frame in state). Parts of a prediction that rely on frames it hasn't seen
  * yet are drawn gray.
  *
@@ -27,8 +32,9 @@
  * DriftFrom (drift), mpColl_LoadECB (ECB bottom lock), mpColl_80046904's
  * wall pass (wall pushout), mpCheckFloor and mpLineIntersection(H) (floor
  * crossing), ft_80082B1C (NIL), ftCo_AttackAir_EnterFromMsid (aerial start),
- * ftCo_LandingAir_EnterWithLag (aerial lag, L-cancel), and ftCo_KneeBend /
- * ftCo_Jump_Enter (jumps from the ground). Ceilings and ledge grabs aren't
+ * ftCo_LandingAir_EnterWithLag (aerial lag, L-cancel), ftCo_80099A9C and
+ * ftCo_EscapeAir_Phys (airdodge), and ftCo_KneeBend / ftCo_Jump_Enter
+ * (jumps from the ground). Ceilings and ledge grabs aren't
  * simulated.
  */
 
@@ -51,6 +57,10 @@
 #define COMMON_AERIAL_ANGLE 0x20    // float, radians: steeper than this is an uair or dair
 #define COMMON_RUN_FRICTION 0x6C    // float: ground friction multiplier above walk speed
 #define COMMON_JUMP_BACK_STICK 0x78 // float: stick x * facing <= -this jumps backwards
+#define COMMON_DODGE_DEADZONE 0x32C // Vec2: stick inside both is a neutral airdodge
+#define COMMON_DODGE_FORCE 0x338    // float: airdodge starting speed
+#define COMMON_DODGE_DECAY 0x33C    // float: airdodge speed multiplier per frame
+#define COMMON_WAVELAND_LAG 0x344   // float: landing lag out of an airdodge
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
@@ -92,6 +102,7 @@ enum TrackedState
     TS_AIRB,
     TS_AIRHI,
     TS_AIRLW,
+    TS_ESCAPEAIR,
 
     TS_COUNT
 };
@@ -108,11 +119,12 @@ static const int tracked_state_ids[TS_COUNT] = {
     ASID_ATTACKAIRB,
     ASID_ATTACKAIRHI,
     ASID_ATTACKAIRLW,
+    ASID_ESCAPEAIR,
 };
 
 static const char *tracked_state_names[TS_COUNT] = {
     "JumpF", "JumpB", "DJumpF", "DJumpB", "Fall", "FallAerial",
-    "Nair", "Fair", "Bair", "Uair", "Dair",
+    "Nair", "Fair", "Bair", "Uair", "Dair", "Airdodge",
 };
 
 static int Tracked_Index(int state_id)
@@ -127,19 +139,21 @@ static int Tracked_Index(int state_id)
 
 static int Tracked_IsAerial(int ts)
 {
-    return ts >= TS_AIRN;
+    return ts >= TS_AIRN && ts <= TS_AIRLW;
 }
 
 // Jump, double jump and fall collision pass the drop-through callback
-// (ftCo_80096CC8); aerials collide without it and always land on platforms.
+// (ftCo_80096CC8); aerials and the airdodge (ft_80081D0C) collide without it
+// and always land on platforms.
 static int Tracked_UsesPlatformDrop(int ts)
 {
     return ts <= TS_FALLAERIAL;
 }
 
 // The state the game enters when this one's animation runs out, or -1 if it
-// loops. Jump and aerials go to Fall (ftCo_Fall_Enter), double jump goes to
-// FallAerial (ftCo_FallAerial_Enter). Once a state has been seen ending,
+// loops or isn't tracked. Jump and aerials go to Fall (ftCo_Fall_Enter),
+// double jump goes to FallAerial (ftCo_FallAerial_Enter), the airdodge goes
+// to FallSpecial, which isn't tracked. Once a state has been seen ending,
 // state_next (below) holds what really followed.
 static int Tracked_NaturalNext(int ts)
 {
@@ -174,30 +188,39 @@ enum LandKind
     LAND_LCANCEL, // aerial lag, halved
     LAND_AERIAL,  // full aerial lag
     LAND_OTHER,   // left the air some other way (ledge grab, ...)
+    LAND_PERFECT_WL, // a horizontal airdodge's ECB touched down the first time it was used
+    LAND_WAVELAND,   // any other airdodge landing
 
     LAND_KIND_COUNT
 };
 
 static const char *land_kind_names[LAND_KIND_COUNT] = {
-    "None", "NIL", "AI", "Land", "L-cancel", "Lag", "Other",
+    "None", "NIL", "AI", "Land", "L-cancel", "Lag", "Other", "Perfect WL", "Waveland",
 };
 
-// colorblind-friendly set, like ledgedash's
+// The three things worth practicing each get a color no other cue uses:
+// green for NIL, pink for aerial interrupts, ice white for perfect
+// wavelands (Melee flashes a dodging fighter white). They also differ in
+// shape: a NIL colors the whole path, an AI is a pink bar on it, a perfect
+// waveland a wider white bar around it.
 static const GXColor land_kind_colors[LAND_KIND_COUNT] = {
     {120, 160, 255, 255}, // none: blue
     {64, 255, 96, 255},   // NIL: green
-    {0, 220, 255, 255},   // aerial interrupt: cyan
+    {255, 72, 196, 255},  // aerial interrupt: pink
     {255, 230, 0, 255},   // normal landing / auto-cancel: yellow
     {255, 140, 0, 255},   // L-cancel: orange
     {255, 48, 48, 255},   // full aerial lag: red
     {200, 200, 200, 255}, // other
+    {205, 238, 255, 255}, // perfect waveland: ice white
+    {200, 200, 200, 255}, // other waveland
 };
 static const GXColor color_learning = {130, 130, 130, 255};
 
-// Only NIL and aerial interrupts are worth practicing toward.
+// Only NILs, aerial interrupts and perfect wavelands are worth practicing
+// toward.
 static int Kind_Highlighted(int kind)
 {
-    return kind == LAND_NIL || kind == LAND_AI;
+    return kind == LAND_NIL || kind == LAND_AI || kind == LAND_PERFECT_WL;
 }
 static const GXColor color_actual = {255, 255, 255, 255};
 
@@ -248,13 +271,16 @@ static EcbSample *Ecb_Get(int ts, int frame)
     return &ecb_table[ts * LL_STATE_FRAMES + frame];
 }
 
-// Falcon's ECB on every frame of his jumps, double jumps and falls, from a
-// play session on a vanilla ISO (logged by v0.1, 2026-10-03). Bottoms are
-// missing on the frames the post-jump lock hid them. Fall's pose blends
-// from whatever came before, so its row is the typical frame, not an exact
-// one; play replaces it with what it sees. Aerials still have to be learned.
+// Falcon's ECB on every frame of his jumps, double jumps, falls and aerials,
+// from play sessions on a vanilla ISO (logged by v0.1 and v0.2,
+// 2026-10-03). Bottoms are missing on the frames the post-jump lock hid
+// them. Fall's pose blends from whatever came before, so its row is the
+// typical frame, not an exact one; play replaces it with what it sees.
+// Aerials were only seen up to their landing, so their last frames are still
+// learned. The airdodge has to be learned.
 #define BAKED_BOTTOM 1
 #define BAKED_SHAPE 2
+#define BAKED_LAG 4 // landing on this aerial frame takes aerial lag
 
 typedef struct BakedEcb
 {
@@ -454,6 +480,128 @@ static const BakedEcb baked_ecb[] = {
     {TS_FALL, 36, BAKED_BOTTOM, 3.201f, 12.441f, 7.821f, 0.f, 0.f},
     {TS_FALL, 37, BAKED_BOTTOM, 2.951f, 12.215f, 7.583f, 0.f, 0.f},
     {TS_FALL, 38, BAKED_BOTTOM, 2.673f, 11.887f, 7.280f, 0.f, 0.f},
+    {TS_AIRN, 0, BAKED_BOTTOM|BAKED_SHAPE, 2.407f, 12.501f, 7.454f, 2.714f, -2.714f},
+    {TS_AIRN, 1, BAKED_BOTTOM|BAKED_SHAPE, 2.703f, 12.960f, 7.832f, 2.152f, -2.152f},
+    {TS_AIRN, 2, BAKED_BOTTOM|BAKED_SHAPE, 2.091f, 12.592f, 7.341f, 4.900f, -4.900f},
+    {TS_AIRN, 3, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.716f, 14.711f, 8.214f, 3.367f, -3.367f},
+    {TS_AIRN, 4, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.001f, 15.100f, 8.550f, 2.525f, -2.525f},
+    {TS_AIRN, 5, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.317f, 14.831f, 9.074f, 3.585f, -3.585f},
+    {TS_AIRN, 6, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.923f, 14.157f, 9.540f, 6.659f, -3.876f},
+    {TS_AIRN, 7, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.949f, 14.346f, 9.648f, 6.693f, -3.723f},
+    {TS_AIRN, 8, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.846f, 14.477f, 9.662f, 6.621f, -3.581f},
+    {TS_AIRN, 9, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.771f, 14.535f, 9.653f, 4.999f, -4.999f},
+    {TS_AIRN, 10, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.753f, 14.550f, 9.652f, 4.777f, -4.777f},
+    {TS_AIRN, 11, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.800f, 14.574f, 9.687f, 4.498f, -4.498f},
+    {TS_AIRN, 12, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.195f, 14.680f, 9.938f, 4.540f, -4.540f},
+    {TS_AIRN, 13, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.243f, 15.036f, 9.639f, 3.526f, -3.526f},
+    {TS_AIRN, 14, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.295f, 14.949f, 9.622f, 3.658f, -3.658f},
+    {TS_AIRN, 15, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.250f, 13.516f, 8.883f, 4.923f, -4.923f},
+    {TS_AIRN, 16, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.034f, 10.896f, 7.465f, 6.156f, -4.251f},
+    {TS_AIRN, 17, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.204f, 10.641f, 7.423f, 2.975f, -2.975f},
+    {TS_AIRN, 18, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.279f, 10.554f, 7.916f, 4.283f, -4.283f},
+    {TS_AIRN, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.360f, 10.493f, 7.427f, 4.767f, -4.767f},
+    {TS_AIRN, 20, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.987f, 10.495f, 7.241f, 4.888f, -4.888f},
+    {TS_AIRN, 21, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.633f, 10.500f, 7.067f, 4.971f, -4.971f},
+    {TS_AIRF, 0, BAKED_BOTTOM|BAKED_SHAPE, 2.884f, 10.539f, 6.711f, 3.864f, -3.864f},
+    {TS_AIRF, 1, BAKED_BOTTOM|BAKED_SHAPE, 4.539f, 10.217f, 7.378f, 3.762f, -3.762f},
+    {TS_AIRF, 2, BAKED_BOTTOM|BAKED_SHAPE, 5.339f, 11.564f, 8.451f, 4.344f, -4.344f},
+    {TS_AIRF, 3, BAKED_BOTTOM|BAKED_SHAPE, 6.095f, 10.655f, 8.375f, 4.152f, -4.152f},
+    {TS_AIRF, 4, BAKED_BOTTOM|BAKED_SHAPE, 4.685f, 10.500f, 7.593f, 3.711f, -3.711f},
+    {TS_AIRF, 5, BAKED_BOTTOM|BAKED_SHAPE, 3.970f, 10.332f, 7.152f, 3.367f, -3.367f},
+    {TS_AIRF, 6, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.323f, 10.213f, 6.768f, 3.194f, -3.194f},
+    {TS_AIRF, 7, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.846f, 10.217f, 6.532f, 3.141f, -3.141f},
+    {TS_AIRF, 8, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.551f, 10.405f, 6.478f, 3.135f, -3.135f},
+    {TS_AIRF, 9, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.493f, 12.263f, 7.378f, 3.163f, -3.163f},
+    {TS_AIRF, 10, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.469f, 13.705f, 7.587f, 2.521f, -2.521f},
+    {TS_AIRF, 11, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.545f, 12.978f, 7.261f, 3.009f, -3.009f},
+    {TS_AIRF, 12, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.732f, 12.920f, 7.326f, 4.176f, -4.176f},
+    {TS_AIRF, 13, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.677f, 12.843f, 7.260f, 4.496f, -4.496f},
+    {TS_AIRF, 14, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.675f, 12.793f, 7.234f, 4.551f, -4.551f},
+    {TS_AIRF, 15, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.280f, 12.783f, 7.531f, 4.869f, -4.869f},
+    {TS_AIRF, 16, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.440f, 12.796f, 7.618f, 7.186f, -2.836f},
+    {TS_AIRF, 17, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.320f, 12.800f, 7.560f, 4.984f, -4.984f},
+    {TS_AIRF, 18, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.859f, 12.767f, 7.313f, 4.962f, -4.962f},
+    {TS_AIRF, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.263f, 12.722f, 7.493f, 6.285f, -3.902f},
+    {TS_AIRF, 20, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.286f, 12.671f, 7.479f, 6.543f, -3.856f},
+    {TS_AIRF, 21, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.333f, 12.610f, 7.472f, 6.776f, -3.805f},
+    {TS_AIRF, 22, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.391f, 12.545f, 7.468f, 6.978f, -3.762f},
+    {TS_AIRF, 23, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.448f, 12.483f, 7.465f, 7.150f, -3.739f},
+    {TS_AIRF, 24, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.496f, 12.430f, 7.463f, 7.293f, -3.733f},
+    {TS_AIRF, 25, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.531f, 12.395f, 7.463f, 7.406f, -3.737f},
+    {TS_AIRF, 26, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.552f, 12.386f, 7.469f, 7.490f, -3.715f},
+    {TS_AIRF, 27, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.484f, 12.407f, 7.445f, 7.544f, -3.621f},
+    {TS_AIRF, 28, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.432f, 12.461f, 7.447f, 7.531f, -3.084f},
+    {TS_AIRF, 29, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.436f, 12.672f, 7.554f, 7.425f, -3.029f},
+    {TS_AIRF, 30, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.750f, 12.489f, 7.120f, 7.304f, -3.506f},
+    {TS_AIRF, 31, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.260f, 12.138f, 6.699f, 7.014f, -3.507f},
+    {TS_AIRB, 0, BAKED_BOTTOM|BAKED_SHAPE, 2.558f, 11.932f, 7.245f, 4.712f, -4.712f},
+    {TS_AIRB, 1, BAKED_BOTTOM|BAKED_SHAPE, 1.592f, 12.240f, 6.916f, 4.757f, -4.757f},
+    {TS_AIRB, 2, BAKED_BOTTOM|BAKED_SHAPE, 1.161f, 12.218f, 6.689f, 4.767f, -4.767f},
+    {TS_AIRB, 3, BAKED_BOTTOM|BAKED_SHAPE, 1.165f, 12.116f, 6.641f, 4.648f, -4.648f},
+    {TS_AIRB, 4, BAKED_BOTTOM|BAKED_SHAPE, 1.171f, 12.060f, 6.616f, 4.357f, -4.357f},
+    {TS_AIRB, 5, BAKED_BOTTOM|BAKED_SHAPE, 1.171f, 12.324f, 6.748f, 3.871f, -3.871f},
+    {TS_AIRB, 6, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.159f, 13.464f, 7.312f, 3.031f, -3.031f},
+    {TS_AIRB, 7, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.464f, 15.448f, 8.456f, 2.0f, -2.0f},
+    {TS_AIRB, 8, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.166f, 14.141f, 8.154f, 4.279f, -4.279f},
+    {TS_AIRB, 9, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.680f, 14.822f, 8.751f, 2.021f, -11.766f},
+    {TS_AIRB, 10, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.628f, 14.902f, 8.765f, 2.020f, -10.823f},
+    {TS_AIRB, 11, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.599f, 15.045f, 8.822f, 2.031f, -11.389f},
+    {TS_AIRB, 12, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.590f, 15.173f, 8.882f, 2.053f, -10.925f},
+    {TS_AIRB, 13, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.602f, 15.318f, 8.960f, 2.088f, -10.943f},
+    {TS_AIRB, 14, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.632f, 15.499f, 9.066f, 2.135f, -10.909f},
+    {TS_AIRB, 15, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.673f, 15.688f, 9.181f, 2.184f, -10.879f},
+    {TS_AIRB, 16, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.715f, 15.875f, 9.295f, 2.227f, -10.846f},
+    {TS_AIRB, 17, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.749f, 16.052f, 9.400f, 2.252f, -10.806f},
+    {TS_AIRB, 18, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.775f, 16.210f, 9.492f, 2.256f, -10.764f},
+    {TS_AIRB, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.796f, 16.339f, 9.568f, 2.237f, -10.803f},
+    {TS_AIRB, 20, BAKED_BOTTOM|BAKED_SHAPE, 2.810f, 16.420f, 9.615f, 2.186f, -10.825f},
+    {TS_AIRB, 21, BAKED_BOTTOM|BAKED_SHAPE, 2.813f, 16.415f, 9.614f, 2.093f, -10.934f},
+    {TS_AIRB, 22, BAKED_BOTTOM|BAKED_SHAPE, 2.893f, 16.107f, 9.500f, 2.131f, -9.273f},
+    {TS_AIRHI, 0, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.650f, 8.222f, 5.436f, 2.885f, -2.885f},
+    {TS_AIRHI, 1, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.432f, 10.995f, 6.714f, 3.324f, -3.324f},
+    {TS_AIRHI, 2, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.196f, 18.670f, 10.933f, 3.114f, -3.114f},
+    {TS_AIRHI, 3, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.246f, 12.944f, 8.595f, 4.698f, -4.698f},
+    {TS_AIRHI, 4, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.428f, 11.691f, 8.559f, 4.763f, -4.763f},
+    {TS_AIRHI, 5, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.178f, 10.608f, 7.893f, 4.989f, -4.989f},
+    {TS_AIRHI, 6, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.014f, 12.867f, 8.941f, 4.736f, -4.736f},
+    {TS_AIRHI, 7, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.967f, 15.232f, 10.100f, 4.320f, -4.320f},
+    {TS_AIRHI, 8, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.922f, 16.616f, 10.769f, 4.273f, -4.273f},
+    {TS_AIRHI, 9, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.891f, 16.915f, 10.903f, 4.170f, -4.170f},
+    {TS_AIRHI, 10, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.938f, 16.044f, 10.491f, 4.060f, -4.060f},
+    {TS_AIRHI, 11, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.051f, 15.390f, 10.220f, 4.119f, -4.119f},
+    {TS_AIRHI, 12, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.208f, 16.120f, 10.664f, 4.266f, -4.266f},
+    {TS_AIRHI, 13, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.466f, 16.064f, 10.765f, 4.640f, -4.640f},
+    {TS_AIRHI, 14, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.906f, 14.871f, 10.389f, 4.800f, -4.800f},
+    {TS_AIRHI, 15, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.971f, 12.606f, 9.288f, 4.909f, -4.909f},
+    {TS_AIRHI, 16, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.568f, 11.183f, 7.875f, 3.560f, -7.331f},
+    {TS_AIRHI, 17, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.369f, 11.742f, 7.556f, 3.804f, -6.988f},
+    {TS_AIRHI, 18, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.638f, 12.146f, 7.892f, 4.836f, -4.836f},
+    {TS_AIRHI, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.528f, 12.536f, 8.032f, 4.054f, -4.054f},
+    {TS_AIRHI, 20, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.898f, 12.835f, 7.867f, 3.453f, -3.453f},
+    {TS_AIRHI, 21, BAKED_BOTTOM|BAKED_SHAPE, 2.678f, 13.149f, 7.914f, 3.061f, -3.061f},
+    {TS_AIRHI, 22, BAKED_BOTTOM|BAKED_SHAPE, 2.555f, 13.664f, 8.110f, 2.727f, -2.727f},
+    {TS_AIRHI, 23, BAKED_BOTTOM|BAKED_SHAPE, 2.508f, 14.022f, 8.265f, 3.032f, -3.032f},
+    {TS_AIRHI, 24, BAKED_BOTTOM|BAKED_SHAPE, 2.544f, 13.970f, 8.257f, 3.584f, -3.584f},
+    {TS_AIRLW, 0, BAKED_BOTTOM|BAKED_SHAPE, 3.531f, 10.922f, 7.226f, 4.141f, -4.141f},
+    {TS_AIRLW, 1, BAKED_BOTTOM|BAKED_SHAPE, 5.875f, 12.150f, 9.013f, 4.449f, -4.449f},
+    {TS_AIRLW, 2, BAKED_BOTTOM|BAKED_SHAPE, 5.816f, 12.326f, 9.071f, 4.128f, -4.128f},
+    {TS_AIRLW, 3, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.810f, 12.389f, 9.100f, 4.101f, -4.101f},
+    {TS_AIRLW, 4, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.807f, 12.408f, 9.107f, 4.111f, -4.111f},
+    {TS_AIRLW, 5, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.808f, 12.402f, 9.105f, 4.128f, -4.128f},
+    {TS_AIRLW, 6, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.813f, 12.386f, 9.099f, 4.146f, -4.146f},
+    {TS_AIRLW, 7, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.823f, 12.368f, 9.095f, 4.165f, -4.165f},
+    {TS_AIRLW, 8, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.839f, 12.359f, 9.099f, 4.188f, -4.188f},
+    {TS_AIRLW, 9, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.863f, 12.356f, 9.110f, 4.210f, -4.210f},
+    {TS_AIRLW, 10, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.895f, 12.356f, 9.126f, 4.225f, -4.225f},
+    {TS_AIRLW, 11, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.938f, 12.366f, 9.152f, 4.235f, -4.235f},
+    {TS_AIRLW, 12, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.984f, 12.399f, 9.192f, 4.237f, -4.237f},
+    {TS_AIRLW, 13, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.329f, 13.195f, 9.262f, 4.054f, -4.054f},
+    {TS_AIRLW, 14, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.296f, 15.551f, 9.424f, 3.468f, -7.317f},
+    {TS_AIRLW, 15, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.737f, 11.774f, 6.755f, 4.461f, -4.461f},
+    {TS_AIRLW, 16, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.347f, 11.301f, 5.824f, 4.380f, -4.380f},
+    {TS_AIRLW, 17, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.834f, 11.154f, 5.994f, 4.424f, -4.424f},
+    {TS_AIRLW, 18, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.435f, 11.568f, 6.501f, 4.319f, -4.319f},
+    {TS_AIRLW, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.827f, 13.237f, 7.532f, 4.733f, -4.733f},
 };
 
 static void Learned_Bake(void)
@@ -475,6 +623,7 @@ static void Learned_Bake(void)
             e->back = b->back;
             e->has_shape = 1;
         }
+        e->aerial_lag = (b->flags & BAKED_LAG) != 0;
         e->seen = 1;
     }
 
@@ -840,6 +989,25 @@ static int Floor_Check(float ax, float ay, float bx, float by, int pass_platform
                 return 1;
         }
         else if (ay >= by && Line_CrossFlat(f->x0, f->y0, f->x1, ax, ay, bx, by))
+            return 1;
+    }
+    return 0;
+}
+
+// Could an aerial or airdodge pressed with the ECB bottom at (x, y) touch
+// down on this frame? Only if some floor is a few units around it: an ECB
+// swap moves the bottom by less than 10. Lets the branches skip the frames
+// high above everything.
+static int Floor_Near(float x, float y)
+{
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        float left = f->x0 < f->x1 ? f->x0 : f->x1;
+        float right = f->x0 < f->x1 ? f->x1 : f->x0;
+        float low = f->y0 < f->y1 ? f->y0 : f->y1;
+        float high = f->y0 < f->y1 ? f->y1 : f->y0;
+        if (x >= left - 10.f && x <= right + 10.f && high >= y - 15.f && low <= y + 5.f)
             return 1;
     }
     return 0;
@@ -1487,14 +1655,15 @@ typedef struct SimState
     int tilt_timer;
     int trigger_timer;
     int lock;
-    int aerial_pending; // in an aerial whose own ECB bottom hasn't been used yet (lock)
+    int ecb_pending; // in an aerial or airdodge whose own ECB bottom hasn't been used yet (lock)
+    int dodge_flat;  // the airdodge started with no vertical speed
 } SimState;
 
 // What happened on one simulated frame.
 typedef struct SimStep
 {
     int landed;
-    int first_aerial_ecb; // the aerial's own ECB bottom was used for the first time
+    int first_ecb;        // an aerial's or airdodge's own ECB bottom was used for the first time
     int unlearned;        // relied on data the event hasn't learned yet
     int fastfall_started;
     EcbSample *ecb;       // learned ECB for this frame
@@ -1503,6 +1672,11 @@ typedef struct SimStep
 // Aerials, as bits in the masks below
 #define AERIAL_BIT(ts) (1 << ((ts) - TS_AIRN))
 #define LL_AI_MAX_STEPS 12 // the bottom lock lasts at most 10 frames
+#define LL_AI_MIN_GAIN 4   // an AI must finish its landing this many frames sooner to be shown
+
+// Horizontal airdodge directions, as bits
+#define DODGE_RIGHT 1
+#define DODGE_LEFT 2
 
 typedef struct Prediction
 {
@@ -1523,10 +1697,21 @@ typedef struct Prediction
     // touches down the first time it is used
     u8 ai_mask[LL_SIM_FRAMES + 1];     // aerials that interrupt when pressed on frame k
     u8 ai_lag_mask[LL_SIM_FRAMES + 1]; // ... of those, the ones that land with aerial lag
+    u8 ai_delay[LL_SIM_FRAMES + 1];    // frames from k until that touchdown (lock)
+    u8 ai_show[LL_SIM_FRAMES + 1];     // ... the ones worth showing: no aerial lag, and done
+                                       // at least LL_AI_MIN_GAIN frames before holding would be
     u8 ai_unlearned;                   // aerials skipped because their ECB isn't learned yet
-    int ai_first;                      // first frame of the first window, 0 = none
+    int ai_first;                      // first frame of the first shown window, 0 = none
     int ai_width;                      // frames in that window
     u8 ai_aerials;                     // aerials that work somewhere in that window
+
+    // perfect wavelands: a horizontal airdodge on frame k whose ECB touches
+    // down the first time it is used, keeping all of the dodge's speed
+    u8 wl_mask[LL_SIM_FRAMES + 1]; // DODGE_RIGHT / DODGE_LEFT that work when pressed on frame k
+    u8 wl_unlearned;               // the airdodge's ECB isn't learned yet
+    int wl_first;                  // first frame of the first window, 0 = none
+    int wl_width;
+    u8 wl_dirs;                    // directions that work somewhere in that window
 } Prediction;
 
 static float common_fastfall_stick;
@@ -1539,6 +1724,12 @@ static float common_aerial_stick_y;
 static float common_aerial_angle;
 static float common_run_friction;
 static float common_jump_back_stick;
+static Vec2 common_dodge_deadzone;
+static float common_dodge_force;
+static float common_dodge_decay;
+static float common_waveland_lag;
+
+static int ai_show_all; // the AI Filter option is on All
 
 static float Common_Float(int offset)
 {
@@ -1722,18 +1913,22 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->tilt_timer = start->tilt_timer;
     s->trigger_timer = start->trigger_timer;
     s->lock = start->ecb_lock;
-    // an aerial is only ever entered in the air, after the lock was set, so
-    // a lock still running means its bones haven't moved the bottom yet
-    s->aerial_pending = Tracked_IsAerial(start->ts) && start->ecb_lock > 0;
+    // an aerial or airdodge is only ever entered in the air, after the lock
+    // was set, so a lock still running means its bones haven't moved the
+    // bottom yet
+    s->ecb_pending = (Tracked_IsAerial(start->ts) || start->ts == TS_ESCAPEAIR) && start->ecb_lock > 0;
+    s->dodge_flat = start->ts == TS_ESCAPEAIR && start->vel.Y == 0 && start->vel.X != 0;
 }
 
 // One frame, in the game's order: animation (the state can end), interrupt
-// (press, an aerial replaces the state), input timers, physics, ECB, floor
-// test. press is the aerial pressed this frame, or -1.
-static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, SimStep *out)
+// (press, an aerial or airdodge replaces the state), input timers, physics,
+// ECB, floor test. press is the aerial or TS_ESCAPEAIR pressed this frame,
+// or -1; dodge_x is the airdodge's direction (+1 right, -1 left), always
+// horizontal.
+static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, float dodge_x, SimStep *out)
 {
     out->landed = 0;
-    out->first_aerial_ecb = 0;
+    out->first_ecb = 0;
     out->unlearned = 0;
     out->fastfall_started = 0;
 
@@ -1764,18 +1959,26 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, S
         s->frame = 0;
         s->len = 0;
         s->len_estimated = 0;
-        s->aerial_pending = 0;
+        s->ecb_pending = 0;
     }
 
     // interrupt: ftCo_AttackAir_EnterFromMsid keeps the fastfall and starts
-    // the aerial's animation on this frame, before physics and collision
+    // the aerial's animation on this frame, before physics and collision.
+    // ftCo_80099A9C (airdodge) replaces the speed with the dodge's; a
+    // horizontal dodge has no vertical speed at all.
     if (press >= 0)
     {
         s->ts = press;
         s->frame = 0;
         s->len = state_len[press];
         s->len_estimated = 0;
-        s->aerial_pending = 1;
+        s->ecb_pending = 1;
+        if (press == TS_ESCAPEAIR)
+        {
+            s->vx = dodge_x * common_dodge_force;
+            s->vy = 0;
+            s->dodge_flat = 1;
+        }
     }
 
     // input: the stick is held, so its timers keep counting
@@ -1784,28 +1987,40 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, S
     if (s->trigger_timer < LL_TIMER_MAX)
         s->trigger_timer++;
 
-    // physics (ft_80084DB0)
-    if (!s->fastfall && s->vy < 0 && start->stick_y <= -common_fastfall_stick && s->tilt_timer < common_fastfall_window)
+    // this frame's learned ECB; for the airdodge, its first command variable
+    // is the flag that ends the speed decay
+    EcbSample *e = Ecb_Get(s->ts, s->frame);
+    out->ecb = e;
+
+    if (s->ts == TS_ESCAPEAIR && !e->aerial_lag)
     {
-        s->fastfall = 1;
-        s->tilt_timer = LL_TIMER_MAX;
-        out->fastfall_started = 1;
+        // ftCo_EscapeAir_Phys: the dodge's speed decays, no gravity or drift
+        s->vx *= common_dodge_decay;
+        s->vy *= common_dodge_decay;
     }
-    if (s->fastfall)
-        s->vy = -fp->attr.fastfall_velocity;
     else
     {
-        s->vy -= fp->attr.gravity;
-        if (s->vy < -fp->attr.terminal_velocity)
-            s->vy = -fp->attr.terminal_velocity;
+        // physics (ft_80084DB0)
+        if (!s->fastfall && s->vy < 0 && start->stick_y <= -common_fastfall_stick && s->tilt_timer < common_fastfall_window)
+        {
+            s->fastfall = 1;
+            s->tilt_timer = LL_TIMER_MAX;
+            out->fastfall_started = 1;
+        }
+        if (s->fastfall)
+            s->vy = -fp->attr.fastfall_velocity;
+        else
+        {
+            s->vy -= fp->attr.gravity;
+            if (s->vy < -fp->attr.terminal_velocity)
+                s->vy = -fp->attr.terminal_velocity;
+        }
+        s->vx += Drift_Accel(fp, s->vx, start->stick_x);
     }
-    s->vx += Drift_Accel(fp, s->vx, start->stick_x);
     s->x += s->vx;
     s->y += s->vy;
 
     // ECB bottom: the lock counts down just before collision
-    EcbSample *e = Ecb_Get(s->ts, s->frame);
-    out->ecb = e;
     if (s->lock > 0)
         s->lock--;
     if (s->lock > 0)
@@ -1814,14 +2029,14 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, S
         s->bottom = e->bottom;
     else
         out->unlearned = 1; // not learned yet: keep the last bottom
-    if (Tracked_IsAerial(s->ts))
+    if (Tracked_IsAerial(s->ts) || s->ts == TS_ESCAPEAIR)
     {
         if (!e->seen)
             out->unlearned = 1;
-        if (s->aerial_pending && s->lock <= 0)
+        if (s->ecb_pending && s->lock <= 0)
         {
-            out->first_aerial_ecb = 1;
-            s->aerial_pending = 0;
+            out->first_ecb = 1;
+            s->ecb_pending = 0;
         }
     }
 
@@ -1855,17 +2070,24 @@ static void Mark_Uncertain(Prediction *p, int frame)
 }
 
 // What a touchdown in state ts gives: ft_80082B1C for jumps and falls,
-// ftCo_LandingAir_EnterWithLag for aerials. An aerial whose own ECB touches
-// down the first time it's used is an aerial interrupt, whatever its lag.
-static int Landing_Kind(FighterData *fp, int ts, float vel_y, int trigger_timer, EcbSample *e,
-                        int first_aerial_ecb, int *lag, int *lcancel_lag)
+// ftCo_LandingAir_EnterWithLag for aerials, ftCo_LandingFallSpecial_Enter
+// for the airdodge. An aerial whose own ECB touches down the first time it's
+// used is an aerial interrupt, whatever its lag; a horizontal airdodge that
+// does the same is a perfect waveland.
+static int Landing_Kind(FighterData *fp, SimState *s, EcbSample *e, int first_ecb, int *lag, int *lcancel_lag)
 {
     float normal_lag = fp->attr.normal_landing_lag;
     *lcancel_lag = 0;
 
-    if (!Tracked_IsAerial(ts))
+    if (s->ts == TS_ESCAPEAIR)
     {
-        if (vel_y > Fighter_GetSoftLandVelocity(fp))
+        *lag = (int)common_waveland_lag;
+        return first_ecb && s->dodge_flat ? LAND_PERFECT_WL : LAND_WAVELAND;
+    }
+
+    if (!Tracked_IsAerial(s->ts))
+    {
+        if (s->vy > Fighter_GetSoftLandVelocity(fp))
         {
             *lag = 0;
             return LAND_NIL;
@@ -1877,88 +2099,150 @@ static int Landing_Kind(FighterData *fp, int ts, float vel_y, int trigger_timer,
     if (!e->aerial_lag)
     {
         *lag = (int)normal_lag;
-        return first_aerial_ecb ? LAND_AI : LAND_NORMAL;
+        return first_ecb ? LAND_AI : LAND_NORMAL;
     }
 
-    float full = Aerial_LandingLag(fp, ts);
+    float full = Aerial_LandingLag(fp, s->ts);
     int halved = (int)(full / common_lcancel_div);
     if (halved == 0)
         halved = 1;
     *lcancel_lag = halved;
 
-    int lcancel = trigger_timer < common_lcancel_window;
+    int lcancel = s->trigger_timer < common_lcancel_window;
     *lag = lcancel ? halved : (int)full;
-    if (first_aerial_ecb)
+    if (first_ecb)
         return LAND_AI;
     return lcancel ? LAND_LCANCEL : LAND_AERIAL;
 }
 
-// Would pressing each aerial on frame k force a touchdown? before is the
-// state just before frame k. The aerial's ECB is used right away, or when the
-// lock runs out; it's an aerial interrupt if that first use touches down.
-static void Branch_Aerials(FighterData *fp, SimStart *start, SimState *before, Prediction *p, int k)
+// Would pressing an aerial or airdodge on frame k touch down at once?
+// before is the state just before frame k. Its ECB is used right away, or
+// when the lock runs out, and only that first use counts. Returns the
+// frames from k to that touchdown, or -1 for none.
+static int Branch_Press(FighterData *fp, SimStart *start, SimState *before, int press, float dodge_x,
+                        int *unlearned, int *lag)
 {
-    // aerials can't be interrupted by another aerial (until their IASA,
-    // which isn't tracked), but jumps and falls can on any frame
-    if (Tracked_IsAerial(p->ts[k]))
+    SimState b = *before;
+    SimStep step;
+
+    for (int n = 0; n < LL_AI_MAX_STEPS; n++)
+    {
+        Sim_Step(fp, start, &b, n == 0 ? press : -1, dodge_x, &step);
+
+        // its frames must have been seen, and its bottom too once the lock
+        // is over
+        if (!step.ecb->seen || (b.lock <= 0 && !step.ecb->has_bottom))
+        {
+            *unlearned = 1;
+            return -1;
+        }
+        if (step.landed)
+        {
+            // touching down on the locked bottom isn't an interrupt
+            if (!step.first_ecb)
+                return -1;
+            *lag = step.ecb->aerial_lag;
+            return n;
+        }
+        if (!b.ecb_pending)
+            return -1; // its ECB is in use and stayed in the air
+    }
+    return -1;
+}
+
+// Try every aerial and both horizontal airdodges on frame k. Aerials and the
+// airdodge can't be pressed out of an aerial (until its IASA, which isn't
+// tracked) or an airdodge, but jumps and falls can on any frame. An aerial
+// pressed on the frame you'd land anyway keeps falling and lands anyway, so
+// it isn't an interrupt; a horizontal airdodge stops the fall, so it's
+// tried on that frame too.
+static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, Prediction *p, int k, int landing)
+{
+    int ts = p->ts[k];
+    if (Tracked_IsAerial(ts) || ts == TS_ESCAPEAIR)
         return;
 
-    for (int a = TS_AIRN; a <= TS_AIRLW; a++)
+    if (!landing)
     {
-        SimState b = *before;
-        SimStep step;
-
-        for (int n = 0; n < LL_AI_MAX_STEPS; n++)
+        for (int a = TS_AIRN; a <= TS_AIRLW; a++)
         {
-            Sim_Step(fp, start, &b, n == 0 ? a : -1, &step);
-
-            // the aerial's frames must have been seen, and its bottom too
-            // once the lock is over
-            if (!step.ecb->seen || (b.lock <= 0 && !step.ecb->has_bottom))
-            {
+            int unlearned = 0, lag = 0;
+            int n = Branch_Press(fp, start, before, a, 0, &unlearned, &lag);
+            if (unlearned)
                 p->ai_unlearned |= AERIAL_BIT(a);
-                break;
-            }
-            if (step.landed)
-            {
-                if (step.first_aerial_ecb)
-                {
-                    p->ai_mask[k] |= AERIAL_BIT(a);
-                    if (step.ecb->aerial_lag)
-                        p->ai_lag_mask[k] |= AERIAL_BIT(a);
-                }
-                break; // touching down on the locked bottom isn't an interrupt
-            }
-            if (!b.aerial_pending)
-                break; // the aerial's ECB is in use and stayed in the air
+            if (n < 0)
+                continue;
+            p->ai_mask[k] |= AERIAL_BIT(a);
+            p->ai_delay[k] = n;
+            if (lag)
+                p->ai_lag_mask[k] |= AERIAL_BIT(a);
         }
+    }
+
+    for (int d = 0; d < 2; d++)
+    {
+        int unlearned = 0, lag = 0;
+        int n = Branch_Press(fp, start, before, TS_ESCAPEAIR, d == 0 ? 1.f : -1.f, &unlearned, &lag);
+        if (unlearned)
+            p->wl_unlearned = 1;
+        if (n >= 0)
+            p->wl_mask[k] |= d == 0 ? DODGE_RIGHT : DODGE_LEFT;
     }
 }
 
-// The first run of frames where some aerial interrupts.
-static void Ai_Summarize(Prediction *p)
+// Which aerial interrupts are worth showing, and the first window of each
+// kind. An AI that lands with aerial lag (uair, or a lock that ran into a
+// fair's or bair's lag frames) never helps, and one that finishes its
+// landing lag barely sooner than just holding would (an aerial near the end
+// of a fall) isn't worth the press. The AI Filter option can show them all.
+static void Windows_Summarize(FighterData *fp, Prediction *p)
 {
-    int last = p->land_frame ? p->land_frame - 1 : p->num;
+    int normal_lag = (int)fp->attr.normal_landing_lag;
+    int hold_done = p->land_frame ? p->land_frame + p->lag : 2 * LL_SIM_FRAMES;
+    int last_ai = p->land_frame ? p->land_frame - 1 : p->num;
+    int last_wl = p->land_frame ? p->land_frame : p->num;
 
     p->ai_first = 0;
     p->ai_width = 0;
     p->ai_aerials = 0;
-    for (int k = 1; k <= last; k++)
+    for (int k = 1; k <= last_ai; k++)
     {
-        if (p->ai_mask[k])
+        u8 m = p->ai_mask[k];
+        if (!ai_show_all)
+        {
+            m &= ~p->ai_lag_mask[k];
+            if (m && hold_done - (k + p->ai_delay[k] + normal_lag) < LL_AI_MIN_GAIN)
+                m = 0;
+        }
+        p->ai_show[k] = m;
+
+        if (m && (p->ai_first == 0 || k == p->ai_first + p->ai_width))
         {
             if (p->ai_first == 0)
                 p->ai_first = k;
             p->ai_width++;
-            p->ai_aerials |= p->ai_mask[k];
+            p->ai_aerials |= m;
         }
-        else if (p->ai_first)
-            break;
+    }
+
+    p->wl_first = 0;
+    p->wl_width = 0;
+    p->wl_dirs = 0;
+    for (int k = 1; k <= last_wl; k++)
+    {
+        u8 m = p->wl_mask[k];
+        if (m && (p->wl_first == 0 || k == p->wl_first + p->wl_width))
+        {
+            if (p->wl_first == 0)
+                p->wl_first = k;
+            p->wl_width++;
+            p->wl_dirs |= m;
+        }
     }
 }
 
 // Simulate keeping the stick where it is and pressing nothing. With
-// branches, also try every aerial on every frame along the way.
+// branches, also try every aerial and airdodge on every frame along the way.
 static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branches)
 {
     SimState s;
@@ -1978,13 +2262,16 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
     p->ts[0] = s.ts;
     p->ai_mask[0] = 0;
     p->ai_lag_mask[0] = 0;
+    p->ai_show[0] = 0;
     p->ai_unlearned = 0;
+    p->wl_mask[0] = 0;
+    p->wl_unlearned = 0;
 
     for (int k = 1; k <= LL_SIM_FRAMES; k++)
     {
         SimState before = s;
         SimStep step;
-        Sim_Step(fp, start, &s, -1, &step);
+        Sim_Step(fp, start, &s, -1, 0, &step);
 
         if (step.unlearned)
             Mark_Uncertain(p, k);
@@ -1997,23 +2284,24 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
         p->ts[k] = s.ts;
         p->ai_mask[k] = 0;
         p->ai_lag_mask[k] = 0;
+        p->ai_delay[k] = 0;
+        p->ai_show[k] = 0;
+        p->wl_mask[k] = 0;
         p->num = k;
+
+        if (branches && (before.lock > 0 || Floor_Near(s.x, s.y + s.bottom)))
+            Branch_Actions(fp, start, &before, p, k, step.landed);
 
         if (step.landed)
         {
             p->land_frame = k;
             p->land_ecb = *step.ecb;
-            p->land_kind = Landing_Kind(fp, s.ts, s.vy, s.trigger_timer, step.ecb,
-                                        step.first_aerial_ecb, &p->lag, &p->lcancel_lag);
+            p->land_kind = Landing_Kind(fp, &s, step.ecb, step.first_ecb, &p->lag, &p->lcancel_lag);
             break;
         }
-
-        // pressing an aerial on the frame you'd land anyway isn't an interrupt
-        if (branches)
-            Branch_Aerials(fp, start, &before, p, k);
     }
 
-    Ai_Summarize(p);
+    Windows_Summarize(fp, p);
 }
 
 #define LL_GUESS_JUMP_LEN 40 // until a jump has been seen ending
@@ -2120,6 +2408,23 @@ static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
 static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
+static const char *cue_names[] = {"AI + waveland", "AI only", "Waveland only"};
+static const char *sound_names[] = {"Hit and miss", "Hit only", "Off"};
+static const char *ai_filter_names[] = {"Useful", "All"};
+
+enum cue_kind
+{
+    CUES_BOTH,
+    CUES_AI,
+    CUES_WAVELAND,
+};
+
+enum sound_kind
+{
+    SOUNDS_ALL,
+    SOUNDS_HIT,
+    SOUNDS_OFF,
+};
 
 enum preview_kind
 {
@@ -2140,6 +2445,8 @@ enum options_main
 {
     OPT_PATH,
     OPT_BODY,
+    OPT_CUES,
+    OPT_AI_FILTER,
     OPT_PREVIEW,
     OPT_RING,
     OPT_BEEPS,
@@ -2163,8 +2470,8 @@ static EventOption Options_Main[OPT_COUNT] = {
         .val = 1,
         .desc = {"Draw where Falcon's ECB bottom lands if you keep",
                  "holding the stick and press nothing. Green for a",
-                 "NIL, cyan for an aerial interrupt, thin gray for",
-                 "anything else."},
+                 "NIL, pink for an aerial interrupt, white for a",
+                 "perfect waveland, thin gray for anything else."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -2172,6 +2479,26 @@ static EventOption Options_Main[OPT_COUNT] = {
         .val = 1,
         .desc = {"Also draw a smooth line through Falcon's body,",
                  "which is easier to follow than the ECB bottom."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Cues",
+        .value_num = countof(cue_names),
+        .values = cue_names,
+        .desc = {"Which windows to mark on the path: pink where an",
+                 "aerial lands you (AI), white where a sideways",
+                 "airdodge lands you with full speed (perfect",
+                 "waveland), or both."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "AI Filter",
+        .value_num = countof(ai_filter_names),
+        .values = ai_filter_names,
+        .desc = {"Useful hides aerial interrupts that save fewer",
+                 "than 4 frames over just landing (most near the",
+                 "end of a fall) and ones that land with aerial lag",
+                 "(uair). All shows every one."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -2186,22 +2513,23 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Timing Ring",
         .val = 1,
-        .desc = {"A ring around Falcon closes in on the next aerial",
-                 "interrupt. Press the aerial when it meets the",
-                 "inner ring."},
+        .desc = {"Count down to the next window. AI: a pink ring",
+                 "shrinks around Falcon; press the aerial as it meets",
+                 "the inner ring. Waveland: white arrows slide in at",
+                 "his feet; airdodge as they meet the posts."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Timing Beeps",
-        .desc = {"Beep 20 and 10 frames before the next aerial",
-                 "interrupt, and on the frame to press."},
+        .desc = {"Beep 20 and 10 frames before the next window,",
+                 "and on the frame to press."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Info Panel",
         .val = 1,
-        .desc = {"Show the prediction, which aerials can interrupt,",
-                 "and your last landing. Exact counts how often the",
+        .desc = {"Show the prediction, the next window, and your",
+                 "last landing. Exact counts how often the",
                  "prediction matched what really happened."},
     },
     {
@@ -2213,11 +2541,13 @@ static EventOption Options_Main[OPT_COUNT] = {
                  "side of the screen Falcon isn't on."},
     },
     {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Success Sound",
-        .val = 1,
-        .desc = {"Play a sound when you land a NIL or an",
-                 "aerial interrupt."},
+        .kind = OPTKIND_STRING,
+        .name = "Sounds",
+        .value_num = countof(sound_names),
+        .values = sound_names,
+        .desc = {"Chime when you land a NIL, an AI or a perfect",
+                 "waveland. Buzz when a window passes without the",
+                 "press, or you press too early or the wrong aerial."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -2244,18 +2574,19 @@ static EventOption Options_Main[OPT_COUNT] = {
     {
         .kind = OPTKIND_FUNC,
         .name = "Forget Learned ECBs",
-        .desc = {"Falcon's jumps and falls are built in; his aerials",
-                 "are learned as you play. This forgets what was",
-                 "learned and goes back to the built-in data."},
+        .desc = {"Falcon's jumps, falls and aerials are built in;",
+                 "his airdodge is learned as you play. This forgets",
+                 "what was learned and goes back to the built-in",
+                 "data."},
         .OnSelect = Event_ClearLearned,
     },
     {
         .kind = OPTKIND_INFO,
         .name = "Help",
-        .desc = {"Cyan stretch: press an aerial there to land (AI).",
-                 "Its arrows are the C-stick aerials that work, a",
-                 "square for nair. Gray: other landings, or still",
-                 "learning: do each aerial once, high up."},
+        .desc = {"Pink bar: an aerial there lands you (arrows: the",
+                 "C-stick aerials, square: nair). White bar: sideways",
+                 "airdodge there. Dim bars come after the next one.",
+                 "Gray: still learning; airdodge once, high up."},
     },
     {
         .kind = OPTKIND_FUNC,
@@ -2279,6 +2610,7 @@ static int prev_ts = -1;
 static int prev_tracked_air;
 static int prev_tilt_timer;
 static int prev_lock;
+static Vec2 prev_vel;
 static int frame_in_state;
 static int attributes_logged;
 static int stage_logged;
@@ -2313,11 +2645,22 @@ static int preview_sh;
 // body line: the fighter's position raised to the middle of his ECB
 static float body_offset = 9.f;
 
-// timing ring and beeps for the next aerial interrupt
-static int ring_frames; // frames until the press, 0 = no ring
-static Vec2 ring_center;
+// timing ring (AI) and slide-in arrows (waveland), and beeps for the next
+// window of either
+#define LL_RING_FRAMES 24 // the countdown starts this many frames before the press
+static int ring_frames; // frames until the aerial press, 0 = no ring
+static int slide_frames; // frames until the airdodge press, 0 = none
+static u8 slide_dirs;    // DODGE_RIGHT / DODGE_LEFT
+static Vec2 ring_center;  // Falcon's body
+static Vec2 slide_center; // Falcon's ECB bottom
 static int beep_target = -100;
 static int beep_done;
+
+// last frame's next windows, to tell when one was skipped or missed
+static int prev_ai_first;
+static int prev_wl_first;
+static u8 prev_ai_now;  // aerials that interrupt if pressed on this frame
+static u8 prev_wl_now;  // airdodge directions that do
 
 static int panel_left;
 
@@ -2328,7 +2671,7 @@ static char text_predict[32] = "-";
 static char text_ai[32] = "-";
 static char text_last[32] = "-";
 static char text_exact[32] = "-";
-static char *panel_labels[] = {"Prediction", "AI window", "Last landing", "Exact"};
+static char *panel_labels[] = {"Prediction", "Next window", "Last landing", "Exact"};
 static char *panel_info[] = {text_predict, text_ai, text_last, text_exact};
 
 ///////////////////////
@@ -2380,6 +2723,18 @@ static void Log_Frame(FighterData *fp, int ts, int frame)
             cd->ecbCurr_top.Y, cd->ecbCurr_bot.Y, cd->ecbCurr_left.X, cd->ecbCurr_right.X, cd->ecbCurr_right.Y,
             cd->ecbCurrCorrect_bot.Y, fp->ftcmd_var.flag0 != 0,
             fp->input.lstick.X, fp->input.lstick.Y, fp->facing_direction > 0 ? 1 : -1);
+    Log(buf);
+}
+
+// A jumpsquat frame: animation frame, position, ground speed, stick and
+// buttons, so a ground preview can be replayed.
+static void Log_Squat(FighterData *fp)
+{
+    char buf[200];
+    sprintf(buf, "LLSQ %d f%.2f pos %.4f %.4f gvel %.5f stick %.4f %.4f held %x face %d\n",
+            event_vars->game_timer, fp->state.frame, fp->phys.pos.X, fp->phys.pos.Y,
+            fp->phys.self_vel_ground.X, fp->input.lstick.X, fp->input.lstick.Y, fp->input.held,
+            fp->facing_direction > 0 ? 1 : -1);
     Log(buf);
 }
 
@@ -2512,72 +2867,111 @@ static void Text_Prediction(Prediction *p)
         sprintf(text_predict, "%s, %d lag", land_kind_names[p->land_kind], p->lag);
 }
 
-// Which aerials can interrupt in the first window ahead, and for how many
-// frames. Stays the same while the window comes closer.
-static void Text_Ai(Prediction *p)
+static int Cues_Ai(void)
 {
-    static const char letters[] = "NFBUD";
-    u8 mask = p->ai_aerials;
-    char *prefix = "";
-
-    if (p->ai_first && p->ai_first >= p->uncertain_from)
-    {
-        sprintf(text_ai, "Learning...");
-        return;
-    }
-    if (!p->ai_first)
-    {
-        if (!p->ai_unlearned)
-        {
-            sprintf(text_ai, "-");
-            return;
-        }
-        mask = p->ai_unlearned; // name the aerials still to learn
-        prefix = "Learn ";
-    }
-
-    int n = 0;
-    while (prefix[n])
-    {
-        text_ai[n] = prefix[n];
-        n++;
-    }
-    for (int a = 0; a < 5; a++)
-    {
-        if (!(mask & (1 << a)))
-            continue;
-        if (n > 0 && text_ai[n - 1] != ' ')
-            text_ai[n++] = ' ';
-        text_ai[n++] = letters[a];
-    }
-    text_ai[n] = 0;
-    if (p->ai_first)
-        sprintf(text_ai + n, ", %df", p->ai_width);
+    return Options_Main[OPT_CUES].val != CUES_WAVELAND;
 }
 
-// "NIL", "AI", "?" while learning, "-" for anything else.
+static int Cues_Waveland(void)
+{
+    return Options_Main[OPT_CUES].val != CUES_AI;
+}
+
+static char *Append(char *t, const char *str)
+{
+    sprintf(t, "%s", str);
+    return t + strlen(t);
+}
+
+// The next window of each kind: the aerials that interrupt there and how
+// many frames it lasts, like "NFD 2f", and "WL 1f" for a perfect waveland.
+// Stays the same while the windows come closer.
+static void Text_Windows(Prediction *p)
+{
+    static const char letters[] = "NFBUD";
+    char *t = text_ai;
+    int ai = Cues_Ai() && p->ai_first;
+    int wl = Cues_Waveland() && p->wl_first;
+
+    text_ai[0] = 0;
+    if (ai)
+    {
+        if (p->ai_first >= p->uncertain_from)
+            t = Append(t, "AI ?");
+        else
+        {
+            for (int a = 0; a < 5; a++)
+            {
+                if (p->ai_aerials & (1 << a))
+                    *t++ = letters[a];
+            }
+            sprintf(t, " %df", p->ai_width);
+            t += strlen(t);
+        }
+    }
+    if (wl)
+    {
+        if (ai)
+            t = Append(t, ", ");
+        if (p->wl_first >= p->uncertain_from)
+            t = Append(t, "WL ?");
+        else
+        {
+            sprintf(t, "WL %df", p->wl_width);
+            t += strlen(t);
+        }
+    }
+    if (ai || wl)
+        return;
+
+    // nothing ahead: name what's still to learn
+    u8 learn = Cues_Ai() ? p->ai_unlearned : 0;
+    int learn_wl = Cues_Waveland() && p->wl_unlearned;
+    if (!learn && !learn_wl)
+    {
+        sprintf(text_ai, "-");
+        return;
+    }
+    t = Append(t, "Learn");
+    for (int a = 0; a < 5; a++)
+    {
+        if (learn & (1 << a))
+        {
+            *t++ = ' ';
+            *t++ = letters[a];
+        }
+    }
+    *t = 0;
+    if (learn_wl)
+        Append(t, " dodge");
+}
+
+// "NIL", "AI", "PWL", "?" while learning, "-" for anything else.
 static const char *Kind_Short(Prediction *p)
 {
     if (!p->land_frame)
         return "-";
     if (p->uncertain_from <= p->land_frame)
         return "?";
+    if (p->land_kind == LAND_PERFECT_WL)
+        return "PWL";
     if (Kind_Highlighted(p->land_kind))
         return land_kind_names[p->land_kind];
     return "-";
 }
 
-// The aerials of the first AI window as letters, like "NUD".
-static void Ai_Letters(Prediction *p, char *out)
+// The next windows as letters: the AI's aerials, then W for a perfect
+// waveland, like "NFDW".
+static void Window_Letters(Prediction *p, char *out)
 {
     static const char letters[] = "NFBUD";
     int n = 0;
+    int ai = Cues_Ai() && p->ai_first;
+    int wl = Cues_Waveland() && p->wl_first;
 
-    if (!p->ai_first)
-        out[n++] = '-';
-    else if (p->ai_first >= p->uncertain_from)
+    if (ai && p->ai_first >= p->uncertain_from)
         out[n++] = '?';
-    else
+    else if (ai)
     {
         for (int a = 0; a < 5; a++)
         {
@@ -2585,6 +2979,10 @@ static void Ai_Letters(Prediction *p, char *out)
                 out[n++] = letters[a];
         }
     }
+    if (wl)
+        out[n++] = p->wl_first >= p->uncertain_from ? '?' : 'W';
+    if (n == 0)
+        out[n++] = '-';
     out[n] = 0;
 }
 
@@ -2592,8 +2990,8 @@ static void Ai_Letters(Prediction *p, char *out)
 static void Text_Preview(void)
 {
     char fh[8], sh[8];
-    Ai_Letters(pred_fh, fh);
-    Ai_Letters(pred_sh, sh);
+    Window_Letters(pred_fh, fh);
+    Window_Letters(pred_sh, sh);
 
     if (preview_fh && preview_sh)
     {
@@ -2651,12 +3049,28 @@ static int Aerial_Pressed(FighterData *fp)
     return x * fp->facing_direction >= 0 ? TS_AIRF : TS_AIRB;
 }
 
-// An aerial pressed in the air, on a frame where the prediction said it would
-// interrupt, should have touched down right away. If its ECB isn't in use
-// yet (lock), the landing itself is judged later instead.
-static void Ai_CheckMissed(FighterData *fp, int ts)
+// The horizontal direction of an airdodge with the stick at (x, y): only a
+// fully sideways stick gives a dodge with no vertical speed (ftCo_80099A9C
+// uses the stick's exact angle; inside the deadzone it's a neutral dodge).
+// 0 for any other angle.
+static int Dodge_Dir(float x, float y)
 {
-    if (!seg_valid || !Tracked_IsAerial(ts) || Tracked_IsAerial(prev_ts))
+    if (y != 0 || fabs(x) < common_dodge_deadzone.X)
+        return 0;
+    return x > 0 ? DODGE_RIGHT : DODGE_LEFT;
+}
+
+static int Jump_Or_Fall(int ts)
+{
+    return ts >= 0 && !Tracked_IsAerial(ts) && ts != TS_ESCAPEAIR;
+}
+
+// An aerial or sideways airdodge pressed in the air, on a frame where the
+// prediction said it would touch down, should have landed right away. If its
+// ECB isn't in use yet (lock), the landing itself is judged later instead.
+static void Press_CheckMissed(FighterData *fp, int ts)
+{
+    if (!seg_valid || !Jump_Or_Fall(prev_ts) || Jump_Or_Fall(ts))
         return;
     if (fp->coll_data.u.ecb_bot_lock_frames > 0)
         return;
@@ -2664,17 +3078,74 @@ static void Ai_CheckMissed(FighterData *fp, int ts)
     int k = event_vars->game_timer - seg_start_timer;
     if (k < 1 || k > pred_seg->num || k >= pred_seg->uncertain_from)
         return;
-    if (!(pred_seg->ai_mask[k] & AERIAL_BIT(ts)))
-        return;
+
+    char *what;
+    if (ts == TS_ESCAPEAIR)
+    {
+        int dir = Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y);
+        if (!(pred_seg->wl_mask[k] & dir))
+            return;
+        what = "perfect waveland";
+        sprintf(text_last, "No WL, predicted");
+    }
+    else
+    {
+        if (!(pred_seg->ai_mask[k] & AERIAL_BIT(ts)))
+            return;
+        what = "aerial interrupt";
+        sprintf(text_last, "No AI, predicted");
+    }
 
     stat_total++;
     Text_Exact();
-    sprintf(text_last, "No AI, predicted");
 
     char buf[200];
-    sprintf(buf, "LandingLab ai miss: %s at %d x %.4f y %.4f stayed in the air, predicted an aerial interrupt (from %d)\n",
-            tracked_state_names[ts], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, seg_start_timer);
+    sprintf(buf, "LandingLab ai miss: %s at %d x %.4f y %.4f stayed in the air, predicted a %s (from %d)\n",
+            tracked_state_names[ts], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, what, seg_start_timer);
     Log(buf);
+}
+
+// Buzz when a window passes without its press, or an aerial or airdodge
+// comes while the countdown runs but doesn't touch down. Called on tracked
+// air frames, after pred_live is updated.
+static void Window_Feedback(FighterData *fp, int ts)
+{
+    if (Options_Main[OPT_SOUND].val != SOUNDS_ALL)
+        return;
+
+    int miss = 0;
+    if (Jump_Or_Fall(prev_ts) && Tracked_IsAerial(ts))
+        miss = prev_ai_first && prev_ai_first <= LL_RING_FRAMES && !(prev_ai_now & AERIAL_BIT(ts));
+    else if (Jump_Or_Fall(prev_ts) && ts == TS_ESCAPEAIR)
+        miss = prev_wl_first && prev_wl_first <= LL_RING_FRAMES &&
+               !(prev_wl_now & Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y));
+    else if (Jump_Or_Fall(ts))
+    {
+        // this was the frame to press, and pressing on the next one is too late
+        Prediction *p = pred_live;
+        int ai_next = Cues_Ai() && p->ai_first == 1 && p->uncertain_from > 1;
+        int wl_next = Cues_Waveland() && p->wl_first == 1 && p->uncertain_from > 1;
+        miss = (prev_ai_first == 1 || prev_wl_first == 1) && !ai_next && !wl_next;
+    }
+    if (miss)
+        SFX_PlayCommon(3);
+}
+
+// What Window_Feedback needs from this frame's prediction on the next one.
+static void Window_Remember(Prediction *p)
+{
+    prev_ai_first = Cues_Ai() && p->ai_first < p->uncertain_from ? p->ai_first : 0;
+    prev_wl_first = Cues_Waveland() && p->wl_first < p->uncertain_from ? p->wl_first : 0;
+    prev_ai_now = p->num >= 1 ? p->ai_mask[1] : 0;
+    prev_wl_now = p->num >= 1 ? p->wl_mask[1] : 0;
+}
+
+static void Window_Forget(void)
+{
+    prev_ai_first = 0;
+    prev_wl_first = 0;
+    prev_ai_now = 0;
+    prev_wl_now = 0;
 }
 
 #define LL_GHOST_FRAMES 90
@@ -2683,28 +3154,40 @@ static void Ai_CheckMissed(FighterData *fp, int ts)
 static void Landing_Resolve(FighterData *fp)
 {
     int sid = fp->state_id;
-    int is_landing = sid == ASID_LANDING || (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW);
+    int landing_air = sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW;
+    int is_landing = sid == ASID_LANDING || sid == ASID_LANDINGFALLSPECIAL || landing_air;
 
     sprintf(text_ai, "-");
     if (sid != ASID_WAIT && !is_landing)
     {
-        // ledge grab, airdodge, special, ...: not a landing
+        // ledge grab, special, ...: not a landing
         live_visible = 0;
         seg_valid = 0;
         sprintf(text_predict, "-");
         return;
     }
 
-    // An aerial pressed on this very frame from a jump or fall: its ECB
-    // touched down at once, so the event never saw the aerial itself. It's
-    // only an interrupt if keeping on holding wouldn't have landed here too.
-    int pressed = -1;
-    if (is_landing && !Tracked_IsAerial(prev_ts) && pred_live->land_frame != 1)
+    // An aerial or airdodge pressed on this very frame from a jump or fall:
+    // its ECB touched down at once, so the event never saw it in the air. An
+    // aerial is only an interrupt if keeping on holding wouldn't have landed
+    // here too; a sideways airdodge stops the fall, so it counts either way.
+    int pressed = -1; // the aerial
+    int dodge = -1;   // the airdodge's direction, 0 = not sideways
+    if (Jump_Or_Fall(prev_ts) && sid == ASID_LANDINGFALLSPECIAL)
+        dodge = Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y);
+    else if (is_landing && Jump_Or_Fall(prev_ts) && pred_live->land_frame != 1)
         pressed = Aerial_Pressed(fp);
 
     int kind;
     if (sid == ASID_WAIT)
         kind = LAND_NIL;
+    else if (sid == ASID_LANDINGFALLSPECIAL)
+    {
+        // perfect: a sideways dodge whose own ECB touched down the first
+        // time it was used, now or as the lock ran out
+        int perfect = dodge > 0 || (prev_ts == TS_ESCAPEAIR && prev_lock == 1 && prev_vel.Y == 0 && prev_vel.X != 0);
+        kind = perfect ? LAND_PERFECT_WL : LAND_WAVELAND;
+    }
     else if (pressed >= 0)
         kind = LAND_AI;
     else if (Tracked_IsAerial(prev_ts) && prev_lock == 1)
@@ -2717,37 +3200,50 @@ static void Landing_Resolve(FighterData *fp)
     Segment_AddActual(fp);
     live_visible = 0;
 
-    // keep the attempt on screen for a moment, but only when a NIL or an
-    // aerial interrupt was predicted or happened
+    // keep the attempt on screen for a moment, but only when a NIL, an
+    // aerial interrupt or a perfect waveland was predicted or happened
     ghost_visible = seg_valid && (Kind_Highlighted(kind) || Kind_Highlighted(pred_seg->land_kind));
     ghost_timer = LL_GHOST_FRAMES;
 
-    if (Options_Main[OPT_SOUND].val && (kind == LAND_NIL || kind == LAND_AI))
+    // an AI into aerial lag (uair) is still an AI, but nothing to cheer
+    int hit = kind == LAND_NIL || kind == LAND_PERFECT_WL || (kind == LAND_AI && !landing_air);
+    if (Options_Main[OPT_SOUND].val != SOUNDS_OFF && hit)
         SFX_PlayRaw(303, 255, 128, 20, 3); // laserland's success sound
 
     char buf[200];
     int k = event_vars->game_timer - seg_start_timer;
 
-    if (pressed >= 0 && seg_valid)
+    if ((pressed >= 0 || dodge > 0) && seg_valid)
     {
-        // judged against the ticks the prediction drew
+        // judged against the windows the prediction drew
         int in_range = k >= 1 && k <= pred_seg->num;
-        int predicted = in_range && (pred_seg->ai_mask[k] & AERIAL_BIT(pressed));
-        int learning = !predicted && (!in_range || k >= pred_seg->uncertain_from ||
+        int predicted, learning;
+        if (pressed >= 0)
+        {
+            predicted = in_range && (pred_seg->ai_mask[k] & AERIAL_BIT(pressed));
+            learning = !predicted && (!in_range || k >= pred_seg->uncertain_from ||
                                       (pred_seg->ai_unlearned & AERIAL_BIT(pressed)));
+        }
+        else
+        {
+            predicted = in_range && (pred_seg->wl_mask[k] & dodge);
+            learning = !predicted && (!in_range || k >= pred_seg->uncertain_from || pred_seg->wl_unlearned);
+        }
+        char *name = pressed >= 0 ? "AI" : "WL";
         if (learning)
-            sprintf(text_last, "AI (learning)");
+            sprintf(text_last, "%s (learning)", name);
         else
         {
             stat_total++;
             if (predicted)
                 stat_exact++;
-            sprintf(text_last, predicted ? "AI, as predicted" : "AI, not predicted");
+            sprintf(text_last, "%s, %s", name, predicted ? "as predicted" : "not predicted");
             Text_Exact();
         }
 
-        sprintf(buf, "LandingLab landing: AI with %s pressed at %d x %.4f y %.4f, %s (from %d)%s\n",
-                tracked_state_names[pressed], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y,
+        sprintf(buf, "LandingLab landing: %s with %s pressed at %d x %.4f y %.4f, %s (from %d)%s\n",
+                land_kind_names[kind], pressed >= 0 ? tracked_state_names[pressed] : (dodge == DODGE_RIGHT ? "airdodge right" : "airdodge left"),
+                event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y,
                 predicted ? "predicted" : "not predicted", seg_start_timer, learning ? " learning" : "");
         Log(buf);
         return;
@@ -2763,8 +3259,19 @@ static void Landing_Resolve(FighterData *fp)
     int diff = event_vars->game_timer - predicted;
     int learning = pred_seg->uncertain_from <= pred_seg->land_frame;
 
+    // Something "keep holding" couldn't know happened on the landing frame
+    // itself, so the landing isn't judged: the stick moved into or out of
+    // fastfall or platform drop (the usual late fastfall), or an aerial or
+    // an angled airdodge was pressed as Falcon touched down anyway.
+    int fastfall = Stick_Down(fp->input.lstick.Y) != seg_stick_down || (u8)fp->input.timer_lstick_tilt_y < prev_tilt_timer;
+    int pressed_late = Jump_Or_Fall(prev_ts) && (landing_air || sid == ASID_LANDINGFALLSPECIAL);
+    int late = fastfall || pressed_late || Stick_Drop(fp->input.lstick.Y) != seg_stick_drop;
+
     if (learning)
         sprintf(text_last, "%s (learning)", land_kind_names[kind]);
+    else if (late)
+        sprintf(text_last, "%s, %s", land_kind_names[kind],
+                pressed_late ? "pressed late" : fastfall ? "FF on landing" : "stick moved");
     else
     {
         stat_total++;
@@ -2780,10 +3287,10 @@ static void Landing_Resolve(FighterData *fp)
         Text_Exact();
     }
 
-    sprintf(buf, "LandingLab landing: %s at %d x %.4f, predicted %s at %d x %.4f (from %d)%s\n",
+    sprintf(buf, "LandingLab landing: %s at %d x %.4f, predicted %s at %d x %.4f (from %d)%s%s\n",
             land_kind_names[kind], event_vars->game_timer, fp->phys.pos.X,
             land_kind_names[pred_seg->land_kind], predicted, pred_seg->pos[pred_seg->land_frame].X,
-            seg_start_timer, learning ? " learning" : "");
+            seg_start_timer, learning ? " learning" : "", late ? " late-input" : "");
     Log(buf);
 }
 
@@ -2792,7 +3299,7 @@ static void Landing_Resolve(FighterData *fp)
 ///////////////////////
 
 static const GXColor color_neutral = {150, 150, 150, 255};
-static const GXColor color_body = {190, 200, 255, 255};
+static const GXColor color_body = {130, 150, 200, 255};
 static const GXColor color_ecb = {255, 230, 0, 255};
 
 #define LL_CIRCLE_SEGS 24
@@ -2920,47 +3427,79 @@ static void Draw_AerialArrows(float x, float y, u8 mask, float facing, GXColor c
     }
 }
 
-// Each run of frames where an aerial interrupts: a thick stretch of the
-// path, cyan (orange if every aerial there lands with aerial lag), with the
-// aerials that work drawn at its start.
-static void Draw_AiWindows(Prediction *p, int last)
+// Windows after the next one of their kind: the same color at 40%
+// (premultiplied).
+static GXColor Color_Dim(GXColor c)
 {
-    for (int k = 1; k <= last; k++)
+    c.r = c.r * 2 / 5;
+    c.g = c.g * 2 / 5;
+    c.b = c.b * 2 / 5;
+    c.a = 102;
+    return c;
+}
+
+// A thick stretch of the path over frames k to e, from half a frame before
+// the window to half a frame after it.
+static void Draw_Bar(Prediction *p, int k, int e, GXColor color, u8 size)
+{
+    int before = k - 1;
+    int after = e < p->num ? e + 1 : e;
+    event_vars->GFX_Start(e - k + 3, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
+    GFX_AddVtx((p->pos[before].X + p->pos[k].X) / 2,
+               (p->pos[before].Y + p->bottom[before] + p->pos[k].Y + p->bottom[k]) / 2, 0, color);
+    for (int i = k; i <= e; i++)
+        GFX_AddVtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
+    GFX_AddVtx((p->pos[e].X + p->pos[after].X) / 2,
+               (p->pos[e].Y + p->bottom[e] + p->pos[after].Y + p->bottom[after]) / 2, 0, color);
+}
+
+// The windows on the path. A perfect waveland window is a wide ice-white
+// bar; an aerial interrupt window is a narrower pink bar drawn over it, with
+// the aerials that work at its start. Where both work, the pink sits inside
+// the white. The next window of each kind is bright, later ones are dim.
+static void Draw_Windows(Prediction *p)
+{
+    int last_ai = p->land_frame ? p->land_frame - 1 : p->num;
+    int last_wl = p->land_frame ? p->land_frame : p->num;
+
+    if (Cues_Waveland())
     {
-        if (!p->ai_mask[k])
-            continue;
-
-        int e = k;
-        u8 mask = 0;
-        int all_lag = 1;
-        while (e <= last && p->ai_mask[e])
+        int index = 0;
+        for (int k = 1; k <= last_wl; k++)
         {
-            mask |= p->ai_mask[e];
-            if (p->ai_lag_mask[e] != p->ai_mask[e])
-                all_lag = 0;
-            e++;
+            if (!p->wl_mask[k])
+                continue;
+            int e = k;
+            while (e < last_wl && p->wl_mask[e + 1])
+                e++;
+
+            GXColor color = k >= p->uncertain_from ? color_learning : land_kind_colors[LAND_PERFECT_WL];
+            if (index++ > 0)
+                color = Color_Dim(color);
+            Draw_Bar(p, k, e, color, 108);
+            k = e;
         }
-        e--;
+    }
 
-        GXColor color = land_kind_colors[LAND_AI];
-        if (k >= p->uncertain_from)
-            color = color_learning;
-        else if (all_lag)
-            color = land_kind_colors[LAND_LCANCEL];
+    if (Cues_Ai())
+    {
+        int index = 0;
+        for (int k = 1; k <= last_ai; k++)
+        {
+            if (!p->ai_show[k])
+                continue;
+            int e = k;
+            u8 mask = p->ai_show[k];
+            while (e < last_ai && p->ai_show[e + 1])
+                mask |= p->ai_show[++e];
 
-        // from half a frame before the window to half a frame after it
-        int before = k - 1;
-        int after = e < p->num ? e + 1 : e;
-        event_vars->GFX_Start(e - k + 3, (GFX_Params){.shape = GX_LINESTRIP, .size = 72});
-        GFX_AddVtx((p->pos[before].X + p->pos[k].X) / 2,
-                   (p->pos[before].Y + p->bottom[before] + p->pos[k].Y + p->bottom[k]) / 2, 0, color);
-        for (int i = k; i <= e; i++)
-            GFX_AddVtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
-        GFX_AddVtx((p->pos[e].X + p->pos[after].X) / 2,
-                   (p->pos[e].Y + p->bottom[e] + p->pos[after].Y + p->bottom[after]) / 2, 0, color);
-
-        Draw_AerialArrows(p->pos[k].X, p->pos[k].Y + p->bottom[k], mask, p->facing, color);
-        k = e;
+            GXColor color = k >= p->uncertain_from ? color_learning : land_kind_colors[LAND_AI];
+            if (index++ > 0)
+                color = Color_Dim(color);
+            Draw_Bar(p, k, e, color, 60);
+            Draw_AerialArrows(p->pos[k].X, p->pos[k].Y + p->bottom[k], mask, p->facing, color);
+            k = e;
+        }
     }
 }
 
@@ -2986,7 +3525,7 @@ static void Draw_Prediction(Prediction *p, int body)
         Draw_Path(p->pos, p->bottom, known, last, color_learning, 12);
     }
 
-    Draw_AiWindows(p, p->land_frame ? p->land_frame - 1 : p->num);
+    Draw_Windows(p);
 
     if (highlight)
     {
@@ -3005,9 +3544,9 @@ static void Draw_Prediction(Prediction *p, int body)
     }
 }
 
-// The outer ring closes in on the inner one, meeting it on the frame before
-// the press, so the press lands as the rings touch.
-#define LL_RING_FRAMES 24
+// AI: the outer ring closes in on the inner one around Falcon's body,
+// meeting it on the frame before the press, so the press lands as the rings
+// touch.
 #define LL_RING_INNER 4.f
 #define LL_RING_STEP 0.75f
 
@@ -3026,6 +3565,43 @@ static void Draw_TimingRing(void)
     Draw_Circle(x, y, LL_RING_INNER + (ring_frames - 1) * LL_RING_STEP, color, 36);
 }
 
+// Waveland: at Falcon's feet, an arrow slides in from the side toward a
+// post for each direction that works (the left one points right: dodge
+// right), on the same clock as the ring. Low and sideways, so it never sits
+// on the ring.
+#define LL_SLIDE_POST 6.f
+#define LL_SLIDE_SIZE 1.6f
+
+static void Draw_SlideArrows(void)
+{
+    GXColor color = land_kind_colors[LAND_PERFECT_WL];
+    float x = slide_center.X;
+    float y = slide_center.Y;
+    int now = slide_frames <= 1;
+    float d = LL_SLIDE_POST + (now ? 0 : (slide_frames - 1) * LL_RING_STEP);
+    float h = LL_SLIDE_SIZE;
+
+    // the posts
+    event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINES, .size = now ? 48 : 12});
+    GFX_AddVtx(x - LL_SLIDE_POST, y - h, 0, color);
+    GFX_AddVtx(x - LL_SLIDE_POST, y + h, 0, color);
+    GFX_AddVtx(x + LL_SLIDE_POST, y - h, 0, color);
+    GFX_AddVtx(x + LL_SLIDE_POST, y + h, 0, color);
+
+    // the arrows, tip toward the post
+    for (int side = -1; side <= 1; side += 2)
+    {
+        if (!(slide_dirs & (side < 0 ? DODGE_RIGHT : DODGE_LEFT)))
+            continue;
+        float tip = x + side * d;
+        float back = tip + side * h;
+        event_vars->GFX_Start(3, (GFX_Params){.shape = GX_LINESTRIP, .size = now ? 48 : 30});
+        GFX_AddVtx(back, y + h, 0, color);
+        GFX_AddVtx(tip, y, 0, color);
+        GFX_AddVtx(back, y - h, 0, color);
+    }
+}
+
 static void World_GX(GOBJ *gobj, int pass)
 {
     if (pass != 2)
@@ -3040,6 +3616,8 @@ static void World_GX(GOBJ *gobj, int pass)
     if (live_visible)
     {
         Draw_Prediction(pred_live, 1);
+        if (Options_Main[OPT_RING].val && slide_frames)
+            Draw_SlideArrows();
         if (Options_Main[OPT_RING].val && ring_frames)
             Draw_TimingRing();
     }
@@ -3081,7 +3659,8 @@ static void Ghost_Update(int sid)
 {
     if (!ghost_visible)
         return;
-    int resting = sid == ASID_WAIT || sid == ASID_LANDING || (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW);
+    int resting = sid == ASID_WAIT || sid == ASID_LANDING || sid == ASID_LANDINGFALLSPECIAL ||
+                  (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW);
     if (--ghost_timer <= 0 || !resting)
         ghost_visible = 0;
 }
@@ -3105,27 +3684,37 @@ static void Panel_UpdateSide(FighterData *fp)
         panel_left = 0;
 }
 
-// Ring and beeps count down to the first frame of the next AI window.
+// The ring counts down to the next AI window, the slide-in arrows to the
+// next perfect waveland window, and the beeps to whichever comes first.
 static void Timing_Update(FighterData *fp, Prediction *p)
 {
     static const int beats[3] = {21, 11, 1};
 
     ring_frames = 0;
-    if (!p->ai_first || p->ai_first >= p->uncertain_from)
-        return;
+    slide_frames = 0;
+    int ai = Cues_Ai() && p->ai_first < p->uncertain_from ? p->ai_first : 0;
+    int wl = Cues_Waveland() && p->wl_first < p->uncertain_from ? p->wl_first : 0;
 
-    if (p->ai_first <= LL_RING_FRAMES)
+    if (ai && ai <= LL_RING_FRAMES)
     {
-        ring_frames = p->ai_first;
+        ring_frames = ai;
         ring_center.X = fp->phys.pos.X;
         ring_center.Y = fp->phys.pos.Y + body_offset;
     }
+    if (wl && wl <= LL_RING_FRAMES)
+    {
+        slide_frames = wl;
+        slide_dirs = p->wl_dirs;
+        slide_center.X = fp->phys.pos.X;
+        slide_center.Y = fp->phys.pos.Y + fp->coll_data.ecbCurrCorrect_bot.Y;
+    }
 
-    if (!Options_Main[OPT_BEEPS].val)
+    int next = ai && (!wl || ai < wl) ? ai : wl;
+    if (!next || !Options_Main[OPT_BEEPS].val)
         return;
 
     // the same window can shift by a frame as the prediction updates
-    int target = event_vars->game_timer + p->ai_first;
+    int target = event_vars->game_timer + next;
     if (target - beep_target > 2 || beep_target - target > 2)
     {
         beep_target = target;
@@ -3133,8 +3722,8 @@ static void Timing_Update(FighterData *fp, Prediction *p)
     }
     for (int i = 0; i < 3; i++)
     {
-        int next = i < 2 ? beats[i + 1] : 0;
-        if (p->ai_first <= beats[i] && p->ai_first > next && !(beep_done & (1 << i)))
+        int after = i < 2 ? beats[i + 1] : 0;
+        if (next <= beats[i] && next > after && !(beep_done & (1 << i)))
         {
             beep_done |= 1 << i;
             SFX_PlayCommon(i == 2 ? 2 : 1);
@@ -3178,6 +3767,11 @@ void Event_Init(GOBJ *gobj)
     common_aerial_angle = Common_Float(COMMON_AERIAL_ANGLE);
     common_run_friction = Common_Float(COMMON_RUN_FRICTION);
     common_jump_back_stick = Common_Float(COMMON_JUMP_BACK_STICK);
+    common_dodge_deadzone.X = Common_Float(COMMON_DODGE_DEADZONE);
+    common_dodge_deadzone.Y = Common_Float(COMMON_DODGE_DEADZONE + 4);
+    common_dodge_force = Common_Float(COMMON_DODGE_FORCE);
+    common_dodge_decay = Common_Float(COMMON_DODGE_DECAY);
+    common_waveland_lag = Common_Float(COMMON_WAVELAND_LAG);
 
     for (int i = 0; i <= LL_CIRCLE_SEGS; i++)
     {
@@ -3219,6 +3813,8 @@ void Event_Think(GOBJ *event)
         attributes_logged = 1;
     }
 
+    ai_show_all = Options_Main[OPT_AI_FILTER].val == 1;
+
     int sid = fp->state_id;
     int ts = Tracked_Index(sid);
     int airborne = fp->phys.air_state == 1;
@@ -3250,6 +3846,7 @@ void Event_Think(GOBJ *event)
     if (sid == ASID_WAIT && fp->coll_data.ecbCurr_right.Y > 1.f)
         body_offset = fp->coll_data.ecbCurr_right.Y;
     ring_frames = 0;
+    slide_frames = 0;
     preview_fh = 0;
     preview_sh = 0;
 
@@ -3271,11 +3868,14 @@ void Event_Think(GOBJ *event)
         Sim_FromFighter(fp, ts, frame_in_state, &start);
         Predict(fp, &start, pred_live, 1);
         Text_Prediction(pred_live);
-        Text_Ai(pred_live);
+        Text_Windows(pred_live);
         Timing_Update(fp, pred_live);
 
+        if (prev_tracked_air)
+            Window_Feedback(fp, ts);
+        Window_Remember(pred_live);
         if (prev_tracked_air && ts != prev_ts)
-            Ai_CheckMissed(fp, ts);
+            Press_CheckMissed(fp, ts);
         if (!prev_tracked_air || Segment_InputChanged(fp, ts))
             Segment_Start(fp);
         else
@@ -3287,19 +3887,26 @@ void Event_Think(GOBJ *event)
     }
     else if (airborne)
     {
-        // in the air but in a state we don't predict (airdodge, up-B, hitstun)
+        // in the air but in a state we don't predict (up-B, hitstun, ...)
         live_visible = 0;
         seg_valid = 0;
         sprintf(text_ai, "-");
     }
     else if (Ground_CanJump(sid) && !disturbed && !ghost_visible)
         Ground_Preview(fp);
+    if (!tracked_air)
+        Window_Forget();
+
+    // the jumpsquat and takeoff, to check the ground previews against
+    if (sid == ASID_KNEEBEND && Options_Main[OPT_LOG].val)
+        Log_Squat(fp);
 
     prev_state_id = sid;
     prev_ts = ts;
     prev_tracked_air = tracked_air;
     prev_tilt_timer = (u8)fp->input.timer_lstick_tilt_y;
     prev_lock = fp->coll_data.u.ecb_bot_lock_frames;
+    prev_vel = (Vec2){fp->phys.self_vel.X, fp->phys.self_vel.Y};
 }
 
 void Event_Update(void)

@@ -3030,6 +3030,7 @@ enum options_main
     OPT_LOG,
     OPT_SCRIPT,
     OPT_CLEAR,
+    OPT_CONTROLS,
     OPT_HELP,
     OPT_EXIT,
 
@@ -3196,6 +3197,13 @@ static EventOption Options_Main[OPT_COUNT] = {
                  "built in. This forgets what was learned while",
                  "playing and goes back to the built-in data."},
         .OnSelect = Event_ClearLearned,
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Controls",
+        .desc = {"D-pad right (hold): save Falcon's position.",
+                 "D-pad left: load it (or replay the script, when",
+                 "one is chosen). D-pad down: frame advance on/off."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -5664,6 +5672,33 @@ void Event_Think(GOBJ *event)
     prev_vel = (Vec2){fp->phys.self_vel.X, fp->phys.self_vel.Y};
 }
 
+// Save and load position like the lab: hold D-pad right to save, press
+// D-pad left to load. The event's own count of frames in Falcon's state
+// goes with the save, since the predictor reads the state's ECB by it.
+#define LL_SAVE_HOLD 10
+static int save_hold;
+static int saved_frame_in_state;
+
+static void Position_Update(int held, int down)
+{
+    if (held & HSD_BUTTON_DPAD_RIGHT)
+    {
+        if (++save_hold == LL_SAVE_HOLD &&
+            event_vars->Savestate_Save_v1(event_vars->savestate, 0))
+            saved_frame_in_state = frame_in_state;
+    }
+    else
+        save_hold = 0;
+
+    if ((down & HSD_BUTTON_DPAD_LEFT) && event_vars->savestate->is_exist)
+    {
+        event_vars->Savestate_Load_v1(event_vars->savestate, 0);
+        Script_ResetTracking();
+        prev_state_id = ((FighterData *)Fighter_GetGObj(0)->userdata)->state_id;
+        frame_in_state = saved_frame_in_state;
+    }
+}
+
 void Event_Update(void)
 {
     if (Pause_CheckStatus(1) != 2)
@@ -5672,10 +5707,12 @@ void Event_Update(void)
         HSD_SetSpeedEasy(1.0);
 
     // runs every frame, frozen or not: D-pad down toggles frame advance,
-    // D-pad left plays the chosen script again
+    // D-pad left plays the chosen script again, or else the D-pad saves and
+    // loads position
     if (Pause_CheckStatus(1) == 2)
         return;
-    int down = PadGetMaster(Advance_Port())->down;
+    HSD_Pad *pad = PadGetMaster(Advance_Port());
+    int down = pad->down;
     if (down & HSD_BUTTON_DPAD_DOWN)
         Options_Main[OPT_FRAME_ADV].val ^= 1;
     if ((down & HSD_BUTTON_DPAD_LEFT) && Options_Main[OPT_SCRIPT].val)
@@ -5683,6 +5720,8 @@ void Event_Update(void)
         script_cur = -1;
         script_pending = 1;
     }
+    else if (script_cur < 0)
+        Position_Update(pad->held, down);
 }
 
 void Event_ChangeCollDisplay(GOBJ *menu, int value)

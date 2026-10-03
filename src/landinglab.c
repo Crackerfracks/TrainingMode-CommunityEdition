@@ -3017,6 +3017,7 @@ enum options_main
 {
     OPT_PATH,
     OPT_BODY,
+    OPT_TICKS,
     OPT_CUES,
     OPT_AI_FILTER,
     OPT_PREVIEW,
@@ -3052,8 +3053,15 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Body Path",
         .val = 1,
-        .desc = {"Also draw a smooth line through Falcon's body,",
+        .desc = {"Also draw a dotted line through Falcon's body,",
                  "which is easier to follow than the ECB bottom."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Frame Ticks",
+        .val = 1,
+        .desc = {"Mark every frame on the paths with a short line",
+                 "across them. Closer marks mean slower movement."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -3185,7 +3193,7 @@ static EventOption Options_Main[OPT_COUNT] = {
         .desc = {"Pink bar: an aerial there lands you (arrows: the",
                  "C-stick aerials, square: nair). White bar: sideways",
                  "airdodge there. Dim bars come after the next one.",
-                 "Gray: still learning. Short hop path: ticked line."},
+                 "Gray: learning. Short hop: dashed. Body: dotted."},
     },
     {
         .kind = OPTKIND_FUNC,
@@ -3989,18 +3997,36 @@ static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color,
         GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, color);
 }
 
-// A path with a short tick across it on every frame: the short hop
-// preview, so it stays readable where it runs along the full hop's solid
-// line (a straight-up jump). The spacing of the ticks shows the speed.
+// The paths look different from each other: the landing path is solid, the
+// short hop preview dashed (a dash every other frame, so it stays readable
+// where it runs along the full hop's line) and the body path dotted.
+#define LINE_SOLID 0
+#define LINE_DASHED 1
+
+static void Draw_Dashed(Vec2 *pos, float *bottom, int from, int to, GXColor color, u8 size)
+{
+    int dashes = (to - from + 1) / 2;
+    if (dashes < 1)
+        return;
+
+    event_vars->GFX_Start(dashes * 2, (GFX_Params){.shape = GX_LINES, .size = size});
+    for (int i = from; i + 1 <= to; i += 2)
+    {
+        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, color);
+        GFX_AddVtx(pos[i + 1].X, pos[i + 1].Y + bottom[i + 1], 0, color);
+    }
+}
+
+// Frame Ticks: a short mark across the path on every frame. Their spacing
+// shows the speed.
 #define LL_TICK 1.2f
 
-static void Draw_Ticked(Vec2 *pos, float *bottom, int from, int to, GXColor color, u8 size)
+static void Draw_Ticks(Vec2 *pos, float *bottom, int from, int to, GXColor color, u8 size)
 {
     int count = to - from + 1;
     if (count < 2)
         return;
 
-    Draw_Path(pos, bottom, from, to, color, 8);
     event_vars->GFX_Start(count * 2, (GFX_Params){.shape = GX_LINES, .size = size});
     for (int i = from; i <= to; i++)
     {
@@ -4018,25 +4044,36 @@ static void Draw_Ticked(Vec2 *pos, float *bottom, int from, int to, GXColor colo
     }
 }
 
-static void Draw_Line(Prediction *p, int from, int to, GXColor color, u8 size, int ticked)
+static void Draw_Line(Prediction *p, int from, int to, GXColor color, u8 size, int style)
 {
-    if (ticked)
-        Draw_Ticked(p->pos, p->bottom, from, to, color, size);
+    if (style == LINE_DASHED)
+        Draw_Dashed(p->pos, p->bottom, from, to, color, size);
     else
         Draw_Path(p->pos, p->bottom, from, to, color, size);
+    if (Options_Main[OPT_TICKS].val)
+        Draw_Ticks(p->pos, p->bottom, from, to, color, size);
 }
 
 // The fighter's position raised by a fixed amount: a smooth arc through his
-// body, unlike the ECB bottom, which moves with his legs.
+// body, unlike the ECB bottom, which moves with his legs. Drawn as a dot on
+// every frame.
+#define LL_DOT 0.4f
+
 static void Draw_BodyPath(Prediction *p, int last)
 {
     int count = last + 1;
     if (count < 2)
         return;
 
-    event_vars->GFX_Start(count, (GFX_Params){.shape = GX_LINESTRIP, .size = 12});
+    event_vars->GFX_Start(count * 4, (GFX_Params){.shape = GX_QUADS});
     for (int i = 0; i <= last; i++)
-        GFX_AddVtx(p->pos[i].X, p->pos[i].Y + body_offset, 0, color_body);
+    {
+        float x = p->pos[i].X, y = p->pos[i].Y + body_offset;
+        GFX_AddVtx(x - LL_DOT, y - LL_DOT, 0, color_body);
+        GFX_AddVtx(x + LL_DOT, y - LL_DOT, 0, color_body);
+        GFX_AddVtx(x + LL_DOT, y + LL_DOT, 0, color_body);
+        GFX_AddVtx(x - LL_DOT, y + LL_DOT, 0, color_body);
+    }
 }
 
 static void Draw_Circle(float x, float y, float r, GXColor color, u8 size)
@@ -4213,7 +4250,7 @@ static void Draw_Windows(Prediction *p)
     }
 }
 
-static void Draw_Prediction(Prediction *p, int body, int ticked)
+static void Draw_Prediction(Prediction *p, int body, int style)
 {
     int last = p->land_frame ? p->land_frame : p->num;
     int certain = p->land_frame && p->uncertain_from > p->land_frame;
@@ -4223,7 +4260,7 @@ static void Draw_Prediction(Prediction *p, int body, int ticked)
         Draw_BodyPath(p, last);
 
     if (highlight)
-        Draw_Line(p, 0, last, land_kind_colors[p->land_kind], 24, ticked);
+        Draw_Line(p, 0, last, land_kind_colors[p->land_kind], 24, style);
     else
     {
         int known = p->uncertain_from - 1;
@@ -4231,8 +4268,8 @@ static void Draw_Prediction(Prediction *p, int body, int ticked)
             known = last;
         if (known < 0)
             known = 0;
-        Draw_Line(p, 0, known, color_neutral, 12, ticked);
-        Draw_Line(p, known, last, color_learning, 12, ticked);
+        Draw_Line(p, 0, known, color_neutral, 12, style);
+        Draw_Line(p, known, last, color_learning, 12, style);
     }
 
     Draw_Windows(p);
@@ -4391,7 +4428,7 @@ static void World_GX(GOBJ *gobj, int pass)
 
     if (live_visible)
     {
-        Draw_Prediction(pred_live, 1, 0);
+        Draw_Prediction(pred_live, 1, LINE_SOLID);
         if (Options_Main[OPT_RING].val && slide_frames)
             Draw_SlideArrows();
         if (Options_Main[OPT_RING].val && ring_frames)
@@ -4399,17 +4436,17 @@ static void World_GX(GOBJ *gobj, int pass)
     }
     else if (ghost_visible)
     {
-        Draw_Prediction(pred_seg, 0, 0);
+        Draw_Prediction(pred_seg, 0, LINE_SOLID);
         Draw_Path(actual_pos, actual_bottom, 0, actual_num - 1, color_actual, 12);
     }
     else
     {
-        // the short hop is ticked, and only has a body line of its own
+        // the short hop is dashed, and only has a body line of its own
         // when the full hop isn't shown
         if (preview_fh)
-            Draw_Prediction(pred_fh, 1, 0);
+            Draw_Prediction(pred_fh, 1, LINE_SOLID);
         if (preview_sh)
-            Draw_Prediction(pred_sh, !preview_fh, 1);
+            Draw_Prediction(pred_sh, !preview_fh, LINE_DASHED);
     }
 }
 

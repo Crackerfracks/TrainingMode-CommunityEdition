@@ -281,9 +281,10 @@ static EcbSample *Ecb_Get(int ts, int frame)
 // 2026-10-03). Bottoms are missing on the frames the post-jump lock hid
 // them. The falls are an 8-frame loop each, from captures that kept Falcon's
 // speed at 0, so they're the plain pose; drifting leans it (Lean_Ecb).
-// Aerials were only seen up to their landing, so their last frames are still
-// learned. The airdodge comes from a v0.4 session; its frames don't depend on
-// the state it was pressed from.
+// The endings of the longer jumps and the aerials (frames the play sessions
+// never reached) come from captures that ran each move out in the air
+// (2026-10-03). The airdodge comes from a v0.4 session; its frames don't
+// depend on the state it was pressed from.
 #define BAKED_BOTTOM 1
 #define BAKED_SHAPE 2
 #define BAKED_LAG 4 // landing on this aerial frame takes aerial lag; on an
@@ -368,6 +369,21 @@ static const BakedEcb baked_ecb[] = {
     {TS_JUMPB, 32, BAKED_BOTTOM|BAKED_SHAPE, 3.826f, 8.397f, 6.112f, 8.909f, -4.611f},
     {TS_JUMPB, 33, BAKED_BOTTOM|BAKED_SHAPE, 4.404f, 8.283f, 6.344f, 9.148f, -3.993f},
     {TS_JUMPB, 34, BAKED_BOTTOM|BAKED_SHAPE, 3.737f, 9.209f, 6.473f, 8.923f, -3.380f},
+    {TS_JUMPB, 35, BAKED_BOTTOM|BAKED_SHAPE, 2.792f, 9.931f, 6.362f, 4.641f, -4.641f},
+    {TS_JUMPB, 36, BAKED_BOTTOM|BAKED_SHAPE, 2.533f, 10.236f, 6.384f, 3.524f, -3.524f},
+    {TS_JUMPB, 37, BAKED_BOTTOM|BAKED_SHAPE, 2.335f, 10.302f, 6.319f, 2.872f, -2.872f},
+    {TS_JUMPB, 38, BAKED_BOTTOM|BAKED_SHAPE, 2.159f, 10.036f, 6.097f, 2.830f, -2.830f},
+    {TS_JUMPB, 39, BAKED_BOTTOM|BAKED_SHAPE, 2.004f, 9.963f, 5.983f, 2.762f, -2.762f},
+    {TS_JUMPB, 40, BAKED_BOTTOM|BAKED_SHAPE, 1.927f, 9.775f, 5.851f, 2.678f, -2.678f},
+    {TS_JUMPB, 41, BAKED_BOTTOM|BAKED_SHAPE, 1.875f, 10.092f, 5.984f, 2.558f, -2.558f},
+    {TS_JUMPB, 42, BAKED_BOTTOM|BAKED_SHAPE, 1.845f, 10.459f, 6.152f, 2.564f, -2.564f},
+    {TS_JUMPB, 43, BAKED_BOTTOM|BAKED_SHAPE, 1.828f, 10.674f, 6.251f, 3.231f, -3.231f},
+    {TS_JUMPB, 44, BAKED_BOTTOM|BAKED_SHAPE, 1.817f, 10.991f, 6.404f, 4.016f, -4.016f},
+    {TS_JUMPB, 45, BAKED_BOTTOM|BAKED_SHAPE, 1.808f, 11.074f, 6.441f, 4.312f, -4.312f},
+    {TS_JUMPB, 46, BAKED_BOTTOM|BAKED_SHAPE, 1.875f, 11.003f, 6.439f, 4.367f, -4.367f},
+    {TS_JUMPB, 47, BAKED_BOTTOM|BAKED_SHAPE, 1.927f, 10.906f, 6.416f, 4.267f, -4.267f},
+    {TS_JUMPB, 48, BAKED_BOTTOM|BAKED_SHAPE, 1.963f, 10.827f, 6.395f, 4.155f, -4.155f},
+    {TS_JUMPB, 49, BAKED_BOTTOM|BAKED_SHAPE, 1.987f, 10.784f, 6.385f, 4.000f, -4.000f},
     {TS_JUMPAERIALF, 0, BAKED_SHAPE, 0.f, 10.776f, 6.387f, 3.934f, -3.934f},
     {TS_JUMPAERIALF, 1, BAKED_SHAPE, 0.f, 10.565f, 6.415f, 4.279f, -4.279f},
     {TS_JUMPAERIALF, 2, BAKED_SHAPE, 0.f, 11.928f, 7.449f, 4.235f, -4.235f},
@@ -416,6 +432,8 @@ static const BakedEcb baked_ecb[] = {
     {TS_JUMPAERIALF, 45, BAKED_BOTTOM|BAKED_SHAPE, 3.120f, 11.544f, 7.332f, 3.421f, -3.421f},
     {TS_JUMPAERIALF, 46, BAKED_BOTTOM|BAKED_SHAPE, 3.086f, 11.266f, 7.176f, 3.787f, -3.787f},
     {TS_JUMPAERIALF, 47, BAKED_BOTTOM|BAKED_SHAPE, 3.139f, 11.071f, 7.105f, 4.478f, -4.478f},
+    {TS_JUMPAERIALF, 48, BAKED_BOTTOM|BAKED_SHAPE, 3.268f, 11.036f, 7.152f, 6.224f, -3.884f},
+    {TS_JUMPAERIALF, 49, BAKED_BOTTOM|BAKED_SHAPE, 2.995f, 11.156f, 7.076f, 6.289f, -4.527f},
     {TS_JUMPAERIALB, 0, BAKED_SHAPE, 0.f, 10.871f, 6.435f, 3.935f, -3.935f},
     {TS_JUMPAERIALB, 1, BAKED_SHAPE, 0.f, 12.305f, 7.572f, 4.733f, -4.733f},
     {TS_JUMPAERIALB, 2, BAKED_SHAPE, 0.f, 13.849f, 8.811f, 4.008f, -4.008f},
@@ -448,6 +466,9 @@ static const BakedEcb baked_ecb[] = {
     {TS_JUMPAERIALB, 29, BAKED_BOTTOM|BAKED_SHAPE, 4.807f, 10.822f, 7.815f, 2.846f, -2.846f},
     {TS_JUMPAERIALB, 30, BAKED_BOTTOM|BAKED_SHAPE, 4.590f, 11.217f, 7.904f, 2.770f, -2.770f},
     {TS_JUMPAERIALB, 31, BAKED_BOTTOM|BAKED_SHAPE, 4.093f, 11.309f, 7.701f, 3.772f, -3.772f},
+    {TS_JUMPAERIALB, 32, BAKED_BOTTOM|BAKED_SHAPE, 3.516f, 11.443f, 7.479f, 4.433f, -4.433f},
+    {TS_JUMPAERIALB, 33, BAKED_BOTTOM|BAKED_SHAPE, 3.087f, 11.720f, 7.403f, 4.870f, -4.870f},
+    {TS_JUMPAERIALB, 34, BAKED_BOTTOM|BAKED_SHAPE, 2.797f, 11.617f, 7.207f, 6.079f, -4.420f},
     // BEGIN generated fall data (lean captures, 2026-10-03)
     {TS_FALL, 0, BAKED_BOTTOM|BAKED_SHAPE, 1.9980f, 10.7793f, 6.3886f, 3.9122f, -3.9122f},
     {TS_FALL, 1, BAKED_BOTTOM|BAKED_SHAPE, 2.0777f, 10.7642f, 6.4209f, 4.0309f, -4.0309f},
@@ -488,6 +509,28 @@ static const BakedEcb baked_ecb[] = {
     {TS_AIRN, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.360f, 10.493f, 7.427f, 4.767f, -4.767f},
     {TS_AIRN, 20, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.987f, 10.495f, 7.241f, 4.888f, -4.888f},
     {TS_AIRN, 21, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.633f, 10.500f, 7.067f, 4.971f, -4.971f},
+    {TS_AIRN, 22, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.301f, 10.509f, 6.905f, 6.618f, -3.429f},
+    {TS_AIRN, 23, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.991f, 10.515f, 6.753f, 6.576f, -3.604f},
+    {TS_AIRN, 24, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.706f, 10.509f, 6.608f, 6.515f, -3.775f},
+    {TS_AIRN, 25, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.446f, 10.496f, 6.471f, 6.436f, -3.932f},
+    {TS_AIRN, 26, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.214f, 10.485f, 6.349f, 6.340f, -4.072f},
+    {TS_AIRN, 27, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.011f, 10.479f, 6.245f, 6.230f, -4.197f},
+    {TS_AIRN, 28, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.837f, 10.478f, 6.158f, 6.105f, -4.307f},
+    {TS_AIRN, 29, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.696f, 10.485f, 6.090f, 5.968f, -4.402f},
+    {TS_AIRN, 30, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.440f, 10.754f, 6.097f, 4.144f, -4.144f},
+    {TS_AIRN, 31, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.789f, 10.941f, 6.365f, 2.756f, -2.756f},
+    {TS_AIRN, 32, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.706f, 11.525f, 7.115f, 2.769f, -2.769f},
+    {TS_AIRN, 33, BAKED_BOTTOM|BAKED_SHAPE, 3.630f, 12.873f, 8.252f, 4.346f, -4.346f},
+    {TS_AIRN, 34, BAKED_BOTTOM|BAKED_SHAPE, 4.059f, 12.879f, 8.469f, 4.818f, -5.452f},
+    {TS_AIRN, 35, BAKED_BOTTOM|BAKED_SHAPE, 4.121f, 12.526f, 8.323f, 3.903f, -3.903f},
+    {TS_AIRN, 36, BAKED_BOTTOM|BAKED_SHAPE, 4.434f, 13.278f, 8.856f, 3.689f, -3.689f},
+    {TS_AIRN, 37, BAKED_BOTTOM|BAKED_SHAPE, 4.581f, 13.158f, 8.870f, 4.508f, -4.508f},
+    {TS_AIRN, 38, BAKED_BOTTOM|BAKED_SHAPE, 4.559f, 12.388f, 8.474f, 7.172f, -4.519f},
+    {TS_AIRN, 39, BAKED_BOTTOM|BAKED_SHAPE, 4.440f, 11.873f, 8.156f, 7.400f, -4.104f},
+    {TS_AIRN, 40, BAKED_BOTTOM|BAKED_SHAPE, 4.309f, 11.662f, 7.985f, 8.230f, -3.371f},
+    {TS_AIRN, 41, BAKED_BOTTOM|BAKED_SHAPE, 3.533f, 11.423f, 7.478f, 9.337f, -2.718f},
+    {TS_AIRN, 42, BAKED_BOTTOM|BAKED_SHAPE, 2.708f, 11.187f, 6.947f, 8.444f, -2.273f},
+    {TS_AIRN, 43, BAKED_BOTTOM|BAKED_SHAPE, 2.196f, 10.972f, 6.584f, 4.362f, -4.362f},
     {TS_AIRF, 0, BAKED_BOTTOM|BAKED_SHAPE, 2.884f, 10.539f, 6.711f, 3.864f, -3.864f},
     {TS_AIRF, 1, BAKED_BOTTOM|BAKED_SHAPE, 4.539f, 10.217f, 7.378f, 3.762f, -3.762f},
     {TS_AIRF, 2, BAKED_BOTTOM|BAKED_SHAPE, 5.339f, 11.564f, 8.451f, 4.344f, -4.344f},
@@ -520,6 +563,13 @@ static const BakedEcb baked_ecb[] = {
     {TS_AIRF, 29, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.436f, 12.672f, 7.554f, 7.425f, -3.029f},
     {TS_AIRF, 30, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.750f, 12.489f, 7.120f, 7.304f, -3.506f},
     {TS_AIRF, 31, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.260f, 12.138f, 6.699f, 7.014f, -3.507f},
+    {TS_AIRF, 32, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.313f, 12.162f, 6.737f, 6.832f, -3.262f},
+    {TS_AIRF, 33, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.934f, 11.999f, 6.966f, 6.685f, -3.473f},
+    {TS_AIRF, 34, BAKED_BOTTOM|BAKED_SHAPE, 2.842f, 11.644f, 7.243f, 6.433f, -3.778f},
+    {TS_AIRF, 35, BAKED_BOTTOM|BAKED_SHAPE, 3.281f, 11.216f, 7.248f, 6.543f, -3.730f},
+    {TS_AIRF, 36, BAKED_BOTTOM|BAKED_SHAPE, 3.445f, 10.893f, 7.169f, 6.741f, -3.272f},
+    {TS_AIRF, 37, BAKED_BOTTOM|BAKED_SHAPE, 2.646f, 10.764f, 6.705f, 4.510f, -4.510f},
+    {TS_AIRF, 38, BAKED_BOTTOM|BAKED_SHAPE, 2.146f, 10.755f, 6.450f, 4.054f, -4.054f},
     {TS_AIRB, 0, BAKED_BOTTOM|BAKED_SHAPE, 2.558f, 11.932f, 7.245f, 4.712f, -4.712f},
     {TS_AIRB, 1, BAKED_BOTTOM|BAKED_SHAPE, 1.592f, 12.240f, 6.916f, 4.757f, -4.757f},
     {TS_AIRB, 2, BAKED_BOTTOM|BAKED_SHAPE, 1.161f, 12.218f, 6.689f, 4.767f, -4.767f},
@@ -543,6 +593,18 @@ static const BakedEcb baked_ecb[] = {
     {TS_AIRB, 20, BAKED_BOTTOM|BAKED_SHAPE, 2.810f, 16.420f, 9.615f, 2.186f, -10.825f},
     {TS_AIRB, 21, BAKED_BOTTOM|BAKED_SHAPE, 2.813f, 16.415f, 9.614f, 2.093f, -10.934f},
     {TS_AIRB, 22, BAKED_BOTTOM|BAKED_SHAPE, 2.893f, 16.107f, 9.500f, 2.131f, -9.273f},
+    {TS_AIRB, 23, BAKED_BOTTOM|BAKED_SHAPE, 3.123f, 16.108f, 9.615f, 2.881f, -2.881f},
+    {TS_AIRB, 24, BAKED_BOTTOM|BAKED_SHAPE, 3.462f, 16.464f, 9.963f, 2.794f, -2.794f},
+    {TS_AIRB, 25, BAKED_BOTTOM|BAKED_SHAPE, 3.869f, 16.920f, 10.395f, 3.249f, -3.249f},
+    {TS_AIRB, 26, BAKED_BOTTOM|BAKED_SHAPE, 3.587f, 16.409f, 9.998f, 3.557f, -3.557f},
+    {TS_AIRB, 27, BAKED_BOTTOM|BAKED_SHAPE, 2.739f, 15.176f, 8.957f, 3.708f, -3.708f},
+    {TS_AIRB, 28, BAKED_BOTTOM|BAKED_SHAPE, 2.148f, 14.299f, 8.223f, 4.500f, -4.500f},
+    {TS_AIRB, 29, BAKED_BOTTOM|BAKED_SHAPE, 1.775f, 14.166f, 7.970f, 4.444f, -5.870f},
+    {TS_AIRB, 30, BAKED_BOTTOM|BAKED_SHAPE, 1.702f, 14.017f, 7.859f, 5.158f, -4.930f},
+    {TS_AIRB, 31, BAKED_BOTTOM|BAKED_SHAPE, 1.705f, 13.227f, 7.466f, 4.467f, -4.467f},
+    {TS_AIRB, 32, BAKED_BOTTOM|BAKED_SHAPE, 1.774f, 12.002f, 6.888f, 4.384f, -4.384f},
+    {TS_AIRB, 33, BAKED_BOTTOM|BAKED_SHAPE, 1.878f, 10.854f, 6.366f, 4.141f, -4.141f},
+    {TS_AIRB, 34, BAKED_BOTTOM|BAKED_SHAPE, 1.973f, 10.850f, 6.412f, 3.966f, -3.966f},
     {TS_AIRHI, 0, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.650f, 8.222f, 5.436f, 2.885f, -2.885f},
     {TS_AIRHI, 1, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.432f, 10.995f, 6.714f, 3.324f, -3.324f},
     {TS_AIRHI, 2, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.196f, 18.670f, 10.933f, 3.114f, -3.114f},
@@ -568,6 +630,14 @@ static const BakedEcb baked_ecb[] = {
     {TS_AIRHI, 22, BAKED_BOTTOM|BAKED_SHAPE, 2.555f, 13.664f, 8.110f, 2.727f, -2.727f},
     {TS_AIRHI, 23, BAKED_BOTTOM|BAKED_SHAPE, 2.508f, 14.022f, 8.265f, 3.032f, -3.032f},
     {TS_AIRHI, 24, BAKED_BOTTOM|BAKED_SHAPE, 2.544f, 13.970f, 8.257f, 3.584f, -3.584f},
+    {TS_AIRHI, 25, BAKED_BOTTOM|BAKED_SHAPE, 2.686f, 13.554f, 8.120f, 3.833f, -3.833f},
+    {TS_AIRHI, 26, BAKED_BOTTOM|BAKED_SHAPE, 2.993f, 13.006f, 8.000f, 4.142f, -4.142f},
+    {TS_AIRHI, 27, BAKED_BOTTOM|BAKED_SHAPE, 3.365f, 12.331f, 7.848f, 4.197f, -4.197f},
+    {TS_AIRHI, 28, BAKED_BOTTOM|BAKED_SHAPE, 3.338f, 11.654f, 7.496f, 4.170f, -4.170f},
+    {TS_AIRHI, 29, BAKED_BOTTOM|BAKED_SHAPE, 2.975f, 11.052f, 7.013f, 4.090f, -4.090f},
+    {TS_AIRHI, 30, BAKED_BOTTOM|BAKED_SHAPE, 2.657f, 10.750f, 6.704f, 4.066f, -4.066f},
+    {TS_AIRHI, 31, BAKED_BOTTOM|BAKED_SHAPE, 2.405f, 10.764f, 6.585f, 3.954f, -3.954f},
+    {TS_AIRHI, 32, BAKED_BOTTOM|BAKED_SHAPE, 2.230f, 10.765f, 6.498f, 3.881f, -3.881f},
     {TS_AIRLW, 0, BAKED_BOTTOM|BAKED_SHAPE, 3.531f, 10.922f, 7.226f, 4.141f, -4.141f},
     {TS_AIRLW, 1, BAKED_BOTTOM|BAKED_SHAPE, 5.875f, 12.150f, 9.013f, 4.449f, -4.449f},
     {TS_AIRLW, 2, BAKED_BOTTOM|BAKED_SHAPE, 5.816f, 12.326f, 9.071f, 4.128f, -4.128f},
@@ -588,6 +658,30 @@ static const BakedEcb baked_ecb[] = {
     {TS_AIRLW, 17, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 0.834f, 11.154f, 5.994f, 4.424f, -4.424f},
     {TS_AIRLW, 18, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.435f, 11.568f, 6.501f, 4.319f, -4.319f},
     {TS_AIRLW, 19, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.827f, 13.237f, 7.532f, 4.733f, -4.733f},
+    {TS_AIRLW, 20, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.109f, 16.144f, 9.627f, 4.262f, -6.280f},
+    {TS_AIRLW, 21, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 3.982f, 17.853f, 10.918f, 4.782f, -4.782f},
+    {TS_AIRLW, 22, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.293f, 18.321f, 11.307f, 4.420f, -4.420f},
+    {TS_AIRLW, 23, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.549f, 18.545f, 11.547f, 4.090f, -4.090f},
+    {TS_AIRLW, 24, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.753f, 18.616f, 11.684f, 3.858f, -3.858f},
+    {TS_AIRLW, 25, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 4.911f, 18.668f, 11.790f, 3.753f, -3.753f},
+    {TS_AIRLW, 26, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.027f, 18.664f, 11.846f, 3.687f, -3.687f},
+    {TS_AIRLW, 27, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.109f, 18.575f, 11.842f, 3.553f, -3.553f},
+    {TS_AIRLW, 28, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.188f, 18.402f, 11.795f, 3.421f, -3.421f},
+    {TS_AIRLW, 29, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.257f, 18.039f, 11.648f, 3.151f, -3.151f},
+    {TS_AIRLW, 30, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.313f, 17.438f, 11.376f, 2.805f, -2.805f},
+    {TS_AIRLW, 31, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.391f, 16.684f, 11.037f, 2.358f, -2.358f},
+    {TS_AIRLW, 32, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.504f, 15.330f, 10.417f, 2.291f, -2.291f},
+    {TS_AIRLW, 33, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.714f, 13.285f, 9.499f, 2.740f, -2.740f},
+    {TS_AIRLW, 34, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 5.912f, 11.067f, 8.489f, 2.778f, -2.778f},
+    {TS_AIRLW, 35, BAKED_BOTTOM|BAKED_SHAPE, 6.096f, 10.020f, 8.058f, 2.702f, -2.702f},
+    {TS_AIRLW, 36, BAKED_BOTTOM|BAKED_SHAPE, 5.595f, 9.261f, 7.428f, 2.292f, -2.292f},
+    {TS_AIRLW, 37, BAKED_BOTTOM|BAKED_SHAPE, 4.176f, 7.485f, 5.830f, 2.218f, -2.218f},
+    {TS_AIRLW, 38, BAKED_BOTTOM|BAKED_SHAPE, 3.560f, 7.763f, 5.661f, 2.465f, -2.465f},
+    {TS_AIRLW, 39, BAKED_BOTTOM|BAKED_SHAPE, 4.538f, 9.678f, 7.108f, 2.000f, -2.000f},
+    {TS_AIRLW, 40, BAKED_BOTTOM|BAKED_SHAPE, 4.566f, 8.717f, 6.642f, 2.921f, -2.921f},
+    {TS_AIRLW, 41, BAKED_BOTTOM|BAKED_SHAPE, 4.111f, 11.395f, 7.753f, 2.251f, -2.251f},
+    {TS_AIRLW, 42, BAKED_BOTTOM|BAKED_SHAPE, 6.350f, 11.134f, 8.742f, 4.147f, -4.147f},
+    {TS_AIRLW, 43, BAKED_BOTTOM|BAKED_SHAPE, 3.526f, 10.804f, 7.165f, 4.211f, -4.211f},
     {TS_ESCAPEAIR, 0, BAKED_BOTTOM|BAKED_SHAPE, 1.7125f, 11.2112f, 6.4618f, 2.1920f, -2.1920f},
     {TS_ESCAPEAIR, 1, BAKED_BOTTOM|BAKED_SHAPE, 1.5205f, 12.0751f, 6.7978f, 2.7077f, -2.7077f},
     {TS_ESCAPEAIR, 2, BAKED_BOTTOM|BAKED_SHAPE, 1.5984f, 12.7514f, 7.1749f, 3.9936f, -3.9936f},
@@ -662,9 +756,25 @@ static void Learned_Bake(void)
         e->seen = 1;
     }
 
-    // JumpF was seen running out into Fall after 35 frames
-    state_len[TS_JUMPF] = 35;
-    state_next[TS_JUMPF] = TS_FALL;
+    // how long each runs before ending by itself, from captures run to the
+    // end (2026-10-03); aerials end in Fall, double jumps in FallAerial
+    static const s8 baked_len[][2] = {
+        {TS_JUMPF, 35},
+        {TS_JUMPB, 50},
+        {TS_JUMPAERIALF, 50},
+        {TS_JUMPAERIALB, 35},
+        {TS_AIRN, 44},
+        {TS_AIRF, 39},
+        {TS_AIRB, 35},
+        {TS_AIRHI, 33},
+        {TS_AIRLW, 44},
+    };
+    for (int i = 0; i < (int)countof(baked_len); i++)
+    {
+        int ts = baked_len[i][0];
+        state_len[ts] = baked_len[i][1];
+        state_next[ts] = Tracked_NaturalNext(ts);
+    }
 }
 
 static float Aerial_LandingLag(FighterData *fp, int ts)
@@ -3230,6 +3340,31 @@ static void Log_Frame(FighterData *fp, int ts, int frame)
     }
 }
 
+// FallSpecial (after an airdodge or up-B) isn't predicted yet; its frames are
+// logged in the same form so it can be built in later. It leans with drift
+// like the other falls (ftCo_Fall_Anim_Inner, smid and blend in the same
+// state variables).
+static void Log_FallSpecial(FighterData *fp, int sid, int frame)
+{
+    char buf[256];
+    CollData *cd = &fp->coll_data;
+    static const char *names[] = {"FallSpecial", "FallSpecialF", "FallSpecialB"};
+
+    sprintf(buf, "LL %d %s f%d pos %.4f %.4f vel %.5f %.5f ff%d lock%d ecb top %.4f bot %.4f l %.4f r %.4f side %.4f used bot %.4f ac%d stick %.4f %.4f face %d\n",
+            event_vars->game_timer, names[sid - ASID_FALLSPECIAL], frame,
+            fp->phys.pos.X, fp->phys.pos.Y, fp->phys.self_vel.X, fp->phys.self_vel.Y,
+            fp->flags.is_fastfall, cd->u.ecb_bot_lock_frames,
+            cd->ecbCurr_top.Y, cd->ecbCurr_bot.Y, cd->ecbCurr_left.X, cd->ecbCurr_right.X, cd->ecbCurr_right.Y,
+            cd->ecbCurrCorrect_bot.Y, fp->ftcmd_var.flag0 != 0,
+            fp->input.lstick.X, fp->input.lstick.Y, fp->facing_direction > 0 ? 1 : -1);
+    Log(buf);
+
+    float weight;
+    memcpy(&weight, &fp->state_var.state_var2, sizeof(weight));
+    sprintf(buf, "LLLEAN %d sm %d w %.5f\n", event_vars->game_timer, fp->state_var.state_var1, weight);
+    Log(buf);
+}
+
 // A jumpsquat frame: animation frame, position, ground speed, stick and
 // buttons, so a ground preview can be replayed.
 static void Log_Squat(FighterData *fp)
@@ -5447,6 +5582,8 @@ void Event_Think(GOBJ *event)
         live_visible = 0;
         seg_valid = 0;
         sprintf(text_ai, "-");
+        if (logging && !disturbed && sid >= ASID_FALLSPECIAL && sid <= ASID_FALLSPECIALB)
+            Log_FallSpecial(fp, sid, frame_in_state);
     }
     else if (Ground_CanJump(sid) && !disturbed && !ghost_visible)
         Ground_Preview(fp);

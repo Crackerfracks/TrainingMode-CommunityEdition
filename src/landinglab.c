@@ -43,6 +43,7 @@
 
 #define LL_SIM_FRAMES 240   // how far ahead to simulate
 #define LL_STATE_FRAMES 128 // frames learned per state
+#define LL_FALL_LOOP 8       // Falcon's Fall and FallAerial animations loop every 8 frames
 #define LL_TIMER_MAX 0xFE   // input timers stop counting here
 
 // ftCommonData values. MexTK declares this struct with the wrong types for
@@ -106,16 +107,7 @@ enum TrackedState
     TS_AIRLW,
     TS_ESCAPEAIR,
 
-    TS_COUNT,
-
-    // ECB rows only, not states: a fall's pose leaned all the way toward its
-    // forward or backward animation (FallF/FallB, FallAerialF/FallAerialB)
-    TS_FALL_F = TS_COUNT,
-    TS_FALL_B,
-    TS_FALLAERIAL_F,
-    TS_FALLAERIAL_B,
-
-    TS_ECB_COUNT
+    TS_COUNT
 };
 
 static const int tracked_state_ids[TS_COUNT] = {
@@ -252,7 +244,7 @@ typedef struct EcbSample
     u8 seen;        // times this frame has been seen (stops at 255)
 } EcbSample;
 
-static EcbSample *ecb_table;      // [TS_ECB_COUNT][LL_STATE_FRAMES]
+static EcbSample *ecb_table;      // [TS_COUNT][LL_STATE_FRAMES]
 static s16 state_len[TS_COUNT];   // frames a state lasts before ending by itself, 0 = not seen
 static s8 state_next[TS_COUNT];   // state that followed when it ended, -1 = not seen
 
@@ -270,13 +262,15 @@ static int Tracked_Next(int ts)
 
 static void Learned_Clear(void)
 {
-    memset(ecb_table, 0, sizeof(EcbSample) * TS_ECB_COUNT * LL_STATE_FRAMES);
+    memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     memset(state_len, 0, sizeof(state_len));
     memset(state_next, -1, sizeof(state_next));
 }
 
 static EcbSample *Ecb_Get(int ts, int frame)
 {
+    if (ts == TS_FALL || ts == TS_FALLAERIAL)
+        frame %= LL_FALL_LOOP; // the fall animations loop
     if (frame >= LL_STATE_FRAMES)
         frame = LL_STATE_FRAMES - 1;
     return &ecb_table[ts * LL_STATE_FRAMES + frame];
@@ -285,8 +279,8 @@ static EcbSample *Ecb_Get(int ts, int frame)
 // Falcon's ECB on every frame of his jumps, double jumps, falls and aerials,
 // from play sessions on a vanilla ISO (logged by v0.1 and v0.2,
 // 2026-10-03). Bottoms are missing on the frames the post-jump lock hid
-// them. Fall's pose blends from whatever came before, so its row is the
-// typical frame, not an exact one; play replaces it with what it sees.
+// them. The falls are an 8-frame loop each, from captures that kept Falcon's
+// speed at 0, so they're the plain pose; drifting leans it (Lean_Ecb).
 // Aerials were only seen up to their landing, so their last frames are still
 // learned. The airdodge comes from a v0.4 session; its frames don't depend on
 // the state it was pressed from.
@@ -454,45 +448,24 @@ static const BakedEcb baked_ecb[] = {
     {TS_JUMPAERIALB, 29, BAKED_BOTTOM|BAKED_SHAPE, 4.807f, 10.822f, 7.815f, 2.846f, -2.846f},
     {TS_JUMPAERIALB, 30, BAKED_BOTTOM|BAKED_SHAPE, 4.590f, 11.217f, 7.904f, 2.770f, -2.770f},
     {TS_JUMPAERIALB, 31, BAKED_BOTTOM|BAKED_SHAPE, 4.093f, 11.309f, 7.701f, 3.772f, -3.772f},
-    {TS_FALL, 0, BAKED_BOTTOM|BAKED_SHAPE, 1.998f, 10.779f, 6.389f, 3.933f, -3.933f},
-    {TS_FALL, 1, BAKED_BOTTOM|BAKED_SHAPE, 2.078f, 10.764f, 6.421f, 4.064f, -4.064f},
-    {TS_FALL, 2, BAKED_BOTTOM|BAKED_SHAPE, 2.405f, 11.024f, 6.715f, 4.328f, -4.328f},
-    {TS_FALL, 3, BAKED_BOTTOM|BAKED_SHAPE, 2.764f, 11.400f, 7.082f, 4.520f, -4.520f},
-    {TS_FALL, 4, BAKED_BOTTOM|BAKED_SHAPE, 2.803f, 11.438f, 7.120f, 4.584f, -4.584f},
-    {TS_FALL, 5, BAKED_BOTTOM|BAKED_SHAPE, 2.663f, 11.458f, 7.056f, 4.695f, -4.695f},
-    {TS_FALL, 6, BAKED_BOTTOM|BAKED_SHAPE, 2.198f, 10.821f, 6.393f, 4.586f, -4.586f},
-    {TS_FALL, 7, BAKED_BOTTOM|BAKED_SHAPE, 1.748f, 10.560f, 6.046f, 4.382f, -4.382f},
-    {TS_FALL, 8, BAKED_BOTTOM|BAKED_SHAPE, 1.732f, 10.591f, 6.082f, 4.198f, -4.198f},
-    {TS_FALL, 9, BAKED_BOTTOM|BAKED_SHAPE, 1.827f, 10.759f, 6.345f, 4.139f, -4.139f},
-    {TS_FALL, 10, BAKED_BOTTOM|BAKED_SHAPE, 2.182f, 11.086f, 6.683f, 4.256f, -4.256f},
-    {TS_FALL, 11, BAKED_BOTTOM|BAKED_SHAPE, 2.434f, 11.268f, 6.840f, 4.346f, -4.346f},
-    {TS_FALL, 12, BAKED_BOTTOM|BAKED_SHAPE, 2.373f, 11.213f, 6.793f, 4.433f, -4.433f},
-    {TS_FALL, 13, BAKED_BOTTOM|BAKED_SHAPE, 2.105f, 10.985f, 6.545f, 4.543f, -4.543f},
-    {TS_FALL, 14, BAKED_BOTTOM|BAKED_SHAPE, 1.788f, 10.726f, 6.257f, 4.592f, -4.592f},
-    {TS_FALL, 15, BAKED_BOTTOM|BAKED_SHAPE, 1.587f, 10.589f, 6.088f, 4.434f, -4.434f},
-    {TS_FALL, 16, BAKED_BOTTOM|BAKED_SHAPE, 1.613f, 10.619f, 6.116f, 4.159f, -4.159f},
-    {TS_FALL, 17, BAKED_BOTTOM|BAKED_SHAPE, 1.839f, 10.719f, 6.273f, 4.126f, -4.126f},
-    {TS_FALL, 18, BAKED_BOTTOM|BAKED_SHAPE, 2.192f, 11.043f, 6.642f, 4.121f, -4.121f},
-    {TS_FALL, 19, BAKED_BOTTOM|BAKED_SHAPE, 2.442f, 11.276f, 6.826f, 4.164f, -4.164f},
-    {TS_FALL, 20, BAKED_BOTTOM|BAKED_SHAPE, 2.384f, 11.213f, 6.798f, 4.281f, -4.281f},
-    {TS_FALL, 21, BAKED_BOTTOM|BAKED_SHAPE, 2.154f, 11.007f, 6.580f, 4.416f, -4.416f},
-    {TS_FALL, 22, BAKED_BOTTOM|BAKED_SHAPE, 1.815f, 10.745f, 6.280f, 4.540f, -4.540f},
-    {TS_FALL, 23, BAKED_BOTTOM|BAKED_SHAPE, 2.102f, 10.765f, 6.433f, 4.546f, -4.546f},
-    {TS_FALL, 24, BAKED_BOTTOM|BAKED_SHAPE, 2.022f, 10.835f, 6.429f, 4.303f, -4.303f},
-    {TS_FALL, 25, BAKED_BOTTOM|BAKED_SHAPE, 2.093f, 10.803f, 6.446f, 4.132f, -4.132f},
-    {TS_FALL, 26, BAKED_BOTTOM|BAKED_SHAPE, 2.417f, 11.122f, 6.734f, 4.175f, -4.175f},
-    {TS_FALL, 27, BAKED_BOTTOM|BAKED_SHAPE, 2.726f, 11.291f, 7.008f, 4.270f, -4.270f},
-    {TS_FALL, 28, BAKED_BOTTOM|BAKED_SHAPE, 2.757f, 11.270f, 7.013f, 4.382f, -4.382f},
-    {TS_FALL, 29, BAKED_BOTTOM|BAKED_SHAPE, 2.834f, 11.988f, 7.411f, 4.514f, -4.514f},
-    {TS_FALL, 30, BAKED_BOTTOM|BAKED_SHAPE, 2.576f, 11.728f, 7.152f, 4.580f, -4.580f},
-    {TS_FALL, 31, BAKED_BOTTOM|BAKED_SHAPE, 2.428f, 11.576f, 7.002f, 4.412f, -4.412f},
-    {TS_FALL, 32, BAKED_BOTTOM|BAKED_SHAPE, 2.374f, 11.543f, 6.958f, 4.146f, -4.146f},
-    {TS_FALL, 33, BAKED_BOTTOM|BAKED_SHAPE, 2.495f, 11.576f, 7.036f, 4.123f, -4.123f},
-    {TS_FALL, 34, BAKED_BOTTOM|BAKED_SHAPE, 2.744f, 11.736f, 7.240f, 4.287f, -4.287f},
-    {TS_FALL, 35, BAKED_BOTTOM, 3.319f, 12.555f, 7.937f, 0.f, 0.f},
-    {TS_FALL, 36, BAKED_BOTTOM, 3.201f, 12.441f, 7.821f, 0.f, 0.f},
-    {TS_FALL, 37, BAKED_BOTTOM, 2.951f, 12.215f, 7.583f, 0.f, 0.f},
-    {TS_FALL, 38, BAKED_BOTTOM, 2.673f, 11.887f, 7.280f, 0.f, 0.f},
+    // BEGIN generated fall data (lean captures, 2026-10-03)
+    {TS_FALL, 0, BAKED_BOTTOM|BAKED_SHAPE, 1.9980f, 10.7793f, 6.3886f, 3.9122f, -3.9122f},
+    {TS_FALL, 1, BAKED_BOTTOM|BAKED_SHAPE, 2.0777f, 10.7642f, 6.4209f, 4.0309f, -4.0309f},
+    {TS_FALL, 2, BAKED_BOTTOM|BAKED_SHAPE, 2.4055f, 11.0242f, 6.7149f, 4.2774f, -4.2774f},
+    {TS_FALL, 3, BAKED_BOTTOM|BAKED_SHAPE, 2.7215f, 11.2778f, 6.9996f, 4.4340f, -4.4340f},
+    {TS_FALL, 4, BAKED_BOTTOM|BAKED_SHAPE, 2.7574f, 11.2699f, 7.0137f, 4.4809f, -4.4809f},
+    {TS_FALL, 5, BAKED_BOTTOM|BAKED_SHAPE, 2.5889f, 11.2180f, 6.9035f, 4.5836f, -4.5836f},
+    {TS_FALL, 6, BAKED_BOTTOM|BAKED_SHAPE, 2.3175f, 11.0125f, 6.6650f, 4.5531f, -4.5531f},
+    {TS_FALL, 7, BAKED_BOTTOM|BAKED_SHAPE, 2.1016f, 10.7649f, 6.4332f, 4.1938f, -4.1938f},
+    {TS_FALLAERIAL, 0, BAKED_BOTTOM|BAKED_SHAPE, 2.7303f, 11.2273f, 6.9788f, 6.3030f, -4.7787f},
+    {TS_FALLAERIAL, 1, BAKED_BOTTOM|BAKED_SHAPE, 2.8241f, 11.4565f, 7.1403f, 6.5248f, -4.7942f},
+    {TS_FALLAERIAL, 2, BAKED_BOTTOM|BAKED_SHAPE, 3.2168f, 11.6490f, 7.4329f, 6.8133f, -4.8704f},
+    {TS_FALLAERIAL, 3, BAKED_BOTTOM|BAKED_SHAPE, 3.6513f, 11.6814f, 7.6664f, 6.7157f, -4.9615f},
+    {TS_FALLAERIAL, 4, BAKED_BOTTOM|BAKED_SHAPE, 3.8598f, 11.5121f, 7.6859f, 6.5846f, -4.9643f},
+    {TS_FALLAERIAL, 5, BAKED_BOTTOM|BAKED_SHAPE, 4.0346f, 11.5246f, 7.7796f, 6.5223f, -4.9538f},
+    {TS_FALLAERIAL, 6, BAKED_BOTTOM|BAKED_SHAPE, 3.9235f, 11.3793f, 7.6514f, 6.4291f, -4.8820f},
+    {TS_FALLAERIAL, 7, BAKED_BOTTOM|BAKED_SHAPE, 3.1963f, 11.2052f, 7.2007f, 6.3251f, -4.8031f},
+    // END generated fall data
     {TS_AIRN, 0, BAKED_BOTTOM|BAKED_SHAPE, 2.407f, 12.501f, 7.454f, 2.714f, -2.714f},
     {TS_AIRN, 1, BAKED_BOTTOM|BAKED_SHAPE, 2.703f, 12.960f, 7.832f, 2.152f, -2.152f},
     {TS_AIRN, 2, BAKED_BOTTOM|BAKED_SHAPE, 2.091f, 12.592f, 7.341f, 4.900f, -4.900f},
@@ -1721,7 +1694,7 @@ typedef struct SimState
     int ecb_pending; // in an aerial or airdodge whose own ECB bottom hasn't been used yet (lock)
     int dodge_flat;  // the airdodge started with no vertical speed
     float lean;      // a fall's blend toward its leaning pose
-    int lean_row;    // the leaning pose's ECB row, or -1 for none
+    int lean_side;   // LEAN_FORWARD, LEAN_BACK or LEAN_NONE
 } SimState;
 
 // What happened on one simulated frame.
@@ -1932,8 +1905,92 @@ static void Ecb_Fix(SimEcb *ecb)
 // blend moves part of the way there each frame, and the pose is the plain
 // one mixed with the leaning one by that blend. Entering the fall starts it
 // at 0, and the animation step that moves it runs before physics, so it
-// sees last frame's speed. Returns the leaning pose's ECB row, or -1.
-static int Lean_Target(FighterData *fp, int ts, float vx, float facing, float *target)
+// sees last frame's speed. The bones are mixed, not the ECB, so the ECB
+// isn't a straight line between the two poses: it's measured at several
+// blends (below) and read between the nearest two.
+#define LEAN_NONE 0
+#define LEAN_FORWARD 1
+#define LEAN_BACK 2
+
+typedef struct LeanEcb
+{
+    u8 fall; // 0 Fall, 1 FallAerial
+    u8 back; // leaning backward
+    u8 k;    // animation frame in the loop
+    float lean, bottom, top, side, front, back_x;
+} LeanEcb;
+
+// Falcon at steady drift speeds, facing right, from Fall and FallAerial
+// captures (a 0.4.1 test build, 2026-10-03), in order of fall, direction,
+// blend and frame.
+static const LeanEcb lean_ecb[] = {
+    // BEGIN generated lean data (lean captures, 2026-10-03)
+    {0, 0, 0, 0.44271f, 1.6174f, 10.6213f, 6.1193f, 4.1293f, -4.1293f},
+    {0, 0, 1, 0.44358f, 1.8458f, 10.6897f, 6.2678f, 4.0925f, -4.0925f},
+    {0, 0, 2, 0.44401f, 2.1964f, 10.9764f, 6.5864f, 4.2279f, -4.2279f},
+    {0, 0, 3, 0.44423f, 2.4556f, 11.1876f, 6.8216f, 4.3446f, -4.3446f},
+    {0, 0, 4, 0.44434f, 2.3997f, 11.2174f, 6.8085f, 4.4066f, -4.4066f},
+    {0, 0, 5, 0.44439f, 2.1329f, 11.0033f, 6.5681f, 4.5073f, -4.5073f},
+    {0, 0, 6, 0.44442f, 1.8095f, 10.7410f, 6.2752f, 4.5424f, -4.5424f},
+    {0, 0, 7, 0.44443f, 1.5997f, 10.5946f, 6.0971f, 4.3704f, -4.3704f},
+    {0, 0, 0, 0.99609f, 1.4985f, 10.5281f, 6.0133f, 4.3217f, -4.3217f},
+    {0, 0, 1, 0.99805f, 1.8460f, 10.9572f, 6.4016f, 4.0777f, -4.0777f},
+    {0, 0, 2, 0.99902f, 2.1968f, 11.3218f, 6.7593f, 4.0265f, -4.0265f},
+    {0, 0, 3, 0.99951f, 2.3595f, 11.3448f, 6.8521f, 4.0322f, -4.0322f},
+    {0, 0, 4, 0.99976f, 2.1887f, 11.1820f, 6.6853f, 4.1621f, -4.1621f},
+    {0, 0, 5, 0.99988f, 1.8405f, 10.7815f, 6.3110f, 4.3018f, -4.3018f},
+    {0, 0, 6, 0.99994f, 1.4983f, 10.4086f, 5.9534f, 4.4680f, -4.4680f},
+    {0, 0, 7, 0.99997f, 1.3435f, 10.3738f, 5.8587f, 4.5706f, -4.5706f},
+    {0, 1, 0, 0.99998f, 4.1802f, 12.9629f, 8.5716f, 4.1224f, -4.1224f},
+    {0, 1, 1, 0.99999f, 4.3624f, 13.1786f, 8.7705f, 4.0581f, -4.0581f},
+    {0, 1, 2, 1.00000f, 4.5301f, 13.3773f, 8.9537f, 4.2010f, -4.2010f},
+    {0, 1, 3, 1.00000f, 4.4520f, 13.4174f, 8.9347f, 4.3236f, -4.3236f},
+    {0, 1, 4, 1.00000f, 4.4204f, 13.3854f, 8.9029f, 4.3761f, -4.3761f},
+    {0, 1, 5, 1.00000f, 4.2175f, 13.1808f, 8.6991f, 4.3440f, -4.3440f},
+    {0, 1, 6, 1.00000f, 4.1479f, 12.9629f, 8.5554f, 4.2744f, -4.2744f},
+    {0, 1, 7, 1.00000f, 4.2168f, 12.8845f, 8.5506f, 4.2368f, -4.2368f},
+    {1, 0, 0, 0.44271f, 2.1733f, 12.1074f, 7.1403f, 6.0447f, -4.9537f},
+    {1, 0, 1, 0.44358f, 2.4487f, 12.2790f, 7.3638f, 6.1512f, -4.7088f},
+    {1, 0, 2, 0.44401f, 2.8818f, 12.5035f, 7.6927f, 6.3041f, -4.7405f},
+    {1, 0, 3, 0.44423f, 3.2411f, 12.6388f, 7.9399f, 6.2142f, -4.8742f},
+    {1, 0, 4, 0.44434f, 3.2190f, 12.4891f, 7.8540f, 6.1015f, -4.9870f},
+    {1, 0, 5, 0.44439f, 3.0541f, 12.2593f, 7.6567f, 6.0826f, -5.1417f},
+    {1, 0, 6, 0.44442f, 2.7432f, 12.1656f, 7.4544f, 6.0645f, -5.2267f},
+    {1, 0, 7, 0.44443f, 2.2653f, 12.1413f, 7.2033f, 6.0709f, -5.2318f},
+    {1, 0, 0, 0.99998f, 1.6711f, 13.3501f, 7.5106f, 5.3884f, -4.7016f},
+    {1, 0, 1, 0.99805f, 2.1022f, 13.2930f, 7.6976f, 4.8464f, -4.8464f},
+    {1, 0, 2, 0.99902f, 2.5530f, 13.5720f, 8.0625f, 4.8683f, -4.8683f},
+    {1, 0, 3, 0.99951f, 2.8082f, 13.8932f, 8.3507f, 4.9261f, -4.9261f},
+    {1, 0, 4, 0.99976f, 2.5518f, 13.8431f, 8.1974f, 4.9933f, -4.9933f},
+    {1, 0, 5, 0.99988f, 2.1002f, 13.7431f, 7.9216f, 5.3950f, -4.8276f},
+    {1, 0, 6, 0.99994f, 1.6712f, 13.6793f, 7.6752f, 5.3871f, -5.0218f},
+    {1, 0, 7, 0.99997f, 1.4583f, 13.6477f, 7.5530f, 5.4550f, -5.1314f},
+    {1, 1, 0, 0.99998f, 3.0985f, 14.4461f, 8.7723f, 7.0211f, -6.7228f},
+    {1, 1, 1, 0.99805f, 3.5772f, 14.3095f, 8.9433f, 7.0915f, -6.4214f},
+    {1, 1, 2, 0.99902f, 4.2371f, 14.0263f, 9.1317f, 7.0893f, -6.3072f},
+    {1, 1, 3, 0.99951f, 4.5840f, 13.4201f, 9.0021f, 7.1140f, -6.1270f},
+    {1, 1, 4, 0.99976f, 4.2629f, 13.0867f, 8.6748f, 7.1107f, -6.0962f},
+    {1, 1, 5, 0.99988f, 3.7212f, 13.3325f, 8.5268f, 7.0738f, -6.3584f},
+    {1, 1, 6, 0.99994f, 3.1781f, 13.9704f, 8.5743f, 7.0261f, -6.6704f},
+    {1, 1, 7, 0.99997f, 2.8511f, 14.3591f, 8.6051f, 7.0198f, -6.9216f},
+    // END generated lean data
+};
+
+static int lean_first[2][2]; // first row of each fall and direction
+static int lean_levels[2][2]; // blends measured for it
+
+static void Lean_Index(void)
+{
+    for (int i = (int)countof(lean_ecb) - 1; i >= 0; i--)
+    {
+        const LeanEcb *l = &lean_ecb[i];
+        lean_first[l->fall][l->back] = i;
+        if (l->k == 0)
+            lean_levels[l->fall][l->back]++;
+    }
+}
+
+static int Lean_Target(FighterData *fp, float vx, float facing, float *target)
 {
     float frac = vx / fp->attr.aerial_drift_max;
     if (frac > 1.f)
@@ -1942,43 +1999,49 @@ static int Lean_Target(FighterData *fp, int ts, float vx, float facing, float *t
         frac = -1.f;
 
     *target = 0;
-    int row = -1;
-    if (fabs(frac) > common_fall_lean_deadzone)
-    {
-        int forward = frac * facing > 0;
-        if (ts == TS_FALL)
-            row = forward ? TS_FALL_F : TS_FALL_B;
-        else
-            row = forward ? TS_FALLAERIAL_F : TS_FALLAERIAL_B;
-        *target = (fabs(frac) - common_fall_lean_deadzone) / (1.f - common_fall_lean_deadzone);
-    }
-    return row;
+    if (fabs(frac) <= common_fall_lean_deadzone)
+        return LEAN_NONE;
+    *target = (fabs(frac) - common_fall_lean_deadzone) / (1.f - common_fall_lean_deadzone);
+    return frac * facing > 0 ? LEAN_FORWARD : LEAN_BACK;
 }
 
-static int Lean_Update(FighterData *fp, int ts, float vx, float facing, float *lean)
+static int Lean_Update(FighterData *fp, float vx, float facing, float *lean)
 {
     float target;
-    int row = Lean_Target(fp, ts, vx, facing, &target);
+    int side = Lean_Target(fp, vx, facing, &target);
     *lean += common_fall_lean_rate * (target - *lean);
-    return row;
+    return side;
 }
 
-// The plain pose's ECB mixed with the leaning one's, if both are known.
-static EcbSample *Lean_Ecb(EcbSample *plain, int row, int frame, float lean, EcbSample *out)
+// The fall's ECB on this frame of its loop with the given lean, between the
+// two nearest measured blends (the plain pose is blend 0).
+static EcbSample *Lean_Ecb(EcbSample *plain, int ts, int side, int frame, float lean, EcbSample *out)
 {
-    if (row < 0 || lean <= 0.f)
-        return plain;
-    EcbSample *l = Ecb_Get(row, frame);
-    if (!l->has_bottom || !l->has_shape || !plain->has_bottom || !plain->has_shape)
+    int fall = ts == TS_FALLAERIAL, back = side == LEAN_BACK;
+    int levels = lean_levels[fall][back];
+    if (side == LEAN_NONE || lean <= 0.f || levels == 0 || !plain->has_bottom || !plain->has_shape)
         return plain;
 
-    float k = 1.f - lean;
+    int k = frame % LL_FALL_LOOP;
+    float w0 = 0, b0 = plain->bottom, t0 = plain->top, s0 = plain->side_y, f0 = plain->front, k0 = plain->back;
+    const LeanEcb *hi = 0;
+    for (int i = 0; i < levels; i++)
+    {
+        hi = &lean_ecb[lean_first[fall][back] + i * LL_FALL_LOOP + k];
+        if (lean <= hi->lean || i == levels - 1)
+            break;
+        w0 = hi->lean, b0 = hi->bottom, t0 = hi->top, s0 = hi->side, f0 = hi->front, k0 = hi->back_x;
+    }
+    float t = hi->lean > w0 ? (lean - w0) / (hi->lean - w0) : 1.f;
+    if (t > 1.f)
+        t = 1.f;
+
     *out = *plain;
-    out->bottom = plain->bottom * k + l->bottom * lean;
-    out->top = plain->top * k + l->top * lean;
-    out->side_y = plain->side_y * k + l->side_y * lean;
-    out->front = plain->front * k + l->front * lean;
-    out->back = plain->back * k + l->back * lean;
+    out->bottom = b0 + (hi->bottom - b0) * t;
+    out->top = t0 + (hi->top - t0) * t;
+    out->side_y = s0 + (hi->side - s0) * t;
+    out->front = f0 + (hi->front - f0) * t;
+    out->back = k0 + (hi->back_x - k0) * t;
     return out;
 }
 
@@ -1996,18 +2059,14 @@ static float Lean_FromFighter(FighterData *fp, int ts)
     return lean;
 }
 
-// The ECB row the live frame's pose belongs to, or -1 when it's a mix of
-// two that says nothing about either. vx is the speed the animation saw
-// (last frame's).
-static int Lean_RecordRow(FighterData *fp, int ts, float vx)
+// Whether the live frame's ECB can be learned: a fall only teaches its plain
+// pose. vx is the speed the animation saw (last frame's).
+static int Lean_IsPlain(FighterData *fp, int ts, float vx)
 {
     if (!Is_Fall(ts))
-        return ts;
-    float lean = Lean_FromFighter(fp, ts), target;
-    int row = Lean_Target(fp, ts, vx, fp->facing_direction, &target);
-    if (lean < 0.002f || row < 0)
-        return ts;
-    return lean > 0.998f ? row : -1;
+        return 1;
+    float target;
+    return Lean_FromFighter(fp, ts) < 0.002f || Lean_Target(fp, vx, fp->facing_direction, &target) == LEAN_NONE;
 }
 
 static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
@@ -2072,7 +2131,7 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->ecb_pending = (Tracked_IsAerial(start->ts) || start->ts == TS_ESCAPEAIR) && start->ecb_lock > 0;
     s->dodge_flat = start->ts == TS_ESCAPEAIR && start->vel.Y == 0 && start->vel.X != 0;
     s->lean = start->lean;
-    s->lean_row = -1;
+    s->lean_side = LEAN_NONE;
 }
 
 // One frame, in the game's order: animation (the state can end), interrupt
@@ -2142,10 +2201,10 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
         if (s->frame == 0)
         {
             s->lean = 0;
-            s->lean_row = -1;
+            s->lean_side = LEAN_NONE;
         }
         else
-            s->lean_row = Lean_Update(fp, s->ts, s->vx, start->facing, &s->lean);
+            s->lean_side = Lean_Update(fp, s->vx, start->facing, &s->lean);
     }
 
     // input: the stick is held, so its timers keep counting
@@ -2158,7 +2217,7 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     // is the flag that ends the speed decay
     EcbSample *e = Ecb_Get(s->ts, s->frame);
     if (Is_Fall(s->ts))
-        e = Lean_Ecb(e, s->lean_row, s->frame, s->lean, &out->lean_ecb);
+        e = Lean_Ecb(e, s->ts, s->lean_side, s->frame, s->lean, &out->lean_ecb);
     out->ecb = e;
 
     if (s->ts == TS_ESCAPEAIR && !e->aerial_lag)
@@ -5032,9 +5091,10 @@ void Event_Init(GOBJ *gobj)
         circle[i].Y = sin(t);
     }
 
-    ecb_table = calloc(sizeof(EcbSample) * TS_ECB_COUNT * LL_STATE_FRAMES);
+    ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     Learned_Clear();
     Learned_Bake();
+    Lean_Index();
     pred_live = calloc(sizeof(Prediction));
     pred_seg = calloc(sizeof(Prediction));
     pred_fh = calloc(sizeof(Prediction));
@@ -5117,9 +5177,8 @@ void Event_Think(GOBJ *event)
 
     if (tracked_air)
     {
-        int ecb_row = Lean_RecordRow(fp, ts, prev_vel.X);
-        if (ecb_row >= 0)
-            Ecb_Record(fp, ecb_row, frame_in_state);
+        if (Lean_IsPlain(fp, ts, prev_vel.X))
+            Ecb_Record(fp, ts, frame_in_state);
         if (logging)
         {
             if (!stage_logged)

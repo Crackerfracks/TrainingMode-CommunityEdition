@@ -3,11 +3,12 @@
  * Landing Lab (Captain Falcon).
  *
  * While Falcon is airborne, this draws where he will touch down if the stick
- * stays where it is and no buttons are pressed, colored by what kind of
- * landing it will be: NIL, normal landing, L-cancel or full aerial lag. Ticks
- * on that path mark the frames where pressing an aerial forces a touchdown
- * (an aerial interrupt). After a landing, the prediction made when you last
- * changed your input stays on screen next to the path you really took.
+ * stays where it is and no buttons are pressed. Only NILs and aerial
+ * interrupts get color; other landings are a thin gray line. Thick stretches
+ * of the path mark the frames where pressing an aerial forces a touchdown
+ * (an aerial interrupt), with arrows for the aerials that do it, and a ring
+ * counts down to the next one. On the ground it previews a full hop and a
+ * short hop pressed right now.
  *
  * An aerial interrupt: pressing an aerial swaps the ECB to the aerial's pose
  * on that same frame. If the new ECB bottom ends up at or below a floor, you
@@ -15,17 +16,20 @@
  * until the lock ends and uses whatever aerial frame you're on by then.
  *
  * Whether a landing is a NIL or an aerial interrupt depends on the exact ECB
- * bottom on each frame of each animation, which the game only computes on
- * the frame itself. So the event learns it while you play: every airborne
- * frame stores the ECB for (state, frame in state). Parts of a prediction that
- * rely on frames it hasn't seen yet are drawn gray.
+ * on each frame of each animation, which the game only computes on the frame
+ * itself. Falcon's jumps and falls are built in (baked from a logged
+ * session); everything else is learned while you play, keyed by (state,
+ * frame in state). Parts of a prediction that rely on frames it hasn't seen
+ * yet are drawn gray.
  *
- * The physics and the floor test are ports of the game's own code, checked
+ * The physics and collision are ports of the game's own code, checked
  * against the decomp: ft_80084DB0 (air physics), ftCommon_CalcSelfAccel_
- * DriftFrom (drift), mpColl_LoadECB (ECB bottom lock), mpCheckFloor and
- * mpLineIntersection(H) (floor crossing), ft_80082B1C (NIL),
- * ftCo_AttackAir_EnterFromMsid (aerial start) and ftCo_LandingAir_EnterWithLag
- * (aerial lag, L-cancel).
+ * DriftFrom (drift), mpColl_LoadECB (ECB bottom lock), mpColl_80046904's
+ * wall pass (wall pushout), mpCheckFloor and mpLineIntersection(H) (floor
+ * crossing), ft_80082B1C (NIL), ftCo_AttackAir_EnterFromMsid (aerial start),
+ * ftCo_LandingAir_EnterWithLag (aerial lag, L-cancel), and ftCo_KneeBend /
+ * ftCo_Jump_Enter (jumps from the ground). Ceilings and ledge grabs aren't
+ * simulated.
  */
 
 #include "../MexTK/mex.h"
@@ -50,6 +54,10 @@
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
+#define LINEFLAG_CEIL (1u << 1)
+#define LINEFLAG_RWALL (1u << 2) // faces right: the right side of a solid
+#define LINEFLAG_LWALL (1u << 3)
+#define LINEFLAG_KIND 0xFu
 #define LINEFLAG_EMPTY (1u << 7)
 #define LINEFLAG_ENABLED (1u << 16)
 #define LINEFLAG_HIDDEN (1u << 18)
@@ -240,6 +248,241 @@ static EcbSample *Ecb_Get(int ts, int frame)
     return &ecb_table[ts * LL_STATE_FRAMES + frame];
 }
 
+// Falcon's ECB on every frame of his jumps, double jumps and falls, from a
+// play session on a vanilla ISO (logged by v0.1, 2026-10-03). Bottoms are
+// missing on the frames the post-jump lock hid them. Fall's pose blends
+// from whatever came before, so its row is the typical frame, not an exact
+// one; play replaces it with what it sees. Aerials still have to be learned.
+#define BAKED_BOTTOM 1
+#define BAKED_SHAPE 2
+
+typedef struct BakedEcb
+{
+    s8 ts;
+    u8 frame;
+    u8 flags;
+    float bottom, top, side, front, back;
+} BakedEcb;
+
+static const BakedEcb baked_ecb[] = {
+    {TS_JUMPF, 0, BAKED_SHAPE, 0.f, 17.462f, 10.696f, 4.895f, -4.895f},
+    {TS_JUMPF, 1, BAKED_SHAPE, 0.f, 17.607f, 10.721f, 4.966f, -4.966f},
+    {TS_JUMPF, 2, BAKED_SHAPE, 0.f, 17.729f, 10.736f, 4.489f, -5.587f},
+    {TS_JUMPF, 3, BAKED_SHAPE, 0.f, 17.827f, 10.743f, 4.443f, -5.780f},
+    {TS_JUMPF, 4, BAKED_SHAPE, 0.f, 17.904f, 10.742f, 4.403f, -5.965f},
+    {TS_JUMPF, 5, BAKED_SHAPE, 0.f, 17.962f, 10.734f, 4.370f, -6.139f},
+    {TS_JUMPF, 6, BAKED_SHAPE, 0.f, 18.004f, 10.720f, 4.345f, -6.299f},
+    {TS_JUMPF, 7, BAKED_SHAPE, 0.f, 18.032f, 10.701f, 4.327f, -6.441f},
+    {TS_JUMPF, 8, BAKED_SHAPE, 0.f, 18.048f, 10.679f, 4.316f, -6.562f},
+    {TS_JUMPF, 9, BAKED_BOTTOM|BAKED_SHAPE, 3.252f, 18.058f, 10.655f, 4.313f, -6.656f},
+    {TS_JUMPF, 10, BAKED_BOTTOM|BAKED_SHAPE, 3.197f, 18.062f, 10.630f, 4.316f, -6.717f},
+    {TS_JUMPF, 11, BAKED_BOTTOM|BAKED_SHAPE, 3.144f, 18.067f, 10.605f, 4.325f, -6.738f},
+    {TS_JUMPF, 12, BAKED_BOTTOM|BAKED_SHAPE, 3.092f, 18.074f, 10.583f, 4.339f, -6.719f},
+    {TS_JUMPF, 13, BAKED_BOTTOM|BAKED_SHAPE, 3.041f, 17.926f, 10.484f, 4.358f, -6.666f},
+    {TS_JUMPF, 14, BAKED_BOTTOM|BAKED_SHAPE, 2.990f, 17.436f, 10.213f, 4.381f, -6.583f},
+    {TS_JUMPF, 15, BAKED_BOTTOM|BAKED_SHAPE, 2.937f, 16.824f, 9.881f, 4.406f, -6.471f},
+    {TS_JUMPF, 16, BAKED_BOTTOM|BAKED_SHAPE, 2.729f, 16.159f, 9.444f, 4.432f, -6.332f},
+    {TS_JUMPF, 17, BAKED_BOTTOM|BAKED_SHAPE, 2.562f, 15.444f, 9.003f, 4.459f, -6.167f},
+    {TS_JUMPF, 18, BAKED_BOTTOM|BAKED_SHAPE, 2.424f, 14.885f, 8.654f, 4.486f, -5.980f},
+    {TS_JUMPF, 19, BAKED_BOTTOM|BAKED_SHAPE, 2.305f, 14.392f, 8.349f, 4.517f, -5.790f},
+    {TS_JUMPF, 20, BAKED_BOTTOM|BAKED_SHAPE, 2.204f, 14.120f, 8.162f, 4.941f, -4.941f},
+    {TS_JUMPF, 21, BAKED_BOTTOM|BAKED_SHAPE, 2.123f, 14.097f, 8.110f, 4.417f, -4.417f},
+    {TS_JUMPF, 22, BAKED_BOTTOM|BAKED_SHAPE, 2.079f, 14.047f, 8.063f, 3.603f, -3.603f},
+    {TS_JUMPF, 23, BAKED_BOTTOM|BAKED_SHAPE, 2.093f, 13.944f, 8.019f, 2.684f, -2.684f},
+    {TS_JUMPF, 24, BAKED_BOTTOM|BAKED_SHAPE, 2.237f, 13.773f, 8.005f, 2.607f, -2.607f},
+    {TS_JUMPF, 25, BAKED_BOTTOM|BAKED_SHAPE, 2.547f, 13.531f, 8.039f, 2.580f, -2.580f},
+    {TS_JUMPF, 26, BAKED_BOTTOM|BAKED_SHAPE, 2.995f, 13.229f, 8.112f, 3.672f, -3.672f},
+    {TS_JUMPF, 27, BAKED_BOTTOM|BAKED_SHAPE, 3.496f, 12.897f, 8.197f, 4.504f, -4.504f},
+    {TS_JUMPF, 28, BAKED_BOTTOM|BAKED_SHAPE, 3.857f, 12.540f, 8.198f, 4.856f, -4.856f},
+    {TS_JUMPF, 29, BAKED_BOTTOM|BAKED_SHAPE, 4.177f, 12.179f, 8.178f, 5.241f, -5.233f},
+    {TS_JUMPF, 30, BAKED_BOTTOM|BAKED_SHAPE, 3.865f, 11.847f, 7.856f, 5.603f, -4.951f},
+    {TS_JUMPF, 31, BAKED_BOTTOM|BAKED_SHAPE, 3.344f, 11.550f, 7.447f, 5.804f, -4.347f},
+    {TS_JUMPF, 32, BAKED_BOTTOM|BAKED_SHAPE, 2.875f, 11.294f, 7.085f, 4.736f, -4.736f},
+    {TS_JUMPF, 33, BAKED_BOTTOM|BAKED_SHAPE, 2.486f, 11.081f, 6.783f, 4.377f, -4.377f},
+    {TS_JUMPF, 34, BAKED_BOTTOM|BAKED_SHAPE, 2.192f, 10.909f, 6.550f, 4.096f, -4.096f},
+    {TS_JUMPB, 0, BAKED_SHAPE, 0.f, 17.113f, 10.487f, 2.135f, -2.135f},
+    {TS_JUMPB, 1, BAKED_SHAPE, 0.f, 15.294f, 9.481f, 3.574f, -3.574f},
+    {TS_JUMPB, 2, BAKED_SHAPE, 0.f, 12.368f, 7.839f, 4.041f, -4.041f},
+    {TS_JUMPB, 3, BAKED_SHAPE, 0.f, 11.779f, 7.344f, 4.213f, -4.213f},
+    {TS_JUMPB, 4, BAKED_SHAPE, 0.f, 12.424f, 7.465f, 4.219f, -4.219f},
+    {TS_JUMPB, 5, BAKED_SHAPE, 0.f, 12.638f, 7.378f, 4.240f, -4.240f},
+    {TS_JUMPB, 6, BAKED_SHAPE, 0.f, 12.333f, 7.035f, 4.349f, -4.349f},
+    {TS_JUMPB, 7, BAKED_SHAPE, 0.f, 11.895f, 6.652f, 4.528f, -4.528f},
+    {TS_JUMPB, 8, BAKED_SHAPE, 0.f, 11.288f, 6.227f, 4.862f, -4.862f},
+    {TS_JUMPB, 9, BAKED_BOTTOM|BAKED_SHAPE, 1.066f, 10.606f, 5.836f, 2.000f, -8.901f},
+    {TS_JUMPB, 10, BAKED_BOTTOM|BAKED_SHAPE, 1.179f, 9.753f, 5.466f, 2.268f, -9.168f},
+    {TS_JUMPB, 11, BAKED_BOTTOM|BAKED_SHAPE, 1.565f, 9.423f, 5.494f, 2.974f, -9.467f},
+    {TS_JUMPB, 12, BAKED_BOTTOM|BAKED_SHAPE, 2.242f, 9.466f, 5.854f, 3.628f, -9.751f},
+    {TS_JUMPB, 13, BAKED_BOTTOM|BAKED_SHAPE, 3.186f, 9.925f, 6.555f, 4.174f, -9.837f},
+    {TS_JUMPB, 14, BAKED_BOTTOM|BAKED_SHAPE, 4.324f, 10.473f, 7.398f, 4.556f, -9.859f},
+    {TS_JUMPB, 15, BAKED_BOTTOM|BAKED_SHAPE, 5.579f, 10.777f, 8.178f, 4.735f, -9.723f},
+    {TS_JUMPB, 16, BAKED_BOTTOM|BAKED_SHAPE, 6.227f, 10.688f, 8.458f, 4.690f, -9.788f},
+    {TS_JUMPB, 17, BAKED_BOTTOM|BAKED_SHAPE, 6.399f, 10.294f, 8.347f, 4.423f, -9.944f},
+    {TS_JUMPB, 18, BAKED_BOTTOM|BAKED_SHAPE, 6.592f, 10.472f, 8.532f, 4.098f, -10.222f},
+    {TS_JUMPB, 19, BAKED_BOTTOM|BAKED_SHAPE, 6.800f, 10.585f, 8.693f, 3.737f, -10.291f},
+    {TS_JUMPB, 20, BAKED_BOTTOM|BAKED_SHAPE, 7.017f, 10.766f, 8.892f, 3.385f, -10.460f},
+    {TS_JUMPB, 21, BAKED_BOTTOM|BAKED_SHAPE, 7.237f, 11.430f, 9.333f, 2.982f, -10.573f},
+    {TS_JUMPB, 22, BAKED_BOTTOM|BAKED_SHAPE, 7.452f, 12.158f, 9.805f, 2.322f, -10.600f},
+    {TS_JUMPB, 23, BAKED_BOTTOM|BAKED_SHAPE, 6.298f, 12.972f, 9.635f, 2.000f, -10.402f},
+    {TS_JUMPB, 24, BAKED_BOTTOM|BAKED_SHAPE, 4.790f, 13.642f, 9.216f, 4.885f, -4.885f},
+    {TS_JUMPB, 25, BAKED_BOTTOM|BAKED_SHAPE, 3.568f, 13.837f, 8.703f, 4.386f, -4.386f},
+    {TS_JUMPB, 26, BAKED_BOTTOM|BAKED_SHAPE, 2.740f, 13.394f, 8.067f, 3.932f, -3.932f},
+    {TS_JUMPB, 27, BAKED_BOTTOM|BAKED_SHAPE, 2.361f, 12.417f, 7.389f, 3.402f, -3.402f},
+    {TS_JUMPB, 28, BAKED_BOTTOM|BAKED_SHAPE, 2.485f, 11.089f, 6.787f, 4.107f, -4.107f},
+    {TS_JUMPB, 29, BAKED_BOTTOM|BAKED_SHAPE, 2.345f, 9.537f, 5.941f, 4.751f, -5.578f},
+    {TS_JUMPB, 30, BAKED_BOTTOM|BAKED_SHAPE, 2.891f, 8.597f, 5.744f, 6.601f, -5.569f},
+    {TS_JUMPB, 31, BAKED_BOTTOM|BAKED_SHAPE, 3.172f, 8.503f, 5.837f, 8.079f, -5.177f},
+    {TS_JUMPB, 32, BAKED_BOTTOM|BAKED_SHAPE, 3.826f, 8.397f, 6.112f, 8.909f, -4.611f},
+    {TS_JUMPB, 33, BAKED_BOTTOM|BAKED_SHAPE, 4.404f, 8.283f, 6.344f, 9.148f, -3.993f},
+    {TS_JUMPB, 34, BAKED_BOTTOM|BAKED_SHAPE, 3.737f, 9.209f, 6.473f, 8.923f, -3.380f},
+    {TS_JUMPAERIALF, 0, BAKED_SHAPE, 0.f, 10.776f, 6.387f, 3.934f, -3.934f},
+    {TS_JUMPAERIALF, 1, BAKED_SHAPE, 0.f, 10.565f, 6.415f, 4.279f, -4.279f},
+    {TS_JUMPAERIALF, 2, BAKED_SHAPE, 0.f, 11.928f, 7.449f, 4.235f, -4.235f},
+    {TS_JUMPAERIALF, 3, BAKED_SHAPE, 0.f, 13.252f, 8.545f, 3.645f, -3.645f},
+    {TS_JUMPAERIALF, 4, BAKED_SHAPE, 0.f, 12.207f, 7.869f, 3.018f, -3.018f},
+    {TS_JUMPAERIALF, 5, BAKED_SHAPE, 0.f, 12.181f, 7.828f, 3.445f, -3.445f},
+    {TS_JUMPAERIALF, 6, BAKED_SHAPE, 0.f, 12.882f, 8.729f, 3.790f, -3.790f},
+    {TS_JUMPAERIALF, 7, BAKED_SHAPE, 0.f, 11.061f, 8.000f, 4.284f, -4.284f},
+    {TS_JUMPAERIALF, 8, BAKED_SHAPE, 0.f, 9.328f, 6.882f, 3.855f, -3.855f},
+    {TS_JUMPAERIALF, 9, BAKED_BOTTOM|BAKED_SHAPE, 4.077f, 9.080f, 6.578f, 2.657f, -2.657f},
+    {TS_JUMPAERIALF, 10, BAKED_BOTTOM|BAKED_SHAPE, 5.167f, 11.493f, 8.330f, 2.633f, -2.633f},
+    {TS_JUMPAERIALF, 11, BAKED_BOTTOM|BAKED_SHAPE, 7.308f, 12.886f, 10.097f, 2.338f, -2.338f},
+    {TS_JUMPAERIALF, 12, BAKED_BOTTOM|BAKED_SHAPE, 6.693f, 11.958f, 9.325f, 2.970f, -2.970f},
+    {TS_JUMPAERIALF, 13, BAKED_BOTTOM|BAKED_SHAPE, 6.756f, 11.118f, 8.937f, 2.667f, -2.667f},
+    {TS_JUMPAERIALF, 14, BAKED_BOTTOM|BAKED_SHAPE, 4.647f, 9.821f, 7.234f, 2.658f, -2.658f},
+    {TS_JUMPAERIALF, 15, BAKED_BOTTOM|BAKED_SHAPE, 3.497f, 8.279f, 5.888f, 2.156f, -2.156f},
+    {TS_JUMPAERIALF, 16, BAKED_BOTTOM|BAKED_SHAPE, 3.551f, 9.011f, 6.281f, 2.428f, -2.428f},
+    {TS_JUMPAERIALF, 17, BAKED_BOTTOM|BAKED_SHAPE, 4.893f, 9.333f, 7.113f, 2.488f, -2.488f},
+    {TS_JUMPAERIALF, 18, BAKED_BOTTOM|BAKED_SHAPE, 5.154f, 9.175f, 7.164f, 2.574f, -2.574f},
+    {TS_JUMPAERIALF, 19, BAKED_BOTTOM|BAKED_SHAPE, 6.128f, 11.239f, 8.683f, 2.668f, -2.668f},
+    {TS_JUMPAERIALF, 20, BAKED_BOTTOM|BAKED_SHAPE, 7.625f, 12.345f, 9.985f, 2.161f, -2.161f},
+    {TS_JUMPAERIALF, 21, BAKED_BOTTOM|BAKED_SHAPE, 7.253f, 12.521f, 9.887f, 2.091f, -2.091f},
+    {TS_JUMPAERIALF, 22, BAKED_BOTTOM|BAKED_SHAPE, 6.794f, 12.117f, 9.455f, 2.563f, -2.563f},
+    {TS_JUMPAERIALF, 23, BAKED_BOTTOM|BAKED_SHAPE, 6.634f, 10.933f, 8.784f, 2.404f, -2.404f},
+    {TS_JUMPAERIALF, 24, BAKED_BOTTOM|BAKED_SHAPE, 6.779f, 10.838f, 8.809f, 2.544f, -2.544f},
+    {TS_JUMPAERIALF, 25, BAKED_BOTTOM|BAKED_SHAPE, 5.209f, 10.161f, 7.685f, 2.724f, -2.724f},
+    {TS_JUMPAERIALF, 26, BAKED_BOTTOM|BAKED_SHAPE, 4.004f, 9.091f, 6.548f, 2.396f, -2.396f},
+    {TS_JUMPAERIALF, 27, BAKED_BOTTOM|BAKED_SHAPE, 3.540f, 8.262f, 5.901f, 2.153f, -2.153f},
+    {TS_JUMPAERIALF, 28, BAKED_BOTTOM|BAKED_SHAPE, 3.445f, 8.763f, 6.104f, 2.134f, -2.134f},
+    {TS_JUMPAERIALF, 29, BAKED_BOTTOM|BAKED_SHAPE, 3.729f, 9.128f, 6.428f, 2.519f, -2.519f},
+    {TS_JUMPAERIALF, 30, BAKED_BOTTOM|BAKED_SHAPE, 4.604f, 9.316f, 6.960f, 2.530f, -2.530f},
+    {TS_JUMPAERIALF, 31, BAKED_BOTTOM|BAKED_SHAPE, 4.996f, 9.317f, 7.156f, 2.347f, -2.347f},
+    {TS_JUMPAERIALF, 32, BAKED_BOTTOM|BAKED_SHAPE, 5.200f, 9.251f, 7.226f, 2.610f, -2.610f},
+    {TS_JUMPAERIALF, 33, BAKED_BOTTOM|BAKED_SHAPE, 5.736f, 10.638f, 8.187f, 2.728f, -2.728f},
+    {TS_JUMPAERIALF, 34, BAKED_BOTTOM|BAKED_SHAPE, 6.450f, 10.749f, 8.600f, 2.540f, -2.540f},
+    {TS_JUMPAERIALF, 35, BAKED_BOTTOM|BAKED_SHAPE, 7.189f, 11.638f, 9.414f, 2.579f, -2.579f},
+    {TS_JUMPAERIALF, 36, BAKED_BOTTOM|BAKED_SHAPE, 7.561f, 12.188f, 9.875f, 2.244f, -2.244f},
+    {TS_JUMPAERIALF, 37, BAKED_BOTTOM|BAKED_SHAPE, 6.852f, 12.601f, 9.727f, 2.180f, -2.180f},
+    {TS_JUMPAERIALF, 38, BAKED_BOTTOM|BAKED_SHAPE, 5.746f, 12.944f, 9.345f, 3.256f, -3.256f},
+    {TS_JUMPAERIALF, 39, BAKED_BOTTOM|BAKED_SHAPE, 5.852f, 12.163f, 9.007f, 4.499f, -4.499f},
+    {TS_JUMPAERIALF, 40, BAKED_BOTTOM|BAKED_SHAPE, 6.763f, 11.220f, 8.992f, 4.543f, -6.718f},
+    {TS_JUMPAERIALF, 41, BAKED_BOTTOM|BAKED_SHAPE, 5.853f, 11.429f, 8.641f, 4.642f, -6.758f},
+    {TS_JUMPAERIALF, 42, BAKED_BOTTOM|BAKED_SHAPE, 4.777f, 11.689f, 8.233f, 4.967f, -4.967f},
+    {TS_JUMPAERIALF, 43, BAKED_BOTTOM|BAKED_SHAPE, 3.966f, 11.819f, 7.892f, 3.951f, -3.951f},
+    {TS_JUMPAERIALF, 44, BAKED_BOTTOM|BAKED_SHAPE, 3.410f, 11.764f, 7.587f, 3.394f, -3.394f},
+    {TS_JUMPAERIALF, 45, BAKED_BOTTOM|BAKED_SHAPE, 3.120f, 11.544f, 7.332f, 3.421f, -3.421f},
+    {TS_JUMPAERIALF, 46, BAKED_BOTTOM|BAKED_SHAPE, 3.086f, 11.266f, 7.176f, 3.787f, -3.787f},
+    {TS_JUMPAERIALF, 47, BAKED_BOTTOM|BAKED_SHAPE, 3.139f, 11.071f, 7.105f, 4.478f, -4.478f},
+    {TS_JUMPAERIALB, 0, BAKED_SHAPE, 0.f, 10.871f, 6.435f, 3.935f, -3.935f},
+    {TS_JUMPAERIALB, 1, BAKED_SHAPE, 0.f, 12.305f, 7.572f, 4.733f, -4.733f},
+    {TS_JUMPAERIALB, 2, BAKED_SHAPE, 0.f, 13.849f, 8.811f, 4.008f, -4.008f},
+    {TS_JUMPAERIALB, 3, BAKED_SHAPE, 0.f, 13.610f, 8.870f, 4.107f, -4.107f},
+    {TS_JUMPAERIALB, 4, BAKED_SHAPE, 0.f, 11.406f, 7.570f, 5.621f, -6.795f},
+    {TS_JUMPAERIALB, 5, BAKED_SHAPE, 0.f, 7.941f, 5.386f, 4.516f, -6.869f},
+    {TS_JUMPAERIALB, 6, BAKED_SHAPE, 0.f, 8.280f, 5.919f, 5.523f, -5.689f},
+    {TS_JUMPAERIALB, 7, BAKED_SHAPE, 0.f, 8.582f, 6.430f, 6.362f, -5.894f},
+    {TS_JUMPAERIALB, 8, BAKED_SHAPE, 0.f, 8.912f, 6.963f, 6.936f, -5.759f},
+    {TS_JUMPAERIALB, 9, BAKED_BOTTOM|BAKED_SHAPE, 4.740f, 9.444f, 7.092f, 7.255f, -4.216f},
+    {TS_JUMPAERIALB, 10, BAKED_BOTTOM|BAKED_SHAPE, 4.910f, 10.736f, 7.823f, 7.037f, -3.436f},
+    {TS_JUMPAERIALB, 11, BAKED_BOTTOM|BAKED_SHAPE, 5.037f, 12.766f, 8.902f, 4.688f, -4.688f},
+    {TS_JUMPAERIALB, 12, BAKED_BOTTOM|BAKED_SHAPE, 5.103f, 14.404f, 9.753f, 4.214f, -4.214f},
+    {TS_JUMPAERIALB, 13, BAKED_BOTTOM|BAKED_SHAPE, 5.187f, 16.212f, 10.700f, 3.987f, -3.987f},
+    {TS_JUMPAERIALB, 14, BAKED_BOTTOM|BAKED_SHAPE, 5.188f, 16.828f, 11.008f, 3.570f, -3.570f},
+    {TS_JUMPAERIALB, 15, BAKED_BOTTOM|BAKED_SHAPE, 5.052f, 15.274f, 10.163f, 4.086f, -4.086f},
+    {TS_JUMPAERIALB, 16, BAKED_BOTTOM|BAKED_SHAPE, 5.007f, 15.753f, 10.380f, 4.092f, -4.092f},
+    {TS_JUMPAERIALB, 17, BAKED_BOTTOM|BAKED_SHAPE, 5.090f, 16.262f, 10.676f, 4.577f, -4.577f},
+    {TS_JUMPAERIALB, 18, BAKED_BOTTOM|BAKED_SHAPE, 5.323f, 16.481f, 10.902f, 4.843f, -4.843f},
+    {TS_JUMPAERIALB, 19, BAKED_BOTTOM|BAKED_SHAPE, 5.606f, 16.238f, 10.922f, 4.921f, -4.921f},
+    {TS_JUMPAERIALB, 20, BAKED_BOTTOM|BAKED_SHAPE, 6.077f, 15.570f, 10.823f, 4.841f, -4.841f},
+    {TS_JUMPAERIALB, 21, BAKED_BOTTOM|BAKED_SHAPE, 6.824f, 14.466f, 10.645f, 4.644f, -4.644f},
+    {TS_JUMPAERIALB, 22, BAKED_BOTTOM|BAKED_SHAPE, 7.335f, 12.611f, 9.973f, 4.828f, -4.828f},
+    {TS_JUMPAERIALB, 23, BAKED_BOTTOM|BAKED_SHAPE, 6.981f, 11.857f, 9.419f, 4.791f, -4.791f},
+    {TS_JUMPAERIALB, 24, BAKED_BOTTOM|BAKED_SHAPE, 6.273f, 11.638f, 8.955f, 4.833f, -4.833f},
+    {TS_JUMPAERIALB, 25, BAKED_BOTTOM|BAKED_SHAPE, 5.379f, 11.594f, 8.486f, 4.796f, -4.796f},
+    {TS_JUMPAERIALB, 26, BAKED_BOTTOM|BAKED_SHAPE, 4.967f, 11.094f, 8.030f, 4.525f, -4.525f},
+    {TS_JUMPAERIALB, 27, BAKED_BOTTOM|BAKED_SHAPE, 4.857f, 9.688f, 7.272f, 3.205f, -3.205f},
+    {TS_JUMPAERIALB, 28, BAKED_BOTTOM|BAKED_SHAPE, 4.685f, 10.132f, 7.408f, 2.996f, -2.996f},
+    {TS_JUMPAERIALB, 29, BAKED_BOTTOM|BAKED_SHAPE, 4.807f, 10.822f, 7.815f, 2.846f, -2.846f},
+    {TS_JUMPAERIALB, 30, BAKED_BOTTOM|BAKED_SHAPE, 4.590f, 11.217f, 7.904f, 2.770f, -2.770f},
+    {TS_JUMPAERIALB, 31, BAKED_BOTTOM|BAKED_SHAPE, 4.093f, 11.309f, 7.701f, 3.772f, -3.772f},
+    {TS_FALL, 0, BAKED_BOTTOM|BAKED_SHAPE, 1.998f, 10.779f, 6.389f, 3.933f, -3.933f},
+    {TS_FALL, 1, BAKED_BOTTOM|BAKED_SHAPE, 2.078f, 10.764f, 6.421f, 4.064f, -4.064f},
+    {TS_FALL, 2, BAKED_BOTTOM|BAKED_SHAPE, 2.405f, 11.024f, 6.715f, 4.328f, -4.328f},
+    {TS_FALL, 3, BAKED_BOTTOM|BAKED_SHAPE, 2.764f, 11.400f, 7.082f, 4.520f, -4.520f},
+    {TS_FALL, 4, BAKED_BOTTOM|BAKED_SHAPE, 2.803f, 11.438f, 7.120f, 4.584f, -4.584f},
+    {TS_FALL, 5, BAKED_BOTTOM|BAKED_SHAPE, 2.663f, 11.458f, 7.056f, 4.695f, -4.695f},
+    {TS_FALL, 6, BAKED_BOTTOM|BAKED_SHAPE, 2.198f, 10.821f, 6.393f, 4.586f, -4.586f},
+    {TS_FALL, 7, BAKED_BOTTOM|BAKED_SHAPE, 1.748f, 10.560f, 6.046f, 4.382f, -4.382f},
+    {TS_FALL, 8, BAKED_BOTTOM|BAKED_SHAPE, 1.732f, 10.591f, 6.082f, 4.198f, -4.198f},
+    {TS_FALL, 9, BAKED_BOTTOM|BAKED_SHAPE, 1.827f, 10.759f, 6.345f, 4.139f, -4.139f},
+    {TS_FALL, 10, BAKED_BOTTOM|BAKED_SHAPE, 2.182f, 11.086f, 6.683f, 4.256f, -4.256f},
+    {TS_FALL, 11, BAKED_BOTTOM|BAKED_SHAPE, 2.434f, 11.268f, 6.840f, 4.346f, -4.346f},
+    {TS_FALL, 12, BAKED_BOTTOM|BAKED_SHAPE, 2.373f, 11.213f, 6.793f, 4.433f, -4.433f},
+    {TS_FALL, 13, BAKED_BOTTOM|BAKED_SHAPE, 2.105f, 10.985f, 6.545f, 4.543f, -4.543f},
+    {TS_FALL, 14, BAKED_BOTTOM|BAKED_SHAPE, 1.788f, 10.726f, 6.257f, 4.592f, -4.592f},
+    {TS_FALL, 15, BAKED_BOTTOM|BAKED_SHAPE, 1.587f, 10.589f, 6.088f, 4.434f, -4.434f},
+    {TS_FALL, 16, BAKED_BOTTOM|BAKED_SHAPE, 1.613f, 10.619f, 6.116f, 4.159f, -4.159f},
+    {TS_FALL, 17, BAKED_BOTTOM|BAKED_SHAPE, 1.839f, 10.719f, 6.273f, 4.126f, -4.126f},
+    {TS_FALL, 18, BAKED_BOTTOM|BAKED_SHAPE, 2.192f, 11.043f, 6.642f, 4.121f, -4.121f},
+    {TS_FALL, 19, BAKED_BOTTOM|BAKED_SHAPE, 2.442f, 11.276f, 6.826f, 4.164f, -4.164f},
+    {TS_FALL, 20, BAKED_BOTTOM|BAKED_SHAPE, 2.384f, 11.213f, 6.798f, 4.281f, -4.281f},
+    {TS_FALL, 21, BAKED_BOTTOM|BAKED_SHAPE, 2.154f, 11.007f, 6.580f, 4.416f, -4.416f},
+    {TS_FALL, 22, BAKED_BOTTOM|BAKED_SHAPE, 1.815f, 10.745f, 6.280f, 4.540f, -4.540f},
+    {TS_FALL, 23, BAKED_BOTTOM|BAKED_SHAPE, 2.102f, 10.765f, 6.433f, 4.546f, -4.546f},
+    {TS_FALL, 24, BAKED_BOTTOM|BAKED_SHAPE, 2.022f, 10.835f, 6.429f, 4.303f, -4.303f},
+    {TS_FALL, 25, BAKED_BOTTOM|BAKED_SHAPE, 2.093f, 10.803f, 6.446f, 4.132f, -4.132f},
+    {TS_FALL, 26, BAKED_BOTTOM|BAKED_SHAPE, 2.417f, 11.122f, 6.734f, 4.175f, -4.175f},
+    {TS_FALL, 27, BAKED_BOTTOM|BAKED_SHAPE, 2.726f, 11.291f, 7.008f, 4.270f, -4.270f},
+    {TS_FALL, 28, BAKED_BOTTOM|BAKED_SHAPE, 2.757f, 11.270f, 7.013f, 4.382f, -4.382f},
+    {TS_FALL, 29, BAKED_BOTTOM|BAKED_SHAPE, 2.834f, 11.988f, 7.411f, 4.514f, -4.514f},
+    {TS_FALL, 30, BAKED_BOTTOM|BAKED_SHAPE, 2.576f, 11.728f, 7.152f, 4.580f, -4.580f},
+    {TS_FALL, 31, BAKED_BOTTOM|BAKED_SHAPE, 2.428f, 11.576f, 7.002f, 4.412f, -4.412f},
+    {TS_FALL, 32, BAKED_BOTTOM|BAKED_SHAPE, 2.374f, 11.543f, 6.958f, 4.146f, -4.146f},
+    {TS_FALL, 33, BAKED_BOTTOM|BAKED_SHAPE, 2.495f, 11.576f, 7.036f, 4.123f, -4.123f},
+    {TS_FALL, 34, BAKED_BOTTOM|BAKED_SHAPE, 2.744f, 11.736f, 7.240f, 4.287f, -4.287f},
+    {TS_FALL, 35, BAKED_BOTTOM, 3.319f, 12.555f, 7.937f, 0.f, 0.f},
+    {TS_FALL, 36, BAKED_BOTTOM, 3.201f, 12.441f, 7.821f, 0.f, 0.f},
+    {TS_FALL, 37, BAKED_BOTTOM, 2.951f, 12.215f, 7.583f, 0.f, 0.f},
+    {TS_FALL, 38, BAKED_BOTTOM, 2.673f, 11.887f, 7.280f, 0.f, 0.f},
+};
+
+static void Learned_Bake(void)
+{
+    for (int i = 0; i < (int)countof(baked_ecb); i++)
+    {
+        const BakedEcb *b = &baked_ecb[i];
+        EcbSample *e = Ecb_Get(b->ts, b->frame);
+        if (b->flags & BAKED_BOTTOM)
+        {
+            e->bottom = b->bottom;
+            e->has_bottom = 1;
+        }
+        e->top = b->top;
+        e->side_y = b->side;
+        if (b->flags & BAKED_SHAPE)
+        {
+            e->front = b->front;
+            e->back = b->back;
+            e->has_shape = 1;
+        }
+        e->seen = 1;
+    }
+
+    // JumpF was seen running out into Fall after 35 frames
+    state_len[TS_JUMPF] = 35;
+    state_next[TS_JUMPF] = TS_FALL;
+}
+
 static float Aerial_LandingLag(FighterData *fp, int ts)
 {
     switch (ts)
@@ -387,9 +630,11 @@ static double dabs(double v)
     return v < 0 ? -v : v;
 }
 
-// mpLineIntersection: does the movement b0->b1 cross line a0->a1 from above?
-static int Line_Cross(double a0x, double a0y, double a1x, double a1y,
-                      double b0x, double b0y, double b1x, double b1y)
+// mpLineIntersection: does the movement b0->b1 cross line a0->a1 from above
+// (the left of a0->a1)? If so, where.
+static int Line_Intersect(double a0x, double a0y, double a1x, double a1y,
+                          double b0x, double b0y, double b1x, double b1y,
+                          float *int_x, float *int_y)
 {
     int b0_slightly_below = 0;
     int b1_slightly_above = 0;
@@ -462,7 +707,36 @@ static int Line_Cross(double a0x, double a0y, double a1x, double a1y,
         return 0;
 
     double area = (bw * ah) - (bh * aw);
-    return dabs(area) > 0.0001f;
+    if (dabs(area) <= 0.0001f)
+        return 0;
+
+    double t = ((bw * d0y) - (bh * d0x)) / area;
+    if (t > 0.0)
+    {
+        if (t < 1.0)
+        {
+            *int_x = (aw * t) + a0x;
+            *int_y = (ah * t) + a0y;
+        }
+        else
+        {
+            *int_x = a1x;
+            *int_y = a1y;
+        }
+    }
+    else
+    {
+        *int_x = a0x;
+        *int_y = a0y;
+    }
+    return 1;
+}
+
+static int Line_Cross(double a0x, double a0y, double a1x, double a1y,
+                      double b0x, double b0y, double b1x, double b1y)
+{
+    float int_x, int_y;
+    return Line_Intersect(a0x, a0y, a1x, a1y, b0x, b0y, b1x, b1y, &int_x, &int_y);
 }
 
 // mpLineIntersectionH: the same test for a flat line at height a0y.
@@ -533,6 +807,8 @@ static void Floor_CacheRange(RawCollLine *lines, CollVert *verts, int start, int
     }
 }
 
+static void Wall_BuildCache(RawCollLine *lines, CollVert *verts);
+
 static void Floor_BuildCache(void)
 {
     RawCollLine *lines = (RawCollLine *)*stc_collline;
@@ -545,6 +821,8 @@ static void Floor_BuildCache(void)
         Floor_CacheRange(lines, verts, desc->floor_start, desc->floor_num);
         Floor_CacheRange(lines, verts, desc->dyn_start, desc->dyn_num);
     }
+
+    Wall_BuildCache(lines, verts);
 }
 
 // mpCheckFloor: does the ECB bottom moving from a to b touch down on a floor?
@@ -568,6 +846,605 @@ static int Floor_Check(float ax, float ay, float bx, float by, int pass_platform
 }
 
 ///////////////////////
+/// Stage walls     ///
+///////////////////////
+
+// mpColl_80046904's wall part, for the simulated ECB. A right wall faces
+// right (the right side of a solid) and pushes the fighter right; its line
+// runs top to bottom. A left wall runs bottom to top. The stage is assumed
+// to stand still, so a vertex's previous position is its current one.
+
+// The ECB used on one frame, relative to the fighter. The top and bottom
+// points are at x 0, the side points at height side.
+typedef struct SimEcb
+{
+    float bottom;
+    float top;
+    float side;
+    float left;  // x of the left point
+    float right; // x of the right point
+} SimEcb;
+
+#define LL_MAX_WALLS 64
+
+typedef struct WallBox
+{
+    float min_x, min_y, max_x, max_y;
+} WallBox;
+
+static s16 *wall_ids[2]; // [0] right walls, [1] left walls
+static WallBox *wall_box[2];
+static int wall_num[2];
+static s16 near_ids[2][LL_MAX_WALLS]; // the walls near the ECB this frame
+static int near_num[2];
+static RawCollLine *coll_lines;
+static CollVert *coll_verts;
+static int wall_list[2][8]; // walls touched this frame, like mpColl_80458810
+static int wall_list_num[2];
+
+static u32 Line_Kind(int id)
+{
+    return coll_lines[id].flags & LINEFLAG_KIND;
+}
+
+// mpLib_80054ED8
+static int Line_Usable(int id)
+{
+    if (id == -1)
+        return 0;
+    u32 flags = coll_lines[id].flags;
+    return (flags & LINEFLAG_ENABLED) && !(flags & LINEFLAG_HIDDEN);
+}
+
+static Vec2 *Line_V0(int id)
+{
+    return &coll_verts[(u16)coll_lines[id].desc->vert_prev].pos_curr;
+}
+
+static Vec2 *Line_V1(int id)
+{
+    return &coll_verts[(u16)coll_lines[id].desc->vert_next].pos_curr;
+}
+
+static int Wall_Prev(int id)
+{
+    return Line_Prev(coll_lines, coll_verts, id);
+}
+
+static int Wall_Next(int id)
+{
+    return Line_Next(coll_lines, coll_verts, id);
+}
+
+// mpLinePrevNonRightWall, mpLineNextNonCeiling, ...: the first line in that
+// direction that isn't of this kind.
+static int Line_SkipKind(int id, u32 kind, int forward)
+{
+    int start = id;
+    id = forward ? Wall_Next(id) : Wall_Prev(id);
+    while (id != -1 && id != start && (coll_lines[id].flags & kind))
+        id = forward ? Wall_Next(id) : Wall_Prev(id);
+    return id == start ? -1 : id;
+}
+
+// mpLinesConnected: is target in the run of same-kind lines through start?
+static int Lines_Connected(int start, int target)
+{
+    if (start == target)
+        return 1;
+    u32 kind = Line_Kind(start);
+    for (int id = Wall_Next(start); id != -1 && Line_Kind(id) == kind; id = Wall_Next(id))
+    {
+        if (id == target)
+            return 1;
+        if (id == start)
+            break;
+    }
+    for (int id = Wall_Prev(start); id != -1 && Line_Kind(id) == kind; id = Wall_Prev(id))
+    {
+        if (id == target)
+            return 1;
+        if (id == start)
+            break;
+    }
+    return 0;
+}
+
+// The top and bottom of the run of walls through id (mpRightWallGetTop,
+// mpRightWallGetBottom, mpLeftWallGetTop, mpLeftWallGetBottom).
+static Vec2 Wall_End(int id, int side, int top)
+{
+    u32 kind = Line_Kind(id);
+    int towards_v0 = (side == 0) == top; // right walls start at their top
+    int last = id;
+    for (int next = id;;)
+    {
+        next = towards_v0 ? Wall_Prev(next) : Wall_Next(next);
+        if (next == -1 || next == id || Line_Kind(next) != kind)
+            break;
+        last = next;
+    }
+    return towards_v0 ? *Line_V0(last) : *Line_V1(last);
+}
+
+// mpLib_8004E684_RightWall / mpLib_8004E398_LeftWall: how far x must move to
+// put the point (x, y) on the run of walls through id. Returns -1 if y is
+// past the run's ends.
+static int Wall_DistanceX(int id, int side, float x, float y, float *dist)
+{
+    int dir = 0;
+    float wy = y;
+    float y0, y1;
+    u32 flag = side == 0 ? LINEFLAG_RWALL : LINEFLAG_LWALL;
+
+    while (1)
+    {
+        y0 = Line_V0(id)->Y;
+        y1 = Line_V1(id)->Y;
+        // right walls: v0 is the top, so above y0 means the previous line
+        int above = side == 0 ? y > y0 : y > y1;
+        int below = side == 0 ? y < y1 : y < y0;
+        if (side == 0 ? above : below)
+        {
+            // towards v0
+            if (dir != (side == 0 ? -1 : 1))
+            {
+                int prev = Wall_Prev(id);
+                if (prev == -1 || !(coll_lines[prev].flags & flag))
+                {
+                    if (side == 0 ? y - y0 > 0.1 : y - y0 < -0.1)
+                        return -1;
+                    wy = y0;
+                    break;
+                }
+                id = prev;
+                dir = side == 0 ? 1 : -1;
+                continue;
+            }
+            if (side == 0)
+                wy = y0;
+        }
+        else if (side == 0 ? below : above)
+        {
+            // towards v1
+            if (dir != (side == 0 ? 1 : -1))
+            {
+                int next = Wall_Next(id);
+                if (next == -1 || !(coll_lines[next].flags & flag))
+                {
+                    if (side == 0 ? y - y1 < -0.1 : y - y1 > 0.1)
+                        return -1;
+                    wy = y1;
+                    break;
+                }
+                id = next;
+                dir = side == 0 ? -1 : 1;
+                continue;
+            }
+            if (side == 0)
+                wy = y1;
+        }
+        break;
+    }
+
+    float x0 = Line_V0(id)->X;
+    float x1 = Line_V1(id)->X;
+    *dist = x0 + ((x1 - x0) * (wy - y0)) / (y1 - y0) - x;
+    return id;
+}
+
+// mpLineIntersectionV: the movement b0->b1 against a vertical line at x a0x.
+static int Line_IntersectV(float *int_x, float *int_y, float a0x, float a0y, float a1y,
+                           float b0x, float b0y, float b1x, float b1y)
+{
+    float min_ay, max_ay;
+
+    if (a0y < a1y)
+    {
+        if ((b0y < a0y && b1y < a0y) || (a1y < b0y && a1y < b1y))
+            return 0;
+        if (b1x - a0x < -0.0001 || b0x - a0x > 0.0001)
+            return 0;
+        min_ay = a0y;
+        max_ay = a1y;
+    }
+    else
+    {
+        if ((b0y < a1y && b1y < a1y) || (a0y < b0y && a0y < b1y))
+            return 0;
+        if (b0x - a0x < -0.0001 || b1x - a0x > 0.0001)
+            return 0;
+        min_ay = a1y;
+        max_ay = a0y;
+    }
+
+    double dby = b1y - b0y;
+    double dbx = b1x - b0x;
+    if (dabs(dbx) < 0.0001)
+        return 0;
+
+    double new_y = (dby / dbx * (a0x - b0x)) + b0y;
+    double dy = new_y - min_ay;
+    if (dy < 0.0)
+    {
+        if (dy < -0.1)
+            return 0;
+        new_y = min_ay;
+    }
+    dy = new_y - max_ay;
+    if (dy > 0.0)
+    {
+        if (dy > 0.1)
+            return 0;
+        new_y = max_ay;
+    }
+    *int_x = a0x;
+    *int_y = new_y;
+    return 1;
+}
+
+// mpCheckRightWall / mpCheckLeftWall: the nearest wall the movement a->b
+// runs into.
+static int Wall_Check(int side, float ax, float ay, float bx, float by, int *line_out)
+{
+    float min_dist2 = 3.4e38f;
+    int hit = 0;
+
+    for (int i = 0; i < near_num[side]; i++)
+    {
+        int id = near_ids[side][i];
+        float x0 = Line_V0(id)->X, y0 = Line_V0(id)->Y;
+        float x1 = Line_V1(id)->X, y1 = Line_V1(id)->Y;
+        float int_x, int_y;
+        int found;
+
+        if (fabs(x0 - x1) > 0.0001)
+            found = Line_Intersect(x0, y0, x1, y1, ax, ay, bx, by, &int_x, &int_y);
+        else if (side == 0 ? ax >= bx : ax <= bx)
+            found = Line_IntersectV(&int_x, &int_y, x0, y0, y1, ax, ay, bx, by);
+        else
+            found = 0;
+
+        if (found)
+        {
+            float dist2 = (int_x - ax) * (int_x - ax) + (int_y - ay) * (int_y - ay);
+            if (min_dist2 > dist2)
+            {
+                min_dist2 = dist2;
+                *line_out = id;
+                hit = 1;
+            }
+        }
+    }
+    return hit;
+}
+
+// mpRemap2d: point p relative to line a0->a1, moved to line b0->b1.
+static void Remap2d(float *x_out, float *y_out, float ax0, float ay0, float ax1, float ay1,
+                    float bx0, float by0, float bx1, float by1, float px, float py)
+{
+    double dx = ax1 - ax0;
+    double dy = ay1 - ay0;
+    float fx = px - ax0;
+    float fy = py - ay0;
+    double dist2 = (dy * dy) + (dx * dx);
+
+    if (dabs(dist2) > 0.0001)
+    {
+        double t = (dy * fy + dx * fx) / dist2;
+        if (t > 1.0)
+            t = 1.0;
+        else if (t < 0.0)
+            t = 0.0;
+        *x_out = px + (1.0 - t) * (bx0 - ax0) + t * (bx1 - ax1);
+        *y_out = py + (1.0 - t) * (by0 - ay0) + t * (by1 - ay1);
+    }
+    else
+    {
+        *x_out = px + (bx0 - ax0) + (bx1 - ax0);
+        *y_out = py + (by0 - ay0) + (by1 - ay0);
+    }
+}
+
+// mpLib_800511A4_RightWall / mpLib_800515A0_LeftWall: does a wall's end
+// pass through the ECB edge as it moves from a->b to c->d?
+static int Wall_CheckSwept(int side, float ax, float ay, float bx, float by,
+                           float cx, float cy, float dx, float dy, int *line_out)
+{
+    float min_dist2 = 3.4e38f;
+    int hit = 0;
+
+    for (int i = 0; i < near_num[side]; i++)
+    {
+        int id = near_ids[side][i];
+        for (int end = 0; end < 2; end++)
+        {
+            Vec2 *v = end == 0 ? Line_V0(id) : Line_V1(id);
+            float x0 = v->X, y0 = v->Y;
+            float x1 = x0, y1 = y0; // where it was last frame
+            float x, y, int_x, int_y;
+
+            Remap2d(&x, &y, ax, ay, bx, by, cx, cy, dx, dy, x1, y1);
+            float vdx = x0 - x;
+            float vdy = y0 - y;
+            if (vdx * vdx + vdy * vdy <= 0.001f)
+                continue;
+            if (!Line_Intersect(cx, cy, dx, dy, x, y, x0, y0, &int_x, &int_y))
+                continue;
+
+            float dist2 = (int_x - x1) * (int_x - x1) + (int_y - y1) * (int_y - y1);
+            if ((vdx * (int_x - x1)) + (vdy * (int_y - y1)) < 0.0f)
+                dist2 = -dist2;
+            if (min_dist2 > dist2)
+            {
+                min_dist2 = dist2;
+                *line_out = id;
+                hit = 1;
+            }
+        }
+    }
+    return hit;
+}
+
+// mpColl_RightWall_inline: remember a wall unless its run is already listed.
+static void Wall_Add(int side, int id)
+{
+    for (int i = 0; i < wall_list_num[side]; i++)
+    {
+        if (Lines_Connected(wall_list[side][i], id))
+            return;
+    }
+    if (wall_list_num[side] < 8)
+        wall_list[side][wall_list_num[side]++] = id;
+}
+
+// mpColl_80044E10_RightWall / mpColl_80045B74_LeftWall: list the walls the
+// ECB ran into moving from (px, py) with prev to (x, y) with cur.
+static int Wall_Find(int side, float px, float py, SimEcb *prev, float x, float y, SimEcb *cur, int tiny)
+{
+    int id;
+    int hit = 0;
+    float sx = x + (side == 0 ? cur->left : cur->right); // the side point facing the wall
+    float sy = y + cur->side;
+    float psx = px + (side == 0 ? prev->left : prev->right);
+    float psy = py + prev->side;
+    float bot_x = x, bot_y = y + cur->bottom;
+    float pbot_x = px, pbot_y = py + prev->bottom;
+    float top_x = x, top_y = y + cur->top;
+    float ptop_x = px, ptop_y = py + prev->top;
+
+    wall_list_num[side] = 0;
+
+    if (Wall_Check(side, psx, psy, sx, sy, &id))
+        Wall_Add(side, id), hit = 1;
+    if (Wall_Check(side, pbot_x, pbot_y, bot_x, bot_y, &id))
+        Wall_Add(side, id), hit = 1;
+    if (Wall_Check(side, ptop_x, ptop_y, top_x, top_y, &id))
+        Wall_Add(side, id), hit = 1;
+
+    if (Wall_Check(side, bot_x, bot_y, sx, sy, &id))
+        Wall_Add(side, id), hit = 1;
+    if (!tiny)
+    {
+        int found = side == 0 ? Wall_CheckSwept(side, pbot_x, pbot_y, psx, psy, bot_x, bot_y, sx, sy, &id)
+                              : Wall_CheckSwept(side, psx, psy, pbot_x, pbot_y, sx, sy, bot_x, bot_y, &id);
+        if (found)
+            Wall_Add(side, id), hit = 1;
+    }
+
+    if (Wall_Check(side, top_x, top_y, sx, sy, &id))
+        Wall_Add(side, id), hit = 1;
+    if (!tiny)
+    {
+        int found = side == 0 ? Wall_CheckSwept(side, psx, psy, ptop_x, ptop_y, sx, sy, top_x, top_y, &id)
+                              : Wall_CheckSwept(side, ptop_x, ptop_y, psx, psy, top_x, top_y, sx, sy, &id);
+        if (found)
+            Wall_Add(side, id), hit = 1;
+    }
+    return hit;
+}
+
+// Keeps the furthest push: for right walls the largest x, for left walls the
+// smallest.
+static void Wall_Keep(int side, float *best, float x)
+{
+    if (side == 0 ? *best < x : *best > x)
+        *best = x;
+}
+
+// mpColl_800454A4_RightWall / mpColl_80046224_LeftWall: push x out of the
+// listed walls. Returns 1 if it moved.
+static int Wall_Push(int side, float *x, float y, SimEcb *cur)
+{
+    float best = side == 0 ? -3.4e38f : 3.4e38f;
+    float sx = side == 0 ? cur->left : cur->right;
+    float dist;
+
+    for (int i = 0; i < wall_list_num[side]; i++)
+    {
+        int wall = wall_list[side][i];
+
+        // the whole run is below or above the ECB: line up with its end
+        Vec2 top = Wall_End(wall, side, 1);
+        if (top.Y < y + cur->bottom)
+        {
+            if ((side == 0 ? best < top.X : best > top.X) && Wall_DistanceX(wall, side, top.X, top.Y, &dist) != -1)
+                best = top.X;
+            continue;
+        }
+        Vec2 bottom = Wall_End(wall, side, 0);
+        if (bottom.Y > y + cur->top)
+        {
+            if ((side == 0 ? best < bottom.X : best > bottom.X) && Wall_DistanceX(wall, side, bottom.X, bottom.Y, &dist) != -1)
+                best = bottom.X;
+            continue;
+        }
+
+        // the bottom, side and top points onto the wall
+        if (Wall_DistanceX(wall, side, *x, y + cur->bottom, &dist) != -1)
+            Wall_Keep(side, &best, *x + dist);
+        if (Wall_DistanceX(wall, side, *x + sx, y + cur->side, &dist) != -1)
+            Wall_Keep(side, &best, *x + dist);
+        float px = *x, py = y + cur->top; // the top point, used below
+        if (Wall_DistanceX(wall, side, px, py, &dist) != -1)
+            Wall_Keep(side, &best, *x + dist);
+
+        // a ceiling over a right wall: keep the top point under its corner
+        // (the left wall version checks the wrong line and never runs)
+        if (side == 0)
+        {
+            int ceil = Line_SkipKind(wall, LINEFLAG_RWALL, 0);
+            if (Line_Usable(ceil) && (Line_Kind(ceil) & LINEFLAG_CEIL) && py > top.Y)
+            {
+                int line = Line_SkipKind(ceil, LINEFLAG_CEIL, 1);
+                if (Line_Usable(line) && (Line_Kind(line) & LINEFLAG_RWALL))
+                {
+                    // mpLineGetNormal
+                    float nx = -(Line_V1(line)->Y - Line_V0(line)->Y);
+                    float ny = Line_V1(line)->X - Line_V0(line)->X;
+                    float len = sqrtf(nx * nx + ny * ny);
+                    if (len > 0)
+                    {
+                        nx /= len;
+                        ny /= len;
+                        float d = (py - top.Y) / nx * -ny + top.X - px + 0.5f;
+                        Wall_Keep(side, &best, *x + d);
+                    }
+                }
+            }
+        }
+
+        // wall corners inside the ECB's height: keep them outside its edges
+        float top_y = y + cur->top;
+        float mid_y = y + cur->side;
+        float bot_y = y + cur->bottom;
+        float lower = sx / (cur->side - cur->bottom); // x per y, bottom to side
+        float upper = sx / (cur->side - cur->top);    // x per y, side to top
+        for (int pass = 0; pass < 2; pass++)
+        {
+            // right walls: down the run through the bottom ends, then up
+            // through the top ends; left walls the other way round
+            int down = pass == 0;
+            int towards_v1 = (side == 0) == down;
+            for (int id = wall; id != -1 && Line_Kind(id) == (side == 0 ? LINEFLAG_RWALL : LINEFLAG_LWALL);
+                 id = towards_v1 ? Wall_Next(id) : Wall_Prev(id))
+            {
+                Vec2 *v = towards_v1 ? Line_V1(id) : Line_V0(id);
+                float ex;
+                if (bot_y <= v->Y && v->Y <= mid_y)
+                    ex = lower * (v->Y - bot_y);
+                else if (mid_y <= v->Y && v->Y <= top_y)
+                    ex = upper * (v->Y - top_y);
+                else if (down ? v->Y < bot_y : v->Y > top_y)
+                    break;
+                else
+                    continue;
+                Wall_Keep(side, &best, v->X - ex);
+            }
+        }
+    }
+
+    if (side == 0 ? *x < best : *x > best)
+    {
+        *x = best;
+        return 1;
+    }
+    return 0;
+}
+
+// Walls are checked left, right, left, right, and again until nothing
+// changes (mpColl_80046904).
+static void Sim_Walls(float *x, float y, float px, float py, SimEcb *prev, SimEcb *cur)
+{
+    // only walls near the ECB's path can be hit. A wall's end can poke
+    // through an ECB edge from up to a frame's movement away, so the margin
+    // is generous.
+    float min_x = px + prev->left, max_x = px + prev->right;
+    float min_y = py + prev->bottom, max_y = py + prev->top;
+    if (min_x > *x + cur->left)
+        min_x = *x + cur->left;
+    if (max_x < *x + cur->right)
+        max_x = *x + cur->right;
+    if (min_y > y + cur->bottom)
+        min_y = y + cur->bottom;
+    if (max_y < y + cur->top)
+        max_y = y + cur->top;
+    min_x -= 10.f;
+    min_y -= 10.f;
+    max_x += 10.f;
+    max_y += 10.f;
+
+    int any = 0;
+    for (int side = 0; side < 2; side++)
+    {
+        near_num[side] = 0;
+        for (int i = 0; i < wall_num[side]; i++)
+        {
+            WallBox *b = &wall_box[side][i];
+            if (b->max_x < min_x || b->min_x > max_x || b->max_y < min_y || b->min_y > max_y)
+                continue;
+            near_ids[side][near_num[side]++] = wall_ids[side][i];
+            any = 1;
+        }
+    }
+    if (!any)
+        return;
+
+    int tiny = cur->top - cur->bottom < 6.f;
+    int flags = 0;
+    for (int pass = 0; pass < 4; pass++)
+    {
+        int old = flags;
+        flags = 0;
+        for (int i = 0; i < 4; i++)
+        {
+            int side = i & 1 ? 0 : 1; // left walls first
+            if (Wall_Find(side, px, py, prev, *x, y, cur, tiny) && Wall_Push(side, x, y, cur))
+                flags |= side == 0 ? 4 : 8;
+        }
+        if (flags == old)
+            break;
+    }
+}
+
+static void Wall_CacheRange(int start, int num)
+{
+    for (int i = 0; i < num; i++)
+    {
+        int id = start + i;
+        u32 flags = coll_lines[id].flags;
+        if (!(flags & LINEFLAG_ENABLED) || (flags & LINEFLAG_EMPTY))
+            continue;
+        int side = (flags & LINEFLAG_RWALL) ? 0 : (flags & LINEFLAG_LWALL) ? 1 : -1;
+        if (side < 0 || wall_num[side] >= LL_MAX_WALLS)
+            continue;
+        Vec2 *v0 = Line_V0(id), *v1 = Line_V1(id);
+        WallBox *b = &wall_box[side][wall_num[side]];
+        b->min_x = v0->X < v1->X ? v0->X : v1->X;
+        b->max_x = v0->X < v1->X ? v1->X : v0->X;
+        b->min_y = v0->Y < v1->Y ? v0->Y : v1->Y;
+        b->max_y = v0->Y < v1->Y ? v1->Y : v0->Y;
+        wall_ids[side][wall_num[side]++] = id;
+    }
+}
+
+static void Wall_BuildCache(RawCollLine *lines, CollVert *verts)
+{
+    coll_lines = lines;
+    coll_verts = verts;
+    wall_num[0] = 0;
+    wall_num[1] = 0;
+
+    for (CollGroup *group = *stc_firstcollgroup; group != 0; group = group->next)
+    {
+        CollGroupDesc *desc = group->desc;
+        Wall_CacheRange(desc->rwall_start, desc->rwall_num);
+        Wall_CacheRange(desc->lwall_start, desc->lwall_num);
+        Wall_CacheRange(desc->dyn_start, desc->dyn_num);
+    }
+}
+
+///////////////////////
 /// Simulation      ///
 ///////////////////////
 
@@ -582,6 +1459,7 @@ typedef struct SimStart
     float facing;
     float bottom;        // ECB bottom used on the starting frame
     float locked_bottom; // bottom kept while the post-jump lock lasts
+    SimEcb ecb;          // the whole ECB used on the starting frame
     int ts;              // tracked state
     int frame;           // frames in that state
     int len;             // frames the state lasts, 0 = loops or unknown
@@ -599,6 +1477,8 @@ typedef struct SimState
     float x, y, vx, vy;
     float bottom;         // ECB bottom used on the last frame
     float prev_x, prev_y; // ECB bottom point of the last frame
+    float pos_x, pos_y;   // fighter position of the last frame
+    SimEcb ecb;           // ECB used on the last frame
     int ts;
     int frame;
     int len;
@@ -735,6 +1615,58 @@ static int State_EstimateLength(FighterData *fp, int frame)
     return frame + k;
 }
 
+// The ECB the game used this frame.
+static void Ecb_FromFighter(FighterData *fp, SimEcb *ecb)
+{
+    CollData *cd = &fp->coll_data;
+    ecb->bottom = cd->ecbCurrCorrect_bot.Y;
+    ecb->top = cd->ecbCurrCorrect_top.Y;
+    ecb->side = cd->ecbCurrCorrect_right.Y;
+    ecb->left = cd->ecbCurrCorrect_left.X;
+    ecb->right = cd->ecbCurrCorrect_right.X;
+}
+
+// A learned frame's shape, turned the way the fighter faces. The bottom
+// stays as it is (the lock decides it).
+static void Ecb_FromSample(EcbSample *e, float facing, SimEcb *ecb)
+{
+    ecb->top = e->top;
+    ecb->side = e->side_y;
+    if (facing > 0)
+    {
+        ecb->right = e->front;
+        ecb->left = e->back;
+    }
+    else
+    {
+        ecb->right = -e->back;
+        ecb->left = -e->front;
+    }
+}
+
+// mpColl_80042384: keeps the side points between the top and the bottom,
+// which matters when the lock holds the bottom somewhere else.
+static void Ecb_Fix(SimEcb *ecb)
+{
+    if (fabs(ecb->top - ecb->bottom) < 1.f)
+    {
+        ecb->top += 1.f;
+        ecb->side = 0.5f * (ecb->top + ecb->bottom);
+    }
+    if (ecb->top < 1.f)
+        ecb->top = 1.f;
+    if (ecb->left > -1.f)
+        ecb->left = -1.f;
+    if (ecb->right < 1.f)
+        ecb->right = 1.f;
+    if (ecb->top < ecb->bottom)
+        ecb->top = ecb->bottom + 1.f;
+    if (ecb->side > ecb->top || ecb->side < ecb->bottom)
+        ecb->side = 0.5f * (ecb->top + ecb->bottom);
+    if (ecb->top - ecb->side < 0.001f || ecb->side - ecb->bottom < 0.001f)
+        ecb->side = 0.5f * (ecb->top + ecb->bottom);
+}
+
 static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
 {
     CollData *cd = &fp->coll_data;
@@ -748,6 +1680,7 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->facing = fp->facing_direction;
     s->bottom = cd->ecbCurrCorrect_bot.Y;
     s->locked_bottom = cd->ecbCurr_bot.Y;
+    Ecb_FromFighter(fp, &s->ecb);
     s->ts = ts;
     s->frame = frame;
     s->len = 0;
@@ -777,6 +1710,10 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->bottom = start->bottom;
     s->prev_x = s->x;
     s->prev_y = s->y + s->bottom;
+    s->pos_x = s->x;
+    s->pos_y = s->y;
+    s->ecb = start->ecb;
+    s->ecb.bottom = start->bottom;
     s->ts = start->ts;
     s->frame = start->frame;
     s->len = start->len;
@@ -887,6 +1824,20 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, S
             s->aerial_pending = 0;
         }
     }
+
+    // the rest of the ECB comes from the bones; keep the last shape until
+    // this frame's has been seen
+    SimEcb ecb = s->ecb;
+    ecb.bottom = s->bottom;
+    if (e->has_shape)
+        Ecb_FromSample(e, start->facing, &ecb);
+    Ecb_Fix(&ecb);
+
+    // walls push the fighter out before the floor test (mpColl_80046904)
+    Sim_Walls(&s->x, s->y, s->pos_x, s->pos_y, &s->ecb, &ecb);
+    s->ecb = ecb;
+    s->pos_x = s->x;
+    s->pos_y = s->y;
 
     // floor test (mpColl_80044628_Floor)
     int pass_platforms = Tracked_UsesPlatformDrop(s->ts) && start->stick_y <= common_platform_drop;
@@ -1135,6 +2086,11 @@ static int Sim_GroundJump(FighterData *fp, int short_hop, SimStart *s)
     s->facing = fp->facing_direction;
     s->bottom = 0; // the lock keeps the grounded bottom
     s->locked_bottom = 0;
+    Ecb_FromFighter(fp, &s->ecb);
+    if (Ecb_Get(ts, 0)->has_shape)
+        Ecb_FromSample(Ecb_Get(ts, 0), fp->facing_direction, &s->ecb);
+    s->ecb.bottom = 0;
+    Ecb_Fix(&s->ecb);
     s->ts = ts;
     s->frame = 0;
     s->len = state_len[ts];
@@ -1288,8 +2244,9 @@ static EventOption Options_Main[OPT_COUNT] = {
     {
         .kind = OPTKIND_FUNC,
         .name = "Forget Learned ECBs",
-        .desc = {"The event learns Falcon's ECB on every frame of",
-                 "each jump and aerial as you play. This clears it."},
+        .desc = {"Falcon's jumps and falls are built in; his aerials",
+                 "are learned as you play. This forgets what was",
+                 "learned and goes back to the built-in data."},
         .OnSelect = Event_ClearLearned,
     },
     {
@@ -1298,7 +2255,7 @@ static EventOption Options_Main[OPT_COUNT] = {
         .desc = {"Cyan stretch: press an aerial there to land (AI).",
                  "Its arrows are the C-stick aerials that work, a",
                  "square for nair. Gray: other landings, or still",
-                 "learning: do each jump and aerial once, high up."},
+                 "learning: do each aerial once, high up."},
     },
     {
         .kind = OPTKIND_FUNC,
@@ -1324,6 +2281,7 @@ static int prev_tilt_timer;
 static int prev_lock;
 static int frame_in_state;
 static int attributes_logged;
+static int stage_logged;
 
 // predictions: live is recomputed every airborne frame; seg is the one made
 // when the player last changed input, which a landing is judged against.
@@ -1415,14 +2373,46 @@ static void Log_Frame(FighterData *fp, int ts, int frame)
     char buf[256];
     CollData *cd = &fp->coll_data;
 
-    sprintf(buf, "LL %d %s f%d pos %.4f %.4f vel %.5f %.5f ff%d lock%d ecb top %.4f bot %.4f l %.4f r %.4f side %.4f used bot %.4f ac%d stick %.4f %.4f\n",
+    sprintf(buf, "LL %d %s f%d pos %.4f %.4f vel %.5f %.5f ff%d lock%d ecb top %.4f bot %.4f l %.4f r %.4f side %.4f used bot %.4f ac%d stick %.4f %.4f face %d\n",
             event_vars->game_timer, tracked_state_names[ts], frame,
             fp->phys.pos.X, fp->phys.pos.Y, fp->phys.self_vel.X, fp->phys.self_vel.Y,
             fp->flags.is_fastfall, cd->u.ecb_bot_lock_frames,
             cd->ecbCurr_top.Y, cd->ecbCurr_bot.Y, cd->ecbCurr_left.X, cd->ecbCurr_right.X, cd->ecbCurr_right.Y,
             cd->ecbCurrCorrect_bot.Y, fp->ftcmd_var.flag0 != 0,
-            fp->input.lstick.X, fp->input.lstick.Y);
+            fp->input.lstick.X, fp->input.lstick.Y, fp->facing_direction > 0 ? 1 : -1);
     Log(buf);
+}
+
+// Every collision line of the stage, so a wrong prediction near a wall or
+// ledge can be replayed exactly: id, kind flags, ends, previous and next
+// line (and the other group's, if any).
+static void Log_Stage(void)
+{
+    char buf[160];
+    RawCollLine *lines = (RawCollLine *)*stc_collline;
+    CollVert *verts = *stc_collvert;
+
+    for (CollGroup *group = *stc_firstcollgroup; group != 0; group = group->next)
+    {
+        CollGroupDesc *d = group->desc;
+        int starts[5] = {d->floor_start, d->ceil_start, d->rwall_start, d->lwall_start, d->dyn_start};
+        int nums[5] = {d->floor_num, d->ceil_num, d->rwall_num, d->lwall_num, d->dyn_num};
+        for (int r = 0; r < 5; r++)
+        {
+            for (int i = 0; i < nums[r]; i++)
+            {
+                int id = starts[r] + i;
+                CollLineDesc *desc = lines[id].desc;
+                Vec2 *v0 = &verts[(u16)desc->vert_prev].pos_curr;
+                Vec2 *v1 = &verts[(u16)desc->vert_next].pos_curr;
+                sprintf(buf, "LLLINE %d flags %x %.4f %.4f %.4f %.4f prev %d next %d alt %d %d plat %d\n",
+                        id, lines[id].flags, v0->X, v0->Y, v1->X, v1->Y,
+                        desc->line_prev, desc->line_next, desc->line_prev_altgroup, desc->line_next_altgroup,
+                        desc->is_unk);
+                Log(buf);
+            }
+        }
+    }
 }
 
 ///////////////////////
@@ -2198,6 +3188,7 @@ void Event_Init(GOBJ *gobj)
 
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     Learned_Clear();
+    Learned_Bake();
     pred_live = calloc(sizeof(Prediction));
     pred_seg = calloc(sizeof(Prediction));
     pred_fh = calloc(sizeof(Prediction));
@@ -2205,6 +3196,11 @@ void Event_Init(GOBJ *gobj)
     actual_pos = calloc(sizeof(Vec2) * (LL_SIM_FRAMES + 1));
     actual_bottom = calloc(sizeof(float) * (LL_SIM_FRAMES + 1));
     floor_cache = calloc(sizeof(FloorLine) * LL_MAX_FLOORS);
+    for (int side = 0; side < 2; side++)
+    {
+        wall_ids[side] = calloc(sizeof(s16) * LL_MAX_WALLS);
+        wall_box[side] = calloc(sizeof(WallBox) * LL_MAX_WALLS);
+    }
 
     // HUD panel on the event gobj, paths on their own gobj in world space
     GObj_AddGXLink(gobj, Hud_GX, GXLINK_HUD, 80);
@@ -2261,7 +3257,14 @@ void Event_Think(GOBJ *event)
     {
         Ecb_Record(fp, ts, frame_in_state);
         if (Options_Main[OPT_LOG].val)
+        {
+            if (!stage_logged)
+            {
+                Log_Stage();
+                stage_logged = 1;
+            }
             Log_Frame(fp, ts, frame_in_state);
+        }
 
         Floor_BuildCache();
         SimStart start;
@@ -2319,6 +3322,7 @@ void Event_ChangeCollDisplay(GOBJ *menu, int value)
 void Event_ClearLearned(GOBJ *menu)
 {
     Learned_Clear();
+    Learned_Bake();
     stat_total = 0;
     stat_exact = 0;
     sprintf(text_exact, "-");

@@ -2981,6 +2981,7 @@ static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
 static const char *sound_names[] = {"Hit and miss", "Hit only", "Off"};
 static const char *ai_filter_names[] = {"Useful", "All"};
+static const char *ai_timer_names[] = {"Both", "Ring", "Brackets", "Off"};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
 static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
 #define LL_SCRIPT_MAX 48 // scripts read from the script file
@@ -2991,6 +2992,14 @@ enum sound_kind
     SOUNDS_ALL,
     SOUNDS_HIT,
     SOUNDS_OFF,
+};
+
+enum ai_timer
+{
+    AI_TIMER_BOTH,
+    AI_TIMER_RING,
+    AI_TIMER_BRACKETS,
+    AI_TIMER_OFF,
 };
 
 enum preview_kind
@@ -3019,7 +3028,7 @@ enum options_main
     OPT_WL_CUES,
     OPT_AI_FILTER,
     OPT_PREVIEW,
-    OPT_RING,
+    OPT_AI_TIMER,
     OPT_BEEPS,
     OPT_PANEL,
     OPT_PANEL_SIDE,
@@ -3111,13 +3120,14 @@ static EventOption Options_Main[OPT_COUNT] = {
                  "where it is."},
     },
     {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Timing Ring",
-        .val = 1,
-        .desc = {"Count down to the next window: a pink ring closes",
-                 "in on Falcon (AI), white arrows slide in to posts",
-                 "at his feet (waveland). Press while it's lit. A",
-                 "thin target is 1 frame, a thick one is longer."},
+        .kind = OPTKIND_STRING,
+        .name = "AI Timer",
+        .value_num = countof(ai_timer_names),
+        .values = ai_timer_names,
+        .desc = {"Count down to the next aerial interrupt with a",
+                 "ring closing on Falcon, brackets closing on the",
+                 "spot he'd land on, or both. Press when it flashes.",
+                 "Waveland rails and the NIL pin follow their cues."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -3278,18 +3288,61 @@ static int preview_sh;
 // body line: the fighter's position raised to the middle of his ECB
 static float body_offset = 9.f;
 
-// timing ring (AI) and slide-in arrows (waveland), and beeps for the next
-// window of either
-#define LL_RING_FRAMES 24 // the countdown starts this many frames before the press
-static int ring_frames; // frames until the aerial press, 0 = no ring
-static int slide_frames; // frames until the airdodge press, 0 = none
-static int ring_span;    // frames the countdown had when it showed up
-static int slide_span;
-static int ring_wide;    // the window lasts more than one frame
-static int slide_wide;
-static u8 slide_dirs;    // DODGE_RIGHT / DODGE_LEFT
-static Vec2 ring_center;  // Falcon's body
-static Vec2 slide_center; // Falcon's ECB bottom
+// The timers: each counts down to its next window, lights up while a press
+// works, then ends by how it went (a hit, a miss or a skip). The AI has a
+// ring on Falcon and brackets on the spot he'd land on, wavelands and
+// wavedashes rails on the floor that fill outward, the NIL a pin that drops
+// onto its spot. An ending plays out while the next countdown of its kind
+// runs.
+#define LL_RING_FRAMES 24 // a countdown starts at most this many frames before its press
+
+enum cue_kind
+{
+    CUE_AI,
+    CUE_WL,
+    CUE_NIL,
+    CUE_NUM
+};
+
+enum cue_phase
+{
+    PH_OFF,
+    PH_COUNT,
+    PH_WINDOW,
+    PH_HIT,
+    PH_FADE, // a miss or a skip folds in on itself
+    PH_CUT,  // the prediction moved on before the window
+};
+
+enum cue_dim
+{
+    DIM_NONE,
+    DIM_MISS,
+    DIM_SKIP,
+};
+
+typedef struct Cue
+{
+    u8 phase;
+    u8 width; // frames in the window
+    u8 dim;   // a miss or skip already decided: it runs on, muted
+    u8 held;  // pressed in the window, waiting for the touchdown
+    u8 dirs;  // rails: DODGE_RIGHT / DODGE_LEFT that work; after a hit, the one slid
+    u8 wd;    // rails: a wavedash out of the jumpsquat
+    u8 soft;  // hit: a waveland that wasn't perfect
+    u8 fresh; // set from this frame's prediction
+    int left; // frames until the press; 1 = press on the next frame
+    int span; // frames the countdown had when it showed up
+    int age;  // frames into the window, or into the ending
+    int pulse; // frames since the window opened, -1 = none
+    int lag;  // hit: the landing lag the timer burns over
+    Vec2 spot; // on the floor: where the AI or NIL lands, or the rails' middle
+    float x0, x1; // rails: where that floor ends
+} Cue;
+
+static Cue cue_live[CUE_NUM]; // counting down or in the window
+static Cue cue_end[CUE_NUM];  // the last one's ending
+static int squat_wd;          // in the jumpsquat: frames until a wavedash's airdodge
 static int beep_target = -100;
 static int beep_done;
 
@@ -3829,20 +3882,33 @@ static void Press_CheckMissed(FighterData *fp, int ts)
     Log(buf);
 }
 
+static void Cue_Missed(int kind);
+static void Cue_Pressed(int kind);
+
 // Buzz when a window passes without its press, or an aerial or airdodge
 // comes while the countdown runs but doesn't touch down. Called on tracked
 // air frames, after pred_live is updated.
 static void Window_Feedback(FighterData *fp, int ts)
 {
-    if (Options_Main[OPT_SOUND].val != SOUNDS_ALL)
-        return;
-
     int miss = 0;
     if (Jump_Or_Fall(prev_ts) && Tracked_IsAerial(ts))
-        miss = prev_ai_first && prev_ai_first <= LL_RING_FRAMES && !(prev_ai_now & AERIAL_BIT(ts));
+    {
+        int timed = prev_ai_first && prev_ai_first <= LL_RING_FRAMES;
+        miss = timed && !(prev_ai_now & AERIAL_BIT(ts));
+        if (miss)
+            Cue_Missed(CUE_AI);
+        else if (timed)
+            Cue_Pressed(CUE_AI);
+    }
     else if (Jump_Or_Fall(prev_ts) && ts == TS_ESCAPEAIR)
-        miss = prev_wl_first && prev_wl_first <= LL_RING_FRAMES &&
-               !(prev_wl_now & Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y));
+    {
+        int timed = prev_wl_first && prev_wl_first <= LL_RING_FRAMES;
+        miss = timed && !(prev_wl_now & Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y));
+        if (miss)
+            Cue_Missed(CUE_WL);
+        else if (timed)
+            Cue_Pressed(CUE_WL);
+    }
     else if (Jump_Or_Fall(ts))
     {
         // this was the frame to press, and pressing on the next one is too late
@@ -3851,7 +3917,7 @@ static void Window_Feedback(FighterData *fp, int ts)
         int wl_next = Cues_Waveland() && p->wl_first == 1 && p->uncertain_from > 1;
         miss = (prev_ai_first == 1 || prev_wl_first == 1) && !ai_next && !wl_next;
     }
-    if (miss)
+    if (miss && Options_Main[OPT_SOUND].val == SOUNDS_ALL)
         SFX_PlayCommon(3);
 }
 
@@ -3870,6 +3936,289 @@ static void Window_Forget(void)
     prev_wl_first = 0;
     prev_ai_now = 0;
     prev_wl_now = 0;
+}
+
+///////////////////////
+/// Timers          ///
+///////////////////////
+
+#define LL_PULSE 10 // frames the window's pulse takes to spread out
+#define LL_BURST 14 // a hit's burst
+#define LL_FADE 10  // a miss or skip folding in
+#define LL_CUT 6
+
+// The floor under (x, y), at most 20 below: its height at x and how far it
+// runs each way, across floors joined end to end.
+static void Floor_Ends(FloorLine *f, float *l, float *ly, float *r, float *ry)
+{
+    int flip = f->x0 > f->x1;
+    *l = flip ? f->x1 : f->x0;
+    *ly = flip ? f->y1 : f->y0;
+    *r = flip ? f->x0 : f->x1;
+    *ry = flip ? f->y0 : f->y1;
+}
+
+static int Floor_Under(float x, float y, Vec2 *spot, float *x0, float *x1)
+{
+    FloorLine *best = 0;
+    float best_y = 0;
+    float l, ly, r, ry;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        Floor_Ends(f, &l, &ly, &r, &ry);
+        if (r - l < 0.001f || x < l || x > r)
+            continue;
+        float h = ly + (ry - ly) * (x - l) / (r - l);
+        if (h <= y + 1.f && h >= y - 20.f && (!best || h > best_y))
+        {
+            best = f;
+            best_y = h;
+        }
+    }
+    if (!best)
+        return 0;
+
+    spot->X = x;
+    spot->Y = best_y;
+    Floor_Ends(best, &l, &ly, &r, &ry);
+    for (int n = 0; n < 16; n++)
+    {
+        int grew = 0;
+        for (int i = 0; i < floor_num; i++)
+        {
+            float fl, fly, fr, fry;
+            Floor_Ends(&floor_cache[i], &fl, &fly, &fr, &fry);
+            if (fl < l && fabs(fr - l) < 0.5f && fabs(fry - ly) < 0.5f)
+            {
+                l = fl;
+                ly = fly;
+                grew = 1;
+            }
+            else if (fr > r && fabs(fl - r) < 0.5f && fabs(fly - ry) < 0.5f)
+            {
+                r = fr;
+                ry = fry;
+                grew = 1;
+            }
+        }
+        if (!grew)
+            break;
+    }
+    *x0 = l;
+    *x1 = r;
+    return 1;
+}
+
+static void Cue_Place(Cue *c, float x, float y)
+{
+    if (!Floor_Under(x, y, &c->spot, &c->x0, &c->x1))
+    {
+        c->spot = (Vec2){x, y};
+        c->x0 = x - 1000.f;
+        c->x1 = x + 1000.f;
+    }
+}
+
+static void Cue_Open(Cue *c)
+{
+    c->left = 1;
+    c->phase = PH_WINDOW;
+    c->age = 0;
+    c->pulse = 0;
+}
+
+static void Cue_Finish(int kind, int phase, int dim)
+{
+    Cue *c = &cue_live[kind];
+    if (!c->phase)
+        return;
+    Cue *e = &cue_end[kind];
+    *e = *c;
+    e->phase = phase;
+    e->dim = dim;
+    e->age = 0;
+    c->phase = PH_OFF;
+}
+
+// A countdown from this frame's prediction, its press left frames away.
+static void Cue_Set(int kind, int left, int width, u8 dirs, int wd, float x, float y)
+{
+    Cue *c = &cue_live[kind];
+    if (c->phase && (c->dim || c->held))
+        return; // already decided: it runs on its own clock
+    if (c->phase == PH_WINDOW && left > 1)
+        Cue_Finish(kind, PH_FADE, DIM_SKIP); // the window went by
+    if (!c->phase || left > c->left + 1)
+    {
+        // new, or a later window: start full and close over what's left
+        memset(c, 0, sizeof(*c));
+        c->span = left;
+        c->pulse = -1;
+    }
+    // a window's width is fixed before it opens; once open, what's left of
+    // it shrinks
+    if (c->phase != PH_WINDOW)
+    {
+        c->width = width;
+        if (left <= 1)
+            Cue_Open(c);
+        else
+            c->phase = PH_COUNT;
+    }
+    c->left = left;
+    c->dirs = dirs;
+    c->wd = wd;
+    c->fresh = 1;
+    Cue_Place(c, x, y);
+}
+
+// A press too early, or one that doesn't work: the timer still runs to its
+// window, muted, so you see when it was.
+static void Cue_Missed(int kind)
+{
+    Cue *c = &cue_live[kind];
+    if (c->phase == PH_WINDOW)
+        Cue_Finish(kind, PH_FADE, DIM_MISS);
+    else if (c->phase == PH_COUNT)
+    {
+        c->dim = DIM_MISS;
+        if (--c->left <= 1)
+            Cue_Open(c);
+    }
+}
+
+// A press that works, whose touchdown comes when the ECB lock runs out.
+static void Cue_Pressed(int kind)
+{
+    Cue *c = &cue_live[kind];
+    if (!c->phase || c->dim)
+        return;
+    if (c->phase != PH_WINDOW)
+        Cue_Open(c);
+    c->held = 1;
+}
+
+static int Cue_HitLen(Cue *e, int kind)
+{
+    int len = e->lag + 7; // the burn over the landing lag, then the ready ping
+    if (len < LL_BURST)
+        len = LL_BURST;
+    if (kind == CUE_WL && len < 24)
+        len = 24;
+    return len;
+}
+
+// Done: the timer moves to where Falcon touched down and plays its hit, even
+// when no countdown ran.
+static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
+{
+    Cue *c = &cue_live[kind];
+    Cue *e = &cue_end[kind];
+    if (c->phase)
+        *e = *c;
+    else
+    {
+        memset(e, 0, sizeof(*e));
+        e->pulse = -1;
+    }
+    c->phase = PH_OFF;
+    e->phase = PH_HIT;
+    e->age = 0;
+    e->dim = DIM_NONE;
+    e->lag = lag;
+    e->soft = soft;
+    if (kind == CUE_WL)
+        e->dirs = dirs;
+    if (e->pulse < 0)
+        e->pulse = 0;
+    Cue_Place(e, fp->phys.pos.X, fp->phys.pos.Y + 1.f);
+}
+
+// Falcon touched down as kind. The timer that called for it is a hit; any
+// other one still running fades out quickly, or as a miss if it was due.
+static void Cue_Landed(FighterData *fp, int kind, int landing_air)
+{
+    int hit = -1;
+    if (kind == LAND_NIL && Cues_Nil())
+        hit = CUE_NIL;
+    else if (kind == LAND_AI && !landing_air && Cues_Ai() && Options_Main[OPT_AI_TIMER].val != AI_TIMER_OFF)
+        hit = CUE_AI;
+    else if ((kind == LAND_PERFECT_WL || kind == LAND_WAVELAND) && Cues_Waveland())
+        hit = CUE_WL;
+
+    // a wavedash timed out of the jumpsquat counts as perfect
+    Cue *wl = &cue_live[CUE_WL];
+    int wd_timed = wl->phase == PH_WINDOW && wl->wd && !wl->dim;
+
+    for (int i = 0; i < CUE_NUM; i++)
+    {
+        Cue *c = &cue_live[i];
+        if (i == hit || !c->phase || c->dim)
+            continue;
+        int due = c->phase == PH_WINDOW || c->held || c->left <= 2;
+        Cue_Finish(i, hit < 0 && due ? PH_FADE : PH_CUT, DIM_MISS);
+    }
+    if (hit == CUE_WL)
+    {
+        float v = fp->phys.self_vel_ground.X != 0 ? fp->phys.self_vel_ground.X : prev_vel.X;
+        int perfect = kind == LAND_PERFECT_WL || wd_timed;
+        Cue_Hit(fp, CUE_WL, (int)common_waveland_lag, !perfect, v >= 0 ? DODGE_RIGHT : DODGE_LEFT);
+    }
+    else if (hit >= 0)
+        Cue_Hit(fp, hit, hit == CUE_AI ? (int)fp->attr.normal_landing_lag : 0, 0, 0);
+}
+
+// Before this frame's prediction: the clocks move on and endings play out.
+static void Cues_Begin(void)
+{
+    for (int i = 0; i < CUE_NUM; i++)
+    {
+        Cue *c = &cue_live[i];
+        c->fresh = 0;
+        if (c->phase)
+        {
+            if (c->pulse >= 0)
+                c->pulse++;
+            if (c->phase == PH_WINDOW)
+                c->age++;
+            if (c->held && c->age > 15)
+                Cue_Finish(i, PH_FADE, DIM_MISS); // pressed, but it never touched down
+            else if (c->dim && c->phase == PH_COUNT && --c->left <= 1)
+                Cue_Open(c);
+            else if (c->dim && c->phase == PH_WINDOW && c->age >= c->width)
+                Cue_Finish(i, PH_FADE, c->dim);
+        }
+
+        Cue *e = &cue_end[i];
+        if (e->phase)
+        {
+            if (e->pulse >= 0)
+                e->pulse++;
+            e->age++;
+            int len = e->phase == PH_HIT ? Cue_HitLen(e, i) : e->phase == PH_FADE ? LL_FADE : LL_CUT;
+            if (e->age >= len)
+                e->phase = PH_OFF;
+        }
+    }
+}
+
+// After it: a countdown the prediction no longer has ended without its
+// press, skipped if its window was on, cut off if not.
+static void Cues_End(void)
+{
+    for (int i = 0; i < CUE_NUM; i++)
+    {
+        Cue *c = &cue_live[i];
+        if (c->phase && !c->fresh && !c->dim && !c->held)
+            Cue_Finish(i, c->phase == PH_WINDOW ? PH_FADE : PH_CUT, DIM_SKIP);
+    }
+}
+
+static void Cues_Clear(void)
+{
+    memset(cue_live, 0, sizeof(cue_live));
+    memset(cue_end, 0, sizeof(cue_end));
 }
 
 #define LL_GHOST_FRAMES 90
@@ -3931,6 +4280,7 @@ static void Landing_Resolve(FighterData *fp)
 
     // an AI into aerial lag (uair) is still an AI, but nothing to cheer
     int hit = kind == LAND_NIL || kind == LAND_PERFECT_WL || (kind == LAND_AI && !landing_air);
+    Cue_Landed(fp, kind, landing_air);
     if (Options_Main[OPT_SOUND].val != SOUNDS_OFF && hit)
         SFX_PlayRaw(303, 255, 128, 20, 3); // laserland's success sound
 
@@ -4029,6 +4379,23 @@ static const GXColor color_ecb = {255, 230, 0, 255};
 #define LL_CIRCLE_SEGS 24
 static Vec2 circle[LL_CIRCLE_SEGS + 1]; // unit circle, filled in Event_Init
 
+// The paths flow: a brighter band keeps running from Falcon to the path's
+// end over a dimmer line, so the lines move like the timers do.
+#define LL_FLOW_LEN 6.f
+
+static GXColor Path_Flow(GXColor c, int i, int from, int to)
+{
+    int len = to - from + (int)(LL_FLOW_LEN * 2);
+    float head = (float)((event_vars->game_timer * 2) % len) - LL_FLOW_LEN;
+    float d = fabs((i - from) - head);
+    float k = 0.55f + (d < LL_FLOW_LEN ? 0.45f * (1.f - d / LL_FLOW_LEN) : 0);
+    c.r = c.r * k;
+    c.g = c.g * k;
+    c.b = c.b * k;
+    c.a = c.a * k;
+    return c;
+}
+
 static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color, u8 size)
 {
     int count = to - from + 1;
@@ -4037,7 +4404,7 @@ static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color,
 
     event_vars->GFX_Start(count, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
     for (int i = from; i <= to; i++)
-        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, color);
+        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
 }
 
 // The paths look different from each other: the landing path is solid, the
@@ -4055,8 +4422,8 @@ static void Draw_Dashed(Vec2 *pos, float *bottom, int from, int to, GXColor colo
     event_vars->GFX_Start(dashes * 2, (GFX_Params){.shape = GX_LINES, .size = size});
     for (int i = from; i + 1 <= to; i += 2)
     {
-        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, color);
-        GFX_AddVtx(pos[i + 1].X, pos[i + 1].Y + bottom[i + 1], 0, color);
+        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
+        GFX_AddVtx(pos[i + 1].X, pos[i + 1].Y + bottom[i + 1], 0, Path_Flow(color, i + 1, from, to));
     }
 }
 
@@ -4336,18 +4703,32 @@ static void Draw_Prediction(Prediction *p, int body, int style)
     }
 }
 
-// The countdowns share one look. Before a window, the target says what kind
-// it is: thin with small ticks for a 1-frame window, thick for a longer one.
-// While a press works (the frame on screen is the one to press on, so the
-// press lands on the next), the target lights up and stays lit until the
-// window is gone.
-#define LL_RING_INNER 4.f
-#define LL_RING_STEP 0.75f
+// The timers' shapes, after the round-2 mockup. Every shape stands on its
+// own, so all three can run at once. A countdown brightens over its last
+// frames, flashes white and pulses out when its window opens, and ends in a
+// burst (hit) or folds in, muted (miss or skip).
+#define LL_RING_R 8.f
+#define LL_RING_DBL 1.7f      // the second ring of a window longer than a frame
+#define LL_RING_APPROACH 8.f  // how far out the closing ring starts
+#define LL_BAR_HW 2.4f
+#define LL_BR_SPAN 12.f       // how far out the brackets start
+#define LL_PIN_H 13.f         // how high the NIL pin starts
+#define LL_DIM 0.5f
+
+// Misses are blue-violet and skips gray: no warm hue to mix up with the pink
+// AI timer or anything amber or red.
+static const GXColor color_miss = {111, 125, 255, 255};
+static const GXColor color_skip = {140, 149, 168, 255};
+static const GXColor color_white = {255, 255, 255, 255};
 
 // A color at a fraction of its strength, for fills (colors are
 // premultiplied).
 static GXColor Color_Fill(GXColor c, float a)
 {
+    if (a < 0)
+        a = 0;
+    if (a > 1)
+        a = 1;
     c.r = c.r * a;
     c.g = c.g * a;
     c.b = c.b * a;
@@ -4369,104 +4750,651 @@ static void Draw_Band(float x, float y, float r0, float r1, GXColor color)
     }
 }
 
-// AI: the outer ring closes in on the inner one around Falcon's body and
-// meets it on the frame to press. While the window is open the ring glows
-// as a band, leaving Falcon himself in plain view.
-// How much of a countdown is left: 1 when it shows up, 0 on the frame to
-// press. Its full size always stands for LL_RING_FRAMES frames.
-static float Countdown_Left(int frames, int span)
+static float Ease_Out(float q)
 {
-    if (span <= 1)
+    return 1.f - (1.f - q) * (1.f - q);
+}
+
+static float Clamp01(float v)
+{
+    return v < 0 ? 0 : v > 1 ? 1 : v;
+}
+
+static void Draw_Seg(float x0, float y0, float x1, float y1, GXColor c, u8 size)
+{
+    event_vars->GFX_Start(2, (GFX_Params){.shape = GX_LINES, .size = size});
+    GFX_AddVtx(x0, y0, 0, c);
+    GFX_AddVtx(x1, y1, 0, c);
+}
+
+static void Draw_Ellipse(float x, float y, float rx, float ry, GXColor c, u8 size)
+{
+    event_vars->GFX_Start(LL_CIRCLE_SEGS + 1, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
+    for (int i = 0; i <= LL_CIRCLE_SEGS; i++)
+        GFX_AddVtx(x + circle[i].X * rx, y + circle[i].Y * ry, 0, c);
+}
+
+static void Draw_Diamond(float x, float y, float r, GXColor c)
+{
+    event_vars->GFX_Start(4, (GFX_Params){.shape = GX_QUADS});
+    GFX_AddVtx(x, y - r, 0, c);
+    GFX_AddVtx(x + r, y, 0, c);
+    GFX_AddVtx(x, y + r, 0, c);
+    GFX_AddVtx(x - r, y, 0, c);
+}
+
+// 0 when a countdown shows up, near 1 on its last frame.
+static float Cue_T(Cue *c)
+{
+    if (c->phase != PH_COUNT || c->span <= 1)
+        return 1.f;
+    return Clamp01((float)(c->span - c->left) / (c->span - 1));
+}
+
+// How lit a countdown is over its last frames before the window.
+static float Cue_Arm(Cue *c)
+{
+    if (c->phase != PH_COUNT || c->dim)
         return 0;
-    float t = (float)(frames - 1) / (span - 1);
-    return t > 1.f ? 1.f : t;
+    return Clamp01(1.f - (c->left - 2) / 3.f);
 }
 
-static void Draw_TimingRing(void)
+// How far through a longer window it is.
+static float Cue_W(Cue *c)
 {
-    GXColor color = land_kind_colors[LAND_AI];
-    float x = ring_center.X;
-    float y = ring_center.Y;
-    float r = LL_RING_INNER;
+    return c->width > 1 ? Clamp01((float)c->age / (c->width - 1)) : 1.f;
+}
 
-    if (ring_frames <= 1)
+static GXColor Cue_Color(int kind)
+{
+    static const u8 land[CUE_NUM] = {LAND_AI, LAND_PERFECT_WL, LAND_NIL};
+    return land_kind_colors[land[kind]];
+}
+
+static GXColor Dim_Color(int dim)
+{
+    return dim == DIM_MISS ? color_miss : color_skip;
+}
+
+// Every other frame, for the flicker of an open window.
+static float Flicker(void)
+{
+    return (event_vars->game_timer & 1) ? 1.f : 0.5f;
+}
+
+// Two sparks running out along the floor from a touchdown.
+static void Draw_Shock(float x, float y, float q, GXColor col)
+{
+    float yy = y + 0.35f;
+    float a = LL_BAR_HW + 1.f + 7.f * Ease_Out(q);
+    float l = 2.4f - 1.6f * q;
+    GXColor c = Color_Fill(col, 1.f - q);
+    event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINES, .size = 18});
+    GFX_AddVtx(x - a, yy, 0, c);
+    GFX_AddVtx(x - a - l, yy, 0, c);
+    GFX_AddVtx(x + a, yy, 0, c);
+    GFX_AddVtx(x + a + l, yy, 0, c);
+}
+
+// AI: a ring around Falcon. The outer ring closes in and meets it on the
+// frame to press; a second ring marks a window longer than a frame.
+static void Draw_AiRing(Cue *c, FighterData *fp)
+{
+    GXColor base = Cue_Color(CUE_AI);
+    GXColor col = c->dim ? Dim_Color(c->dim) : base;
+    float am = c->dim ? LL_DIM : 1.f;
+    float x = fp->phys.pos.X;
+    float y = fp->phys.pos.Y + body_offset;
+    float rr = LL_RING_R;
+    int multi = c->width > 1;
+    float r_out = multi ? rr + LL_RING_DBL : rr;
+
+    switch (c->phase)
     {
-        Draw_Band(x, y, r, r + (ring_wide ? 2.f : 1.2f), Color_Fill(color, 0.45f));
-        Draw_Circle(x, y, r, color, ring_wide ? 96 : 60);
-        return;
+    case PH_COUNT:
+    {
+        float arm = Cue_Arm(c);
+        GXColor faint = Color_Fill(col, (0.3f + 0.5f * arm) * am);
+        Draw_Circle(x, y, rr, faint, 12);
+        if (multi)
+            Draw_Circle(x, y, rr + LL_RING_DBL, faint, 12);
+        float r = r_out + (1.f - Cue_T(c)) * (rr + LL_RING_APPROACH - r_out);
+        if (arm > 0)
+            Draw_Circle(x, y, r, Color_Fill(col, 0.3f * arm), 60);
+        Draw_Circle(x, y, r, Color_Fill(col, 0.95f * am), 18);
+        break;
     }
-
-    if (ring_wide)
-        Draw_Circle(x, y, r, color, 48);
-    else
-    {
-        // thin, with four ticks pointing out: a 1-frame window
-        Draw_Circle(x, y, r, color, 12);
-        event_vars->GFX_Start(8, (GFX_Params){.shape = GX_LINES, .size = 12});
-        for (int i = 0; i < 4; i++)
+    case PH_WINDOW:
+        if (c->dim)
+            Draw_Circle(x, y, rr, Color_Fill(color_white, 0.55f), 12);
+        else if (c->age == 0)
         {
-            Vec2 *c = &circle[(i * 2 + 1) * LL_CIRCLE_SEGS / 8];
-            GFX_AddVtx(x + c->X * r, y + c->Y * r, 0, color);
-            GFX_AddVtx(x + c->X * (r + 1.f), y + c->Y * (r + 1.f), 0, color);
+            Draw_Band(x, y, 0, r_out, Color_Fill(base, 0.3f));
+            Draw_Circle(x, y, rr, Color_Fill(color_white, 0.35f), 96);
+            Draw_Circle(x, y, rr, color_white, 36);
+            if (multi)
+                Draw_Circle(x, y, rr + LL_RING_DBL, color_white, 24);
         }
+        else
+        {
+            float f = Flicker();
+            Draw_Band(x, y, 0, r_out, Color_Fill(base, 0.08f + 0.08f * f));
+            Draw_Circle(x, y, rr, Color_Fill(base, 0.9f), 12);
+            if (multi)
+                Draw_Circle(x, y, rr + LL_RING_DBL, Color_Fill(base, 0.9f), 12);
+            float r = multi ? r_out - Cue_W(c) * LL_RING_DBL : rr;
+            Draw_Circle(x, y, r, Color_Fill(base, 0.35f * f), 72);
+            Draw_Circle(x, y, r, base, 24);
+        }
+        break;
+    case PH_HIT:
+    {
+        int age = c->age;
+        int lag = c->lag > 1 ? c->lag : 1;
+        if (age == 0)
+        {
+            Draw_Band(x, y, 0, rr, Color_Fill(base, 0.3f));
+            Draw_Circle(x, y, rr, Color_Fill(color_white, 0.35f), 96);
+            Draw_Circle(x, y, rr, color_white, 36);
+        }
+        if (age < LL_BURST)
+        {
+            // the ghostly burst
+            float q = (float)age / LL_BURST;
+            Draw_Circle(x, y, rr + 2.f + 9.f * Ease_Out(q), Color_Fill(base, 0.85f * (1.f - q)), 24 - 16 * q);
+            GXColor sc = Color_Fill(base, 1.f - q);
+            event_vars->GFX_Start(16, (GFX_Params){.shape = GX_LINES, .size = 12});
+            for (int i = 0; i < 8; i++)
+            {
+                Vec2 *d = &circle[i * 3 + 1];
+                float r1 = rr + 1.f + 6.f * q, r2 = rr + 2.6f + 8.f * q;
+                GFX_AddVtx(x + d->X * r1, y + d->Y * r1, 0, sc);
+                GFX_AddVtx(x + d->X * r2, y + d->Y * r2, 0, sc);
+            }
+        }
+        if (age > 0 && age < lag)
+        {
+            // the ring burns down over the landing lag, clockwise from the
+            // top, and is gone on the first frame Falcon can act; (Y, X)
+            // runs clockwise from the top
+            int from = age * LL_CIRCLE_SEGS / lag;
+            int n = LL_CIRCLE_SEGS - from + 1;
+            for (int pass = 0; pass < 2; pass++)
+            {
+                GXColor bc = pass ? base : Color_Fill(base, 0.3f);
+                event_vars->GFX_Start(n, (GFX_Params){.shape = GX_LINESTRIP, .size = pass ? 24 : 72});
+                for (int i = from; i <= LL_CIRCLE_SEGS; i++)
+                    GFX_AddVtx(x + circle[i].Y * rr, y + circle[i].X * rr, 0, bc);
+            }
+            Draw_Diamond(x + circle[from].Y * rr, y + circle[from].X * rr, 0.9f, color_white);
+        }
+        break;
     }
-    Draw_Circle(x, y, r + Countdown_Left(ring_frames, ring_span) * (LL_RING_FRAMES - 1) * LL_RING_STEP, color, 36);
+    case PH_FADE:
+    {
+        float p = (float)c->age / LL_FADE;
+        float r = rr * (1.f - 0.75f * Ease_Out(p));
+        float a = 0.5f * (1.f - p);
+        GXColor dc = Dim_Color(c->dim);
+        Draw_Circle(x, y, r, Color_Fill(dc, a), 12);
+        Draw_Circle(x, y, r * 0.7f, Color_Fill(dc, a * 0.55f), 8);
+        break;
+    }
+    case PH_CUT:
+        Draw_Circle(x, y, rr, Color_Fill(base, 0.4f * (1.f - (float)c->age / LL_CUT)), 8);
+        break;
+    }
 }
 
-// Waveland: at Falcon's feet, an arrow slides in from the side toward a
-// post for each direction that works (the left one points right: dodge
-// right), on the same clock as the ring. Low and sideways, so it never sits
-// on the ring. While the window is open, the strip between the posts is lit.
-#define LL_SLIDE_POST 6.f
-#define LL_SLIDE_SIZE 1.6f
-
-static void Draw_SlideArrows(void)
+// AI: brackets close in on the spot Falcon would land on.
+static void Draw_BracketPair(float x, float y, float off, float hk, GXColor c, u8 size)
 {
-    GXColor color = land_kind_colors[LAND_PERFECT_WL];
-    float x = slide_center.X;
-    float y = slide_center.Y;
-    int now = slide_frames <= 1;
-    float d = LL_SLIDE_POST + (now ? 0 : Countdown_Left(slide_frames, slide_span) * (LL_RING_FRAMES - 1) * LL_RING_STEP);
-    float h = LL_SLIDE_SIZE;
-    float p = LL_SLIDE_POST;
-
-    if (now)
-    {
-        GXColor fill = Color_Fill(color, 0.3f);
-        event_vars->GFX_Start(4, (GFX_Params){.shape = GX_QUADS});
-        GFX_AddVtx(x - p, y - h, 0, fill);
-        GFX_AddVtx(x - p, y + h, 0, fill);
-        GFX_AddVtx(x + p, y + h, 0, fill);
-        GFX_AddVtx(x + p, y - h, 0, fill);
-    }
-
-    // the posts: thin with a notch for a 1-frame window, thick for longer
-    u8 post = now ? (slide_wide ? 72 : 48) : (slide_wide ? 48 : 12);
-    event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINES, .size = post});
-    GFX_AddVtx(x - p, y - h, 0, color);
-    GFX_AddVtx(x - p, y + h, 0, color);
-    GFX_AddVtx(x + p, y - h, 0, color);
-    GFX_AddVtx(x + p, y + h, 0, color);
-    if (!now && !slide_wide)
-    {
-        event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINES, .size = 12});
-        GFX_AddVtx(x - p - 0.8f, y + h, 0, color);
-        GFX_AddVtx(x - p + 0.8f, y + h, 0, color);
-        GFX_AddVtx(x + p - 0.8f, y + h, 0, color);
-        GFX_AddVtx(x + p + 0.8f, y + h, 0, color);
-    }
-
-    // the arrows, tip toward the post
+    float h = 3.f * hk, foot = 0.9f, y0 = y + 0.35f;
     for (int side = -1; side <= 1; side += 2)
     {
-        if (!(slide_dirs & (side < 0 ? DODGE_RIGHT : DODGE_LEFT)))
-            continue;
-        float tip = x + side * d;
-        float back = tip + side * h;
-        event_vars->GFX_Start(3, (GFX_Params){.shape = GX_LINESTRIP, .size = now ? 48 : 30});
-        GFX_AddVtx(back, y + h, 0, color);
-        GFX_AddVtx(tip, y, 0, color);
-        GFX_AddVtx(back, y - h, 0, color);
+        float bx = x + side * off;
+        event_vars->GFX_Start(4, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
+        GFX_AddVtx(bx - side * foot, y0 + h, 0, c);
+        GFX_AddVtx(bx, y0 + h, 0, c);
+        GFX_AddVtx(bx, y0, 0, c);
+        GFX_AddVtx(bx - side * foot, y0, 0, c);
+    }
+}
+
+static void Draw_AiBrackets(Cue *c)
+{
+    GXColor base = Cue_Color(CUE_AI);
+    GXColor col = c->dim ? Dim_Color(c->dim) : base;
+    float am = c->dim ? LL_DIM : 1.f;
+    float x = c->spot.X, y = c->spot.Y;
+    float hw = LL_BAR_HW;
+    int multi = c->width > 1;
+    float h_out = multi ? hw + LL_RING_DBL : hw;
+
+    switch (c->phase)
+    {
+    case PH_COUNT:
+    {
+        float arm = Cue_Arm(c);
+        float off = h_out + (1.f - Cue_T(c)) * LL_BR_SPAN;
+        if (multi)
+            Draw_BracketPair(x, y, h_out, 1, Color_Fill(col, 0.35f * am), 12);
+        if (arm > 0)
+            Draw_BracketPair(x, y, off, 1, Color_Fill(col, 0.3f * arm), 60);
+        Draw_BracketPair(x, y, off, 1, Color_Fill(col, 0.95f * am), 18);
+        break;
+    }
+    case PH_WINDOW:
+        if (c->dim)
+            Draw_BracketPair(x, y, h_out, 1, Color_Fill(color_white, 0.55f), 12);
+        else if (c->age == 0)
+        {
+            Draw_BracketPair(x, y, h_out, 1, Color_Fill(color_white, 0.35f), 90);
+            Draw_BracketPair(x, y, h_out, 1, color_white, 30);
+        }
+        else
+        {
+            float off = multi ? h_out - Cue_W(c) * LL_RING_DBL : hw;
+            Draw_BracketPair(x, y, off, 1, Color_Fill(base, 0.35f * Flicker()), 72);
+            Draw_BracketPair(x, y, off, 1, base, 24);
+        }
+        break;
+    case PH_HIT:
+        if (c->age == 0)
+        {
+            Draw_BracketPair(x, y, hw, 1, Color_Fill(color_white, 0.35f), 90);
+            Draw_BracketPair(x, y, hw, 1, color_white, 30);
+        }
+        else if (c->age < c->lag)
+            Draw_BracketPair(x, y, hw, 1.f - (float)c->age / c->lag, base, 24);
+        if (c->age < 12)
+            Draw_Shock(x, y, c->age / 12.f, base);
+        break;
+    case PH_FADE:
+    {
+        float p = (float)c->age / LL_FADE;
+        Draw_BracketPair(x, y, hw * (1.f - 0.8f * Ease_Out(p)), 1.f - 0.5f * p, Color_Fill(Dim_Color(c->dim), 0.45f * (1.f - p)), 12);
+        break;
+    }
+    case PH_CUT:
+        Draw_BracketPair(x, y, hw, 1, Color_Fill(base, 0.35f * (1.f - (float)c->age / LL_CUT)), 8);
+        break;
+    }
+}
+
+// How far a waveland slides from ground speed v until it stops, with the
+// ground friction (ft_80084F3C, doubled above walk speed as in the
+// jumpsquat). Approximate: assumes the landing keeps the dodge's sideways
+// speed.
+static float Slide_Distance(FighterData *fp, float v)
+{
+    float d = 0;
+    for (int i = 0; i < 200 && v > 0; i++)
+    {
+        float friction = fp->attr.ground_friction;
+        if (v > fp->attr.walk_maximum_velocity)
+            friction *= common_run_friction;
+        v = v > friction ? v - friction : 0;
+        d += v;
+    }
+    return d;
+}
+
+static void Draw_RailSeg(float a, float b, float y, GXColor c, u8 size)
+{
+    if (b - a > 0.05f)
+        Draw_Seg(a, y, b, y, c, size);
+}
+
+// The end of a rail: a post where the slide stops, or a little arrow over
+// the edge when it would slide off.
+static void Draw_RailCap(float x, float y, int off, int side, GXColor c, u8 size)
+{
+    if (!off)
+    {
+        Draw_Seg(x, y, x, y + 1.4f, c, size);
+        return;
+    }
+    event_vars->GFX_Start(3, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
+    GFX_AddVtx(x, y, 0, c);
+    GFX_AddVtx(x + side * 1.4f, y, 0, c);
+    GFX_AddVtx(x + side * 2.5f, y - 1.9f, 0, c);
+    event_vars->GFX_Start(3, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
+    GFX_AddVtx(x + side * 1.4f, y - 1.5f, 0, c);
+    GFX_AddVtx(x + side * 2.5f, y - 1.9f, 0, c);
+    GFX_AddVtx(x + side * 2.75f, y - 0.8f, 0, c);
+}
+
+// Wavedash rails fill like a two-sided thermometer: from the middle out,
+// thicker toward the bulbs at the ends, which light up when it's full.
+static void Draw_Mercury(float tx, float L, float R, float y, float k, GXColor c, GXColor bulb, int full)
+{
+    for (int side = -1; side <= 1; side += 2)
+    {
+        float end = side < 0 ? L : R;
+        float xf = tx + (end - tx) * k;
+        float h0 = 0.15f, h1 = 0.15f + 1.1f * k;
+        // counter-clockwise, left end first
+        float lx = side < 0 ? xf : tx, lh = side < 0 ? h1 : h0;
+        float rx = side < 0 ? tx : xf, rh = side < 0 ? h0 : h1;
+        event_vars->GFX_Start(4, (GFX_Params){.shape = GX_QUADS});
+        GFX_AddVtx(lx, y - lh, 0, c);
+        GFX_AddVtx(rx, y - rh, 0, c);
+        GFX_AddVtx(rx, y + rh, 0, c);
+        GFX_AddVtx(lx, y + lh, 0, c);
+        float bx = end + side * 1.3f;
+        if (full)
+            Draw_Band(bx, y, 0, 1.4f, bulb);
+        else
+            Draw_Circle(bx, y, 1.4f, bulb, 12);
+    }
+}
+
+// Where the slide would stop with the stick where it is now: the dodge takes
+// the stick's angle, and keeps the sideways part of its speed.
+static void Draw_StickMark(FighterData *fp, Cue *c, float y, float L, float R)
+{
+    float sx = fp->input.lstick.X, sy = fp->input.lstick.Y;
+    float len = sqrtf(sx * sx + sy * sy);
+    if (sx == 0 || len < common_dodge_deadzone.X)
+        return;
+    float d = Slide_Distance(fp, common_dodge_force * fabs(sx) / len);
+    float x = sx > 0 ? c->spot.X + d : c->spot.X - d;
+    if (x < L)
+        x = L;
+    if (x > R)
+        x = R;
+    Draw_Seg(x, y - 1.2f, x, y + 1.8f, color_white, 18);
+}
+
+// Waveland and wavedash: rails along the floor as long as the slide each
+// way, lit outward from the touchdown as the window nears. Falcon eats the
+// rail as he slides after a hit.
+static void Draw_Rails(Cue *c, FighterData *fp, float reach)
+{
+    GXColor base = Cue_Color(CUE_WL);
+    float tx = c->spot.X;
+    float y = c->spot.Y + (c->wd ? 1.4f : 0.45f);
+    float L = tx - reach, R = tx + reach;
+    int off_l = L < c->x0, off_r = R > c->x1;
+    if (off_l)
+        L = c->x0;
+    if (off_r)
+        R = c->x1;
+    int ok_l = c->wd || (c->dirs & DODGE_LEFT);
+    int ok_r = c->wd || (c->dirs & DODGE_RIGHT);
+
+    switch (c->phase)
+    {
+    case PH_COUNT:
+    {
+        GXColor col = c->dim ? Dim_Color(c->dim) : base;
+        float am = c->dim ? LL_DIM : 1.f;
+        float arm = Cue_Arm(c), k = Cue_T(c);
+        GXColor faint = Color_Fill(col, 0.28f * am);
+        GXColor lit = Color_Fill(col, (0.8f + 0.2f * arm) * am);
+        Draw_RailSeg(L, tx, y, faint, 10);
+        Draw_RailSeg(tx, R, y, faint, 10);
+        Draw_RailCap(L, y, off_l, -1, faint, 10);
+        Draw_RailCap(R, y, off_r, 1, faint, 10);
+        if (c->wd)
+            Draw_Mercury(tx, L, R, y, k, lit, faint, 0);
+        else
+        {
+            for (int pass = arm > 0 ? 0 : 1; pass < 2; pass++)
+            {
+                GXColor pc = pass ? lit : Color_Fill(col, 0.3f * arm);
+                u8 size = pass ? 18 : 60;
+                if (ok_l)
+                    Draw_RailSeg(tx - (tx - L) * k, tx, y, pc, size);
+                if (ok_r)
+                    Draw_RailSeg(tx, tx + (R - tx) * k, y, pc, size);
+            }
+        }
+        Draw_Diamond(tx, y, 0.7f, lit);
+        if (!c->dim)
+            Draw_StickMark(fp, c, y, L, R);
+        break;
+    }
+    case PH_WINDOW:
+    {
+        int flash = c->age == 0 && !c->dim;
+        GXColor col = c->dim ? Color_Fill(color_white, 0.55f) : flash ? color_white : base;
+        if (!c->dim)
+        {
+            GXColor glow = Color_Fill(base, flash ? 0.45f : 0.35f * Flicker());
+            if (ok_l)
+                Draw_RailSeg(L, tx, y, glow, 90);
+            if (ok_r)
+                Draw_RailSeg(tx, R, y, glow, 90);
+        }
+        if (c->wd)
+            Draw_Mercury(tx, L, R, y, 1.f, col, col, 1);
+        else
+        {
+            if (ok_l)
+                Draw_RailSeg(L, tx, y, col, flash ? 30 : 18);
+            if (ok_r)
+                Draw_RailSeg(tx, R, y, col, flash ? 30 : 18);
+        }
+        if (ok_l)
+            Draw_RailCap(L, y, off_l, -1, col, 18);
+        if (ok_r)
+            Draw_RailCap(R, y, off_r, 1, col, 18);
+        Draw_Diamond(tx, y, 0.7f, col);
+        if (!c->dim)
+            Draw_StickMark(fp, c, y, L, R);
+        break;
+    }
+    case PH_HIT:
+    {
+        int age = c->age, len = Cue_HitLen(c, CUE_WL);
+        float s = c->soft ? 0.6f : 1.f;
+        if (age == 0 && !c->soft)
+        {
+            Draw_RailSeg(L, R, y, Color_Fill(base, 0.45f), 90);
+            Draw_RailSeg(L, R, y, color_white, 30);
+            Draw_RailCap(L, y, off_l, -1, color_white, 18);
+            Draw_RailCap(R, y, off_r, 1, color_white, 18);
+        }
+        else
+        {
+            float fx = fp->phys.pos.X < L ? L : fp->phys.pos.X > R ? R : fp->phys.pos.X;
+            float fade = age > len - 6 ? (len - age) / 6.f : 1.f;
+            float other = Clamp01(1.f - age / 6.f) * 0.8f * s;
+            GXColor eat = Color_Fill(base, fade * s);
+            if (c->dirs & DODGE_RIGHT)
+            {
+                Draw_RailSeg(fx, R, y, eat, 24);
+                Draw_RailCap(R, y, off_r, 1, eat, 18);
+                Draw_RailSeg(L, tx, y, Color_Fill(base, other), 12);
+            }
+            else
+            {
+                Draw_RailSeg(L, fx, y, eat, 24);
+                Draw_RailCap(L, y, off_l, -1, eat, 18);
+                Draw_RailSeg(tx, R, y, Color_Fill(base, other), 12);
+            }
+        }
+        if (age < 12)
+            Draw_Shock(tx, c->spot.Y, age / 12.f, Color_Fill(base, s));
+        if (age < LL_BURST)
+        {
+            // the pulse out: a halo spreading along the floor
+            float q = (float)age / LL_BURST;
+            float rx = 3.f + 14.f * Ease_Out(q);
+            Draw_Ellipse(tx, c->spot.Y + 0.35f, rx, rx * 0.3f, Color_Fill(base, 0.9f * (1.f - q) * s), 24);
+        }
+        break;
+    }
+    case PH_FADE:
+    {
+        float p = (float)c->age / LL_FADE;
+        float k = 1.f - Ease_Out(p);
+        GXColor dc = Color_Fill(Dim_Color(c->dim), 0.45f * (1.f - p));
+        Draw_RailSeg(tx - (tx - L) * k, tx, y, dc, 12);
+        Draw_RailSeg(tx, tx + (R - tx) * k, y, dc, 12);
+        Draw_Diamond(tx, y, 0.7f, dc);
+        break;
+    }
+    case PH_CUT:
+    {
+        GXColor fc = Color_Fill(base, 0.35f * (1.f - (float)c->age / LL_CUT));
+        Draw_RailSeg(L, R, y, fc, 10);
+        break;
+    }
+    }
+}
+
+// NIL: a pin that drops onto the landing spot and touches down on the first
+// frame Falcon can act.
+static void Draw_Pin(float tx, float y0, float h, float k, GXColor c, u8 size, GXColor stem)
+{
+    if (h > 0.5f)
+        Draw_Seg(tx, y0, tx, y0 + h, stem, 8);
+    float cw = 1.5f * k, ch = 1.1f * k;
+    event_vars->GFX_Start(3, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
+    GFX_AddVtx(tx - cw, y0 + h + ch, 0, c);
+    GFX_AddVtx(tx, y0 + h, 0, c);
+    GFX_AddVtx(tx + cw, y0 + h + ch, 0, c);
+}
+
+static void Draw_NilPin(Cue *c)
+{
+    GXColor base = Cue_Color(CUE_NIL);
+    float tx = c->spot.X, y0 = c->spot.Y + 0.35f;
+
+    if (c->phase == PH_COUNT)
+    {
+        GXColor col = c->dim ? Dim_Color(c->dim) : base;
+        float am = c->dim ? LL_DIM : 1.f;
+        float arm = Cue_Arm(c);
+        float h = (1.f - Cue_T(c)) * LL_PIN_H;
+        Draw_Seg(tx - 1.3f, y0, tx + 1.3f, y0, Color_Fill(col, (0.45f + 0.4f * arm) * am), 12);
+        if (arm > 0)
+            Draw_Pin(tx, y0, h, 1, Color_Fill(col, 0.3f * arm), 60, Color_Fill(col, 0));
+        Draw_Pin(tx, y0, h, 1, Color_Fill(col, (0.85f + 0.15f * arm) * am), 18, Color_Fill(col, 0.4f * am));
+    }
+    else if (c->phase == PH_WINDOW || (c->phase == PH_HIT && c->age == 0))
+    {
+        int muted = c->phase == PH_WINDOW && c->dim;
+        GXColor w = Color_Fill(color_white, muted ? 0.55f : 1.f);
+        float hw = muted ? 1.6f : 4.f;
+        if (!muted)
+            Draw_Seg(tx - hw, y0, tx + hw, y0, Color_Fill(base, 0.45f), 90);
+        Draw_Seg(tx - hw, y0, tx + hw, y0, w, muted ? 12 : 24);
+        Draw_Pin(tx, y0, 0, 1, w, 18, w);
+    }
+    if (c->phase == PH_HIT)
+    {
+        if (c->age > 0 && c->age < LL_BURST)
+        {
+            float q = (float)c->age / LL_BURST;
+            float rx = 2.f + 9.f * Ease_Out(q);
+            Draw_Ellipse(tx, y0, rx, rx * 0.3f, Color_Fill(base, 0.8f * (1.f - q)), 18);
+        }
+        if (c->age < 12)
+            Draw_Shock(tx, c->spot.Y, c->age / 12.f, base);
+    }
+    else if (c->phase == PH_FADE)
+    {
+        float p = (float)c->age / LL_FADE;
+        float k = 1.f - Ease_Out(p);
+        GXColor dc = Color_Fill(Dim_Color(c->dim), 0.45f * (1.f - p));
+        Draw_Seg(tx - (1.3f * k + 0.2f), y0, tx + (1.3f * k + 0.2f), y0, dc, 12);
+        Draw_Pin(tx, y0, 0, k > 0.15f ? k : 0.15f, dc, 12, dc);
+        float rx = 0.6f + 2.6f * k;
+        Draw_Ellipse(tx, y0, rx, rx * 0.3f, Color_Fill(Dim_Color(c->dim), 0.27f * (1.f - p)), 8);
+    }
+    else if (c->phase == PH_CUT)
+        Draw_Seg(tx - 1.3f, y0, tx + 1.3f, y0, Color_Fill(base, 0.4f * (1.f - (float)c->age / LL_CUT)), 8);
+}
+
+// The window opens (or a hit lands with no window before it): a bright
+// pulse spreads out from the timer's shape, so the frame can be felt and
+// not only seen.
+static void Draw_Pulse(int kind, Cue *c, FighterData *fp, float reach)
+{
+    if (c->pulse < 0 || c->pulse >= LL_PULSE)
+        return;
+    float q = (float)c->pulse / LL_PULSE, e = Ease_Out(q);
+    float a = (c->dim ? 0.4f : 1.f) * (1.f - q);
+    GXColor w = Color_Fill(color_white, a);
+    GXColor g = Color_Fill(Cue_Color(kind), 0.4f * a);
+    u8 size = 36 - 24 * q;
+    int timer = Options_Main[OPT_AI_TIMER].val;
+
+    if (kind == CUE_AI)
+    {
+        if (timer != AI_TIMER_BRACKETS)
+        {
+            float x = fp->phys.pos.X, y = fp->phys.pos.Y + body_offset;
+            float r = LL_RING_R + 10.f * e;
+            Draw_Circle(x, y, r, g, size * 3);
+            Draw_Circle(x, y, r, w, size);
+        }
+        if (timer != AI_TIMER_RING)
+        {
+            float off = LL_BAR_HW + 8.f * e;
+            Draw_BracketPair(c->spot.X, c->spot.Y, off, 1.f + 0.5f * e, g, size * 3);
+            Draw_BracketPair(c->spot.X, c->spot.Y, off, 1.f + 0.5f * e, w, size);
+        }
+    }
+    else
+    {
+        // a halo spreading on the floor, and for the rails, flares off
+        // both ends
+        float tx = c->spot.X, y = c->spot.Y + 0.35f;
+        float rx = kind == CUE_WL ? 4.f + 16.f * e : 2.f + 12.f * e;
+        Draw_Ellipse(tx, y, rx, rx * 0.3f, g, size * 3);
+        Draw_Ellipse(tx, y, rx, rx * 0.3f, w, size);
+        if (kind == CUE_WL)
+        {
+            float L = tx - reach, R = tx + reach;
+            if (L < c->x0)
+                L = c->x0;
+            if (R > c->x1)
+                R = c->x1;
+            float h = 3.f * (1.f - q);
+            Draw_Seg(L - 4.f * e, y, L - 4.f * e, y + h, w, size);
+            Draw_Seg(R + 4.f * e, y, R + 4.f * e, y + h, w, size);
+        }
+    }
+}
+
+// The endings under the countdowns, each with its pulse, and a white ping at
+// Falcon's feet on the first frame he can act after a hit.
+static void Draw_Cues(FighterData *fp)
+{
+    int timer = Options_Main[OPT_AI_TIMER].val;
+    float reach = Slide_Distance(fp, common_dodge_force);
+    for (int pass = 0; pass < 2; pass++)
+    {
+        for (int i = 0; i < CUE_NUM; i++)
+        {
+            Cue *c = pass ? &cue_live[i] : &cue_end[i];
+            if (!c->phase)
+                continue;
+            if (i == CUE_AI)
+            {
+                if (timer != AI_TIMER_BRACKETS)
+                    Draw_AiRing(c, fp);
+                if (timer != AI_TIMER_RING)
+                    Draw_AiBrackets(c);
+            }
+            else if (i == CUE_WL)
+                Draw_Rails(c, fp, reach);
+            else
+                Draw_NilPin(c);
+            Draw_Pulse(i, c, fp, reach);
+
+            if (c->phase == PH_HIT && c->age >= c->lag && c->age < c->lag + 6)
+            {
+                float q = (c->age - c->lag) / 6.f;
+                float rx = 1.6f + 3.4f * Ease_Out(q);
+                Draw_Ellipse(fp->phys.pos.X, fp->phys.pos.Y + 0.2f, rx, rx * 0.32f, Color_Fill(color_white, 0.95f * (1.f - q)), 18);
+            }
+        }
     }
 }
 
@@ -4513,13 +5441,7 @@ static void World_GX(GOBJ *gobj, int pass)
         Draw_StickGate(fp);
 
     if (live_visible)
-    {
         Draw_Prediction(pred_live, 1, LINE_SOLID);
-        if (Options_Main[OPT_RING].val && slide_frames)
-            Draw_SlideArrows();
-        if (Options_Main[OPT_RING].val && ring_frames)
-            Draw_TimingRing();
-    }
     else if (ghost_visible)
     {
         Draw_Prediction(pred_seg, 0, LINE_SOLID);
@@ -4534,12 +5456,8 @@ static void World_GX(GOBJ *gobj, int pass)
             Draw_Prediction(pred_fh, 1, LINE_SOLID);
         if (preview_sh)
             Draw_Prediction(pred_sh, !preview_fh, LINE_DASHED);
-        // in the jumpsquat, the countdowns have already started
-        if (Options_Main[OPT_RING].val && slide_frames)
-            Draw_SlideArrows();
-        if (Options_Main[OPT_RING].val && ring_frames)
-            Draw_TimingRing();
     }
+    Draw_Cues(fp);
 }
 
 static void Hud_GX(GOBJ *gobj, int pass)
@@ -5080,8 +5998,7 @@ static void Script_ResetTracking(void)
     seg_valid = 0;
     live_visible = 0;
     ghost_visible = 0;
-    ring_frames = 0;
-    slide_frames = 0;
+    Cues_Clear();
     beep_target = -100;
     Window_Forget();
 }
@@ -5478,45 +6395,40 @@ static void Panel_UpdateSide(FighterData *fp)
         panel_left = 0;
 }
 
-// The ring counts down to the next AI window, the slide-in arrows to the
-// next perfect waveland window, and the beeps to whichever comes first.
-// p starts lead frames from now (the rest of a jumpsquat, or 0 in the air).
+// The timers count down to the next AI, perfect waveland and NIL windows,
+// and the beeps to whichever AI or waveland window comes first. p starts
+// lead frames from now (the rest of a jumpsquat, or 0 in the air). In the
+// jumpsquat the rails count down to the wavedash instead.
 static void Timing_Update(FighterData *fp, Prediction *p, int lead)
 {
     static const int beats[3] = {21, 11, 1};
 
     int ai = Cues_Ai() && p->ai_first && p->ai_first < p->uncertain_from ? lead + p->ai_first : 0;
     int wl = Cues_Waveland() && p->wl_first && p->wl_first < p->uncertain_from ? lead + p->wl_first : 0;
+    int nil = Cues_Nil() && p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame
+                  ? lead + p->land_frame + 1 // the first frame Falcon can act
+                  : 0;
 
-    // a window's width is fixed before it opens; once open, what's left of
-    // it shrinks, so keep the look it had. A countdown that shows up with
-    // less lead than usual (or for a later window) starts full and closes
-    // over the time that's left.
-    if (ai && ai <= LL_RING_FRAMES)
+    // each timer sits where its touchdown is: the floor under the frame
+    // before it
+    if (ai && ai <= LL_RING_FRAMES && Options_Main[OPT_AI_TIMER].val != AI_TIMER_OFF)
     {
-        if (ai > 1 || ring_frames == 0)
-            ring_wide = p->ai_width > 1;
-        if (ring_frames == 0 || ai > ring_frames + 1)
-            ring_span = ai;
-        ring_frames = ai;
-        ring_center.X = fp->phys.pos.X;
-        ring_center.Y = fp->phys.pos.Y + body_offset;
+        int k = p->ai_first;
+        int t = k + p->ai_delay[k];
+        if (t > p->num)
+            t = p->num;
+        Cue_Set(CUE_AI, ai, p->ai_width, 0, 0, p->pos[t].X, p->pos[k - 1].Y + p->bottom[k - 1]);
     }
-    else
-        ring_frames = 0;
-    if (wl && wl <= LL_RING_FRAMES)
+    if (wl && wl <= LL_RING_FRAMES && !squat_wd)
     {
-        if (wl > 1 || slide_frames == 0)
-            slide_wide = p->wl_width > 1;
-        if (slide_frames == 0 || wl > slide_frames + 1)
-            slide_span = wl;
-        slide_frames = wl;
-        slide_dirs = p->wl_dirs;
-        slide_center.X = fp->phys.pos.X;
-        slide_center.Y = fp->phys.pos.Y + fp->coll_data.ecbCurrCorrect_bot.Y;
+        int k = p->wl_first;
+        Cue_Set(CUE_WL, wl, p->wl_width, p->wl_dirs, 0, p->pos[k].X, p->pos[k - 1].Y + p->bottom[k - 1]);
     }
-    else
-        slide_frames = 0;
+    if (nil && nil <= LL_RING_FRAMES)
+    {
+        int k = p->land_frame;
+        Cue_Set(CUE_NIL, nil, 1, 0, 0, p->pos[k].X, p->pos[k - 1].Y + p->bottom[k - 1]);
+    }
 
     int next = ai && (!wl || ai < wl) ? ai : wl;
     if (!next || !Options_Main[OPT_BEEPS].val)
@@ -5572,17 +6484,13 @@ static void Ground_Preview(FighterData *fp)
     }
     if (squat)
         Timing_Update(fp, short_hop ? pred_sh : pred_fh, short_hop ? lead_sh : lead_fh);
-    else
-    {
-        ring_frames = 0;
-        slide_frames = 0;
-    }
     if (preview_fh || preview_sh)
         Text_Preview();
 }
 
 void Event_Init(GOBJ *gobj)
 {
+    Cues_Clear();
     common_fastfall_stick = Common_Float(COMMON_FASTFALL_STICK);
     common_fastfall_window = Common_Int(COMMON_FASTFALL_WINDOW);
     common_lcancel_window = Common_Int(COMMON_LCANCEL_WINDOW);
@@ -5676,6 +6584,25 @@ void Event_Think(GOBJ *event)
 
     int tracked_air = ts >= 0 && airborne && !disturbed;
 
+    // a wavedash's airdodge works from the first frame after takeoff: in
+    // the jumpsquat, count down to it (KneeBend takes off once its frame
+    // reaches the startup time), and on the takeoff frame it's next
+    squat_wd = 0;
+    if (Cues_Waveland() && !disturbed)
+    {
+        if (sid == ASID_KNEEBEND)
+        {
+            float left = fp->attr.jump_startup_time - fp->state.frame;
+            int until = (int)left;
+            if (until < left)
+                until++;
+            squat_wd = (until < 1 ? 1 : until) + 1;
+        }
+        else if (airborne && prev_state_id == ASID_KNEEBEND)
+            squat_wd = 1;
+    }
+
+    Cues_Begin();
     if (prev_tracked_air && !tracked_air)
         Landing_Resolve(fp);
     else
@@ -5684,11 +6611,6 @@ void Event_Think(GOBJ *event)
     Panel_UpdateSide(fp);
     if (sid == ASID_WAIT && fp->coll_data.ecbCurr_right.Y > 1.f)
         body_offset = fp->coll_data.ecbCurr_right.Y;
-    if (!tracked_air && (sid != ASID_KNEEBEND || disturbed))
-    {
-        ring_frames = 0;
-        slide_frames = 0;
-    }
     preview_fh = 0;
     preview_sh = 0;
 
@@ -5742,6 +6664,10 @@ void Event_Think(GOBJ *event)
         Ground_Preview(fp);
     if (!tracked_air)
         Window_Forget();
+
+    if (squat_wd)
+        Cue_Set(CUE_WL, squat_wd, 1, DODGE_RIGHT | DODGE_LEFT, 1, fp->phys.pos.X, fp->phys.pos.Y + 1.f);
+    Cues_End();
 
     // the jumpsquat and takeoff, to check the ground previews against
     if (sid == ASID_KNEEBEND && logging)

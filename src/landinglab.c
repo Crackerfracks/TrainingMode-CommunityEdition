@@ -3013,6 +3013,7 @@ enum options_main
     OPT_PATH,
     OPT_BODY,
     OPT_TICKS,
+    OPT_STICK,
     OPT_NIL_CUES,
     OPT_AI_CUES,
     OPT_WL_CUES,
@@ -3060,6 +3061,13 @@ static EventOption Options_Main[OPT_COUNT] = {
         .val = 1,
         .desc = {"Mark every frame on the paths with a short line",
                  "across them. Closer marks mean slower movement."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Stick Display",
+        .val = 1,
+        .desc = {"Show where the control stick is held, in a small",
+                 "gate above Falcon's head."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -4450,13 +4458,47 @@ static void Draw_SlideArrows(void)
     }
 }
 
+// The control stick in an octagonal gate above Falcon's head, so the angle
+// that drives the paths is in view.
+#define LL_GATE_R 3.f
+#define LL_GATE_ABOVE 5.f
+
+static void Draw_StickGate(FighterData *fp)
+{
+    static const GXColor gate = {110, 110, 110, 255};
+    float x = fp->phys.pos.X;
+    float y = fp->phys.pos.Y + fp->coll_data.ecbCurr_top.Y + LL_GATE_ABOVE;
+
+    event_vars->GFX_Start(9, (GFX_Params){.shape = GX_LINESTRIP, .size = 8});
+    for (int i = 0; i <= 8; i++)
+    {
+        const Vec2 *c = &circle[(i % 8) * LL_CIRCLE_SEGS / 8];
+        GFX_AddVtx(x + c->X * LL_GATE_R, y + c->Y * LL_GATE_R, 0, gate);
+    }
+
+    float sx = x + fp->input.lstick.X * LL_GATE_R;
+    float sy = y + fp->input.lstick.Y * LL_GATE_R;
+    event_vars->GFX_Start(2, (GFX_Params){.shape = GX_LINES, .size = 12});
+    GFX_AddVtx(x, y, 0, color_actual);
+    GFX_AddVtx(sx, sy, 0, color_actual);
+
+    event_vars->GFX_Start(4, (GFX_Params){.shape = GX_QUADS});
+    GFX_AddVtx(sx - LL_DOT * 1.5f, sy - LL_DOT * 1.5f, 0, color_actual);
+    GFX_AddVtx(sx + LL_DOT * 1.5f, sy - LL_DOT * 1.5f, 0, color_actual);
+    GFX_AddVtx(sx + LL_DOT * 1.5f, sy + LL_DOT * 1.5f, 0, color_actual);
+    GFX_AddVtx(sx - LL_DOT * 1.5f, sy + LL_DOT * 1.5f, 0, color_actual);
+}
+
 static void World_GX(GOBJ *gobj, int pass)
 {
     if (pass != 2)
         return;
 
+    FighterData *fp = Fighter_GetGObj(0)->userdata;
     if (Options_Main[OPT_COLL].val)
-        Draw_CurrentEcb(Fighter_GetGObj(0)->userdata);
+        Draw_CurrentEcb(fp);
+    if (Options_Main[OPT_STICK].val)
+        Draw_StickGate(fp);
 
     if (live_visible)
     {

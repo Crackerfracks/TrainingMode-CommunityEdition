@@ -222,6 +222,7 @@ void HUD_DrawTextEx(
 Rect HUD_DrawActionLogBar(u8 *action_log, GXColor *color_lookup, int log_count);
 void HUD_DrawActionLogKey(char **action_names, GXColor *action_colors, int action_count);
 void HUD_DrawInfoPanel(const char **label, const char **info, int count);
+void HUD_DrawInfoPanelAt(const char **label, const char **info, int count, float x);
 
 typedef struct RNGControl
 {
@@ -280,6 +281,7 @@ typedef struct EventVars
     Rect (*HUD_DrawActionLogBar)(u8 *action_log, GXColor *color_lookup, int log_count);
     void (*HUD_DrawActionLogKey)(char **action_names, GXColor *action_colors, int action_count);
     void (*HUD_DrawInfoPanel)(const char **label, const char **info, int count);
+    void (*HUD_DrawInfoPanelAt)(const char **label, const char **info, int count, float x);
 } EventVars;
 #define event_vars_ptr_loc ((EventVars**)0x803d7054)
 #define event_vars (*event_vars_ptr_loc)

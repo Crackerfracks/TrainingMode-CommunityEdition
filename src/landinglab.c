@@ -45,6 +45,8 @@
 #define COMMON_AERIAL_STICK_X 0xDC  // float: |stick x| below this (and y below the next) is a nair
 #define COMMON_AERIAL_STICK_Y 0xE0  // float
 #define COMMON_AERIAL_ANGLE 0x20    // float, radians: steeper than this is an uair or dair
+#define COMMON_RUN_FRICTION 0x6C    // float: ground friction multiplier above walk speed
+#define COMMON_JUMP_BACK_STICK 0x78 // float: stick x * facing <= -this jumps backwards
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
@@ -183,6 +185,12 @@ static const GXColor land_kind_colors[LAND_KIND_COUNT] = {
     {200, 200, 200, 255}, // other
 };
 static const GXColor color_learning = {130, 130, 130, 255};
+
+// Only NIL and aerial interrupts are worth practicing toward.
+static int Kind_Highlighted(int kind)
+{
+    return kind == LAND_NIL || kind == LAND_AI;
+}
 static const GXColor color_actual = {255, 255, 255, 255};
 
 ///////////////////////
@@ -649,6 +657,8 @@ static float common_platform_drop;
 static float common_aerial_stick_x;
 static float common_aerial_stick_y;
 static float common_aerial_angle;
+static float common_run_friction;
+static float common_jump_back_stick;
 
 static float Common_Float(int offset)
 {
@@ -1055,6 +1065,93 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
     Ai_Summarize(p);
 }
 
+#define LL_GUESS_JUMP_LEN 40 // until a jump has been seen ending
+
+// A jump pressed on the next frame (or the jumpsquat already going): the
+// squat frames slide on the ground with friction (ftCo_KneeBend_Phys), then
+// takeoff (ftCo_Jump_Enter, ftCo_800CB110) sets the speed and moves the
+// fighter without gravity on that frame (ftCo_Jump_Phys skips its first
+// frame). s is the state at the end of the takeoff frame. Assumes a flat
+// floor. Returns the frames until takeoff.
+static int Sim_GroundJump(FighterData *fp, int short_hop, SimStart *s)
+{
+    float x = fp->phys.pos.X;
+    float y = fp->phys.pos.Y;
+    float gr_vel = fp->phys.self_vel_ground.X;
+    float stick_x = fp->input.lstick.X;
+    float startup = fp->attr.jump_startup_time;
+
+    // KneeBend_Anim takes off once the animation frame reaches the startup
+    // time; a new press starts the squat at frame 0 on the next frame
+    float squat_left = startup;
+    int until = 1;
+    if (fp->state_id == ASID_KNEEBEND)
+    {
+        squat_left = startup - fp->state.frame;
+        until = 0;
+    }
+    int squat = (int)squat_left;
+    if (squat < squat_left)
+        squat++;
+    if (squat < 1)
+        squat = 1;
+    until += squat;
+    int slide = until - 1; // ground frames before takeoff
+
+    for (int i = 0; i < slide; i++)
+    {
+        // ft_80084F3C
+        float friction = fp->attr.ground_friction;
+        if (fabs(gr_vel) > fp->attr.walk_maximum_velocity)
+            friction *= common_run_friction;
+        float accel;
+        if (fabs(friction) > fabs(gr_vel))
+            accel = -gr_vel;
+        else
+            accel = gr_vel > 0 ? -friction : friction;
+        gr_vel += accel;
+        x += gr_vel;
+    }
+
+    float vx = gr_vel * fp->attr.ground_to_air_jump_momentum_multiplier + stick_x * fp->attr.jump_h_initial_velocity;
+    float max = fp->attr.jump_h_max_velocity;
+    if (vx > max)
+        vx = max;
+    else if (vx < -max)
+        vx = -max;
+    float vy = short_hop ? fp->attr.hop_v_initial_velocity : fp->attr.jump_v_initial_velocity;
+    x += vx;
+    y += vy;
+
+    int ts = stick_x * fp->facing_direction > -common_jump_back_stick ? TS_JUMPF : TS_JUMPB;
+    int trigger = (u8)fp->input.timer_trigger_any_ignore_hitlag + until;
+
+    s->pos.X = x;
+    s->pos.Y = y;
+    s->vel.X = vx;
+    s->vel.Y = vy;
+    s->stick_x = stick_x;
+    s->stick_y = fp->input.lstick.Y;
+    s->facing = fp->facing_direction;
+    s->bottom = 0; // the lock keeps the grounded bottom
+    s->locked_bottom = 0;
+    s->ts = ts;
+    s->frame = 0;
+    s->len = state_len[ts];
+    s->len_estimated = 0;
+    if (s->len == 0)
+    {
+        s->len = LL_GUESS_JUMP_LEN;
+        s->len_estimated = 1;
+    }
+    s->fastfall = 0;
+    s->tilt_timer = LL_TIMER_MAX; // ftCo_800CB110 resets the stick timer
+    s->trigger_timer = trigger < LL_TIMER_MAX ? trigger : LL_TIMER_MAX;
+    s->ecb_lock = 9; // set to 10 on takeoff, counted down before collision
+    s->skip_line = -1;
+    return until;
+}
+
 ///////////////////////
 /// Event state     ///
 ///////////////////////
@@ -1065,11 +1162,33 @@ void Event_ChangeCollDisplay(GOBJ *menu, int value);
 
 static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
+static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
+static const char *panel_side_names[] = {"Auto", "Right", "Left"};
+
+enum preview_kind
+{
+    PREVIEW_BOTH,
+    PREVIEW_FULL,
+    PREVIEW_SHORT,
+    PREVIEW_OFF,
+};
+
+enum panel_side
+{
+    PANEL_AUTO,
+    PANEL_RIGHT,
+    PANEL_LEFT,
+};
 
 enum options_main
 {
     OPT_PATH,
+    OPT_BODY,
+    OPT_PREVIEW,
+    OPT_RING,
+    OPT_BEEPS,
     OPT_PANEL,
+    OPT_PANEL_SIDE,
     OPT_SOUND,
     OPT_SPEED,
     OPT_COLL,
@@ -1086,17 +1205,56 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Landing Path",
         .val = 1,
-        .desc = {"Draw where Falcon lands if you keep holding the",
-                 "stick and press nothing, colored by landing type.",
-                 "Ticks mark where pressing an aerial lands you."},
+        .desc = {"Draw where Falcon's ECB bottom lands if you keep",
+                 "holding the stick and press nothing. Green for a",
+                 "NIL, cyan for an aerial interrupt, thin gray for",
+                 "anything else."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Body Path",
+        .val = 1,
+        .desc = {"Also draw a smooth line through Falcon's body,",
+                 "which is easier to follow than the ECB bottom."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Jump Preview",
+        .value_num = countof(preview_names),
+        .values = preview_names,
+        .desc = {"On the ground, show where a full hop and a short",
+                 "hop would go if you jumped now, holding the stick",
+                 "where it is."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Timing Ring",
+        .val = 1,
+        .desc = {"A ring around Falcon closes in on the next aerial",
+                 "interrupt. Press the aerial when it meets the",
+                 "inner ring."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Timing Beeps",
+        .desc = {"Beep 20 and 10 frames before the next aerial",
+                 "interrupt, and on the frame to press."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Info Panel",
         .val = 1,
-        .desc = {"Show the predicted landing, which aerials can",
-                 "interrupt, how your last landing compared, and",
-                 "how often they matched."},
+        .desc = {"Show the prediction, which aerials can interrupt,",
+                 "and your last landing. Exact counts how often the",
+                 "prediction matched what really happened."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Panel Side",
+        .value_num = countof(panel_side_names),
+        .values = panel_side_names,
+        .desc = {"Where the info panel goes. Auto keeps it on the",
+                 "side of the screen Falcon isn't on."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -1115,28 +1273,32 @@ static EventOption Options_Main[OPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Collision Display",
-        .desc = {"Show stage collision lines and ECBs."},
+        .desc = {"Show stage collision, Falcon's ECB, hitboxes and",
+                 "hurtboxes, and hide his model so it doesn't",
+                 "cover them."},
         .OnChange = Event_ChangeCollDisplay,
     },
     {
         .kind = OPTKIND_TOGGLE,
-        .name = "ECB Log",
-        .desc = {"Print each airborne frame's state, position,",
-                 "speed and ECB to the Dolphin log."},
+        .name = "Debug Log",
+        .desc = {"Write every airborne frame's state, position,",
+                 "speed and ECB to Dolphin's log. Only needed to",
+                 "report a wrong prediction."},
     },
     {
         .kind = OPTKIND_FUNC,
         .name = "Forget Learned ECBs",
-        .desc = {"Clear the ECB data learned this session."},
+        .desc = {"The event learns Falcon's ECB on every frame of",
+                 "each jump and aerial as you play. This clears it."},
         .OnSelect = Event_ClearLearned,
     },
     {
         .kind = OPTKIND_INFO,
         .name = "Help",
-        .desc = {"Path: green NIL, yellow landing, orange L-cancel,",
-                 "red full lag. Cyan tick: an aerial pressed there",
-                 "lands you (AI). Gray: still learning, so do each",
-                 "jump and aerial once, high up. White: your path."},
+        .desc = {"Cyan stretch: press an aerial there to land (AI).",
+                 "Its arrows are the C-stick aerials that work, a",
+                 "square for nair. Gray: other landings, or still",
+                 "learning: do each jump and aerial once, high up."},
     },
     {
         .kind = OPTKIND_FUNC,
@@ -1182,6 +1344,24 @@ static Vec2 *actual_pos;      // [LL_SIM_FRAMES + 1]
 static float *actual_bottom;  // [LL_SIM_FRAMES + 1]
 static int actual_num;
 static int ghost_visible;
+static int ghost_timer;
+
+// jump previews while on the ground
+static Prediction *pred_fh;
+static Prediction *pred_sh;
+static int preview_fh;
+static int preview_sh;
+
+// body line: the fighter's position raised to the middle of his ECB
+static float body_offset = 9.f;
+
+// timing ring and beeps for the next aerial interrupt
+static int ring_frames; // frames until the press, 0 = no ring
+static Vec2 ring_center;
+static int beep_target = -100;
+static int beep_done;
+
+static int panel_left;
 
 // HUD
 static int stat_total;
@@ -1385,6 +1565,63 @@ static void Text_Ai(Prediction *p)
         sprintf(text_ai + n, ", %df", p->ai_width);
 }
 
+// "NIL", "AI", "?" while learning, "-" for anything else.
+static const char *Kind_Short(Prediction *p)
+{
+    if (!p->land_frame)
+        return "-";
+    if (p->uncertain_from <= p->land_frame)
+        return "?";
+    if (Kind_Highlighted(p->land_kind))
+        return land_kind_names[p->land_kind];
+    return "-";
+}
+
+// The aerials of the first AI window as letters, like "NUD".
+static void Ai_Letters(Prediction *p, char *out)
+{
+    static const char letters[] = "NFBUD";
+    int n = 0;
+
+    if (!p->ai_first)
+        out[n++] = '-';
+    else if (p->ai_first >= p->uncertain_from)
+        out[n++] = '?';
+    else
+    {
+        for (int a = 0; a < 5; a++)
+        {
+            if (p->ai_aerials & (1 << a))
+                out[n++] = letters[a];
+        }
+    }
+    out[n] = 0;
+}
+
+// On the ground: what a full hop (FH) and a short hop (SH) would give.
+static void Text_Preview(void)
+{
+    char fh[8], sh[8];
+    Ai_Letters(pred_fh, fh);
+    Ai_Letters(pred_sh, sh);
+
+    if (preview_fh && preview_sh)
+    {
+        sprintf(text_predict, "FH %s, SH %s", Kind_Short(pred_fh), Kind_Short(pred_sh));
+        sprintf(text_ai, "FH %s, SH %s", fh, sh);
+    }
+    else if (preview_fh)
+    {
+        sprintf(text_predict, "FH %s", Kind_Short(pred_fh));
+        sprintf(text_ai, "FH %s", fh);
+    }
+    else
+    {
+        sprintf(text_predict, "SH %s", Kind_Short(pred_sh));
+        sprintf(text_ai, "SH %s", sh);
+    }
+}
+
 // L/R/Z doesn't change the path, so a full-lag prediction that you then
 // L-cancelled still counts as a match.
 static int Kind_Matches(int a, int b)
@@ -1450,6 +1687,8 @@ static void Ai_CheckMissed(FighterData *fp, int ts)
     Log(buf);
 }
 
+#define LL_GHOST_FRAMES 90
+
 // The fighter left the tracked air states this frame: judge the landing.
 static void Landing_Resolve(FighterData *fp)
 {
@@ -1487,7 +1726,11 @@ static void Landing_Resolve(FighterData *fp)
 
     Segment_AddActual(fp);
     live_visible = 0;
-    ghost_visible = seg_valid;
+
+    // keep the attempt on screen for a moment, but only when a NIL or an
+    // aerial interrupt was predicted or happened
+    ghost_visible = seg_valid && (Kind_Highlighted(kind) || Kind_Highlighted(pred_seg->land_kind));
+    ghost_timer = LL_GHOST_FRAMES;
 
     if (Options_Main[OPT_SOUND].val && (kind == LAND_NIL || kind == LAND_AI))
         SFX_PlayRaw(303, 255, 128, 20, 3); // laserland's success sound
@@ -1558,6 +1801,13 @@ static void Landing_Resolve(FighterData *fp)
 /// Drawing         ///
 ///////////////////////
 
+static const GXColor color_neutral = {150, 150, 150, 255};
+static const GXColor color_body = {190, 200, 255, 255};
+static const GXColor color_ecb = {255, 230, 0, 255};
+
+#define LL_CIRCLE_SEGS 24
+static Vec2 circle[LL_CIRCLE_SEGS + 1]; // unit circle, filled in Event_Init
+
 static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color, u8 size)
 {
     int count = to - from + 1;
@@ -1567,6 +1817,26 @@ static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color,
     event_vars->GFX_Start(count, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
     for (int i = from; i <= to; i++)
         GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, color);
+}
+
+// The fighter's position raised by a fixed amount: a smooth arc through his
+// body, unlike the ECB bottom, which moves with his legs.
+static void Draw_BodyPath(Prediction *p, int last)
+{
+    int count = last + 1;
+    if (count < 2)
+        return;
+
+    event_vars->GFX_Start(count, (GFX_Params){.shape = GX_LINESTRIP, .size = 12});
+    for (int i = 0; i <= last; i++)
+        GFX_AddVtx(p->pos[i].X, p->pos[i].Y + body_offset, 0, color_body);
+}
+
+static void Draw_Circle(float x, float y, float r, GXColor color, u8 size)
+{
+    event_vars->GFX_Start(LL_CIRCLE_SEGS + 1, (GFX_Params){.shape = GX_LINESTRIP, .size = size});
+    for (int i = 0; i <= LL_CIRCLE_SEGS; i++)
+        GFX_AddVtx(x + circle[i].X * r, y + circle[i].Y * r, 0, color);
 }
 
 static void Draw_Ecb(Vec2 pos, float bottom, EcbSample *s, float facing, GXColor color)
@@ -1594,70 +1864,144 @@ static void Draw_Ecb(Vec2 pos, float bottom, EcbSample *s, float facing, GXColor
     GFX_AddVtx(pos.X, pos.Y + s->top, 0, color);
 }
 
-// Ticks across the path on the frames where pressing an aerial forces a
-// touchdown: cyan, or orange if every aerial that works there would land
-// with aerial lag.
-static void Draw_AiMarks(Prediction *p, int last)
+// Falcon's ECB right now, for the collision view (his model is hidden).
+static void Draw_CurrentEcb(FighterData *fp)
 {
+    CollData *cd = &fp->coll_data;
+    float x = fp->phys.pos.X;
+    float y = fp->phys.pos.Y;
+
+    event_vars->GFX_Start(5, (GFX_Params){.shape = GX_LINESTRIP, .size = 24});
+    GFX_AddVtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
+    GFX_AddVtx(x + cd->ecbCurrCorrect_right.X, y + cd->ecbCurrCorrect_right.Y, 0, color_ecb);
+    GFX_AddVtx(x + cd->ecbCurrCorrect_bot.X, y + cd->ecbCurrCorrect_bot.Y, 0, color_ecb);
+    GFX_AddVtx(x + cd->ecbCurrCorrect_left.X, y + cd->ecbCurrCorrect_left.Y, 0, color_ecb);
+    GFX_AddVtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
+}
+
+// The C-stick direction of each aerial in mask, drawn from (x, y): arrows
+// for fair, bair, uair and dair, a small square for nair.
+static void Draw_AerialArrows(float x, float y, u8 mask, float facing, GXColor color)
+{
+    static const float dirs[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}}; // N F B U D
     int count = 0;
-    for (int k = 1; k <= last; k++)
+    for (int a = 0; a < 5; a++)
     {
-        if (p->ai_mask[k])
-            count += 2;
+        if (mask & (1 << a))
+            count += a == 0 ? 8 : 6;
     }
     if (count == 0)
         return;
 
     event_vars->GFX_Start(count, (GFX_Params){.shape = GX_LINES, .size = 24});
+    for (int a = 0; a < 5; a++)
+    {
+        if (!(mask & (1 << a)))
+            continue;
+
+        if (a == 0)
+        {
+            float r = 1.2f;
+            GFX_AddVtx(x - r, y - r, 0, color);
+            GFX_AddVtx(x + r, y - r, 0, color);
+            GFX_AddVtx(x + r, y - r, 0, color);
+            GFX_AddVtx(x + r, y + r, 0, color);
+            GFX_AddVtx(x + r, y + r, 0, color);
+            GFX_AddVtx(x - r, y + r, 0, color);
+            GFX_AddVtx(x - r, y + r, 0, color);
+            GFX_AddVtx(x - r, y - r, 0, color);
+            continue;
+        }
+
+        float dx = dirs[a][0] * facing; // forward and back follow facing
+        float dy = dirs[a][1];
+        float tip_x = x + dx * 6.f;
+        float tip_y = y + dy * 6.f;
+        // arrowhead: back from the tip, 40 degrees either side
+        float bx = -dx * 0.766f, by = -dy * 0.766f;
+        float px = -dy * 0.643f, py = dx * 0.643f;
+
+        GFX_AddVtx(x + dx * 1.5f, y + dy * 1.5f, 0, color);
+        GFX_AddVtx(tip_x, tip_y, 0, color);
+        GFX_AddVtx(tip_x, tip_y, 0, color);
+        GFX_AddVtx(tip_x + (bx + px) * 2.f, tip_y + (by + py) * 2.f, 0, color);
+        GFX_AddVtx(tip_x, tip_y, 0, color);
+        GFX_AddVtx(tip_x + (bx - px) * 2.f, tip_y + (by - py) * 2.f, 0, color);
+    }
+}
+
+// Each run of frames where an aerial interrupts: a thick stretch of the
+// path, cyan (orange if every aerial there lands with aerial lag), with the
+// aerials that work drawn at its start.
+static void Draw_AiWindows(Prediction *p, int last)
+{
     for (int k = 1; k <= last; k++)
     {
         if (!p->ai_mask[k])
             continue;
 
+        int e = k;
+        u8 mask = 0;
+        int all_lag = 1;
+        while (e <= last && p->ai_mask[e])
+        {
+            mask |= p->ai_mask[e];
+            if (p->ai_lag_mask[e] != p->ai_mask[e])
+                all_lag = 0;
+            e++;
+        }
+        e--;
+
         GXColor color = land_kind_colors[LAND_AI];
         if (k >= p->uncertain_from)
             color = color_learning;
-        else if (p->ai_lag_mask[k] == p->ai_mask[k])
+        else if (all_lag)
             color = land_kind_colors[LAND_LCANCEL];
 
-        // at right angles to the path, so ticks stay apart at any speed
-        int k1 = k < p->num ? k + 1 : k;
-        float dx = p->pos[k1].X - p->pos[k - 1].X;
-        float dy = (p->pos[k1].Y + p->bottom[k1]) - (p->pos[k - 1].Y + p->bottom[k - 1]);
-        float len = sqrtf(dx * dx + dy * dy);
-        float nx = 1, ny = 0;
-        if (len > 0.001f)
-        {
-            nx = -dy / len;
-            ny = dx / len;
-        }
+        // from half a frame before the window to half a frame after it
+        int before = k - 1;
+        int after = e < p->num ? e + 1 : e;
+        event_vars->GFX_Start(e - k + 3, (GFX_Params){.shape = GX_LINESTRIP, .size = 72});
+        GFX_AddVtx((p->pos[before].X + p->pos[k].X) / 2,
+                   (p->pos[before].Y + p->bottom[before] + p->pos[k].Y + p->bottom[k]) / 2, 0, color);
+        for (int i = k; i <= e; i++)
+            GFX_AddVtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
+        GFX_AddVtx((p->pos[e].X + p->pos[after].X) / 2,
+                   (p->pos[e].Y + p->bottom[e] + p->pos[after].Y + p->bottom[after]) / 2, 0, color);
 
-        float x = p->pos[k].X;
-        float y = p->pos[k].Y + p->bottom[k];
-        GFX_AddVtx(x - nx * 2.5f, y - ny * 2.5f, 0, color);
-        GFX_AddVtx(x + nx * 2.5f, y + ny * 2.5f, 0, color);
+        Draw_AerialArrows(p->pos[k].X, p->pos[k].Y + p->bottom[k], mask, p->facing, color);
+        k = e;
     }
 }
 
-static void Draw_Prediction(Prediction *p)
+static void Draw_Prediction(Prediction *p, int body)
 {
     int last = p->land_frame ? p->land_frame : p->num;
-    int known = p->uncertain_from - 1; // last frame drawn in color
-    if (known > last)
-        known = last;
-    if (known < 0)
-        known = 0;
+    int certain = p->land_frame && p->uncertain_from > p->land_frame;
+    int highlight = certain && Kind_Highlighted(p->land_kind);
 
-    GXColor color = land_kind_colors[p->land_kind];
-    Draw_Path(p->pos, p->bottom, 0, known, color, 24);
-    Draw_Path(p->pos, p->bottom, known, last, color_learning, 24);
-    Draw_AiMarks(p, p->land_frame ? p->land_frame - 1 : p->num);
+    if (body && Options_Main[OPT_BODY].val)
+        Draw_BodyPath(p, last);
 
-    if (p->land_frame)
+    if (highlight)
+        Draw_Path(p->pos, p->bottom, 0, last, land_kind_colors[p->land_kind], 24);
+    else
+    {
+        int known = p->uncertain_from - 1;
+        if (known > last)
+            known = last;
+        if (known < 0)
+            known = 0;
+        Draw_Path(p->pos, p->bottom, 0, known, color_neutral, 12);
+        Draw_Path(p->pos, p->bottom, known, last, color_learning, 12);
+    }
+
+    Draw_AiWindows(p, p->land_frame ? p->land_frame - 1 : p->num);
+
+    if (highlight)
     {
         int k = p->land_frame;
-        Draw_Ecb(p->pos[k], p->bottom[k], &p->land_ecb, p->facing,
-                 p->uncertain_from <= k ? color_learning : color);
+        Draw_Ecb(p->pos[k], p->bottom[k], &p->land_ecb, p->facing, land_kind_colors[p->land_kind]);
     }
 
     // short white tick where a pending fastfall kicks in
@@ -1671,17 +2015,55 @@ static void Draw_Prediction(Prediction *p)
     }
 }
 
+// The outer ring closes in on the inner one, meeting it on the frame before
+// the press, so the press lands as the rings touch.
+#define LL_RING_FRAMES 24
+#define LL_RING_INNER 4.f
+#define LL_RING_STEP 0.75f
+
+static void Draw_TimingRing(void)
+{
+    GXColor color = land_kind_colors[LAND_AI];
+    float x = ring_center.X;
+    float y = ring_center.Y;
+
+    if (ring_frames <= 1)
+    {
+        Draw_Circle(x, y, LL_RING_INNER, color, 72);
+        return;
+    }
+    Draw_Circle(x, y, LL_RING_INNER, color, 12);
+    Draw_Circle(x, y, LL_RING_INNER + (ring_frames - 1) * LL_RING_STEP, color, 36);
+}
+
 static void World_GX(GOBJ *gobj, int pass)
 {
-    if (pass != 2 || !Options_Main[OPT_PATH].val)
+    if (pass != 2)
+        return;
+
+    if (Options_Main[OPT_COLL].val)
+        Draw_CurrentEcb(Fighter_GetGObj(0)->userdata);
+
+    if (!Options_Main[OPT_PATH].val)
         return;
 
     if (live_visible)
-        Draw_Prediction(pred_live);
+    {
+        Draw_Prediction(pred_live, 1);
+        if (Options_Main[OPT_RING].val && ring_frames)
+            Draw_TimingRing();
+    }
     else if (ghost_visible)
     {
-        Draw_Prediction(pred_seg);
+        Draw_Prediction(pred_seg, 0);
         Draw_Path(actual_pos, actual_bottom, 0, actual_num - 1, color_actual, 12);
+    }
+    else
+    {
+        if (preview_fh)
+            Draw_Prediction(pred_fh, 1);
+        if (preview_sh)
+            Draw_Prediction(pred_sh, 1);
     }
 }
 
@@ -1690,12 +2072,109 @@ static void Hud_GX(GOBJ *gobj, int pass)
     if (pass != 2 || !Options_Main[OPT_PANEL].val)
         return;
 
-    event_vars->HUD_DrawInfoPanel((const char **)panel_labels, (const char **)panel_info, countof(panel_labels));
+    float x = panel_left ? -26.7f : 18.f;
+    event_vars->HUD_DrawInfoPanelAt((const char **)panel_labels, (const char **)panel_info, countof(panel_labels), x);
 }
 
 ///////////////////////
 /// Event callbacks ///
 ///////////////////////
+
+// Grounded states a jump can start from.
+static int Ground_CanJump(int sid)
+{
+    return (sid >= ASID_WAIT && sid <= ASID_KNEEBEND) || (sid >= ASID_SQUAT && sid <= ASID_SQUATRV);
+}
+
+// The ghost of the last attempt stays until it times out or you move.
+static void Ghost_Update(int sid)
+{
+    if (!ghost_visible)
+        return;
+    int resting = sid == ASID_WAIT || sid == ASID_LANDING || (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW);
+    if (--ghost_timer <= 0 || !resting)
+        ghost_visible = 0;
+}
+
+// Auto keeps the panel on the half of the screen Falcon isn't on.
+static void Panel_UpdateSide(FighterData *fp)
+{
+    int side = Options_Main[OPT_PANEL_SIDE].val;
+    if (side != PANEL_AUTO)
+    {
+        panel_left = side == PANEL_LEFT;
+        return;
+    }
+
+    Vec3 eye;
+    COBJ_GetEyePosition(*stc_matchcam_cobj, &eye);
+    float dx = fp->phys.pos.X - eye.X;
+    if (dx > 4.f) // a little slack so it doesn't flicker near the middle
+        panel_left = 1;
+    else if (dx < -4.f)
+        panel_left = 0;
+}
+
+// Ring and beeps count down to the first frame of the next AI window.
+static void Timing_Update(FighterData *fp, Prediction *p)
+{
+    static const int beats[3] = {21, 11, 1};
+
+    ring_frames = 0;
+    if (!p->ai_first || p->ai_first >= p->uncertain_from)
+        return;
+
+    if (p->ai_first <= LL_RING_FRAMES)
+    {
+        ring_frames = p->ai_first;
+        ring_center.X = fp->phys.pos.X;
+        ring_center.Y = fp->phys.pos.Y + body_offset;
+    }
+
+    if (!Options_Main[OPT_BEEPS].val)
+        return;
+
+    // the same window can shift by a frame as the prediction updates
+    int target = event_vars->game_timer + p->ai_first;
+    if (target - beep_target > 2 || beep_target - target > 2)
+    {
+        beep_target = target;
+        beep_done = 0;
+    }
+    for (int i = 0; i < 3; i++)
+    {
+        int next = i < 2 ? beats[i + 1] : 0;
+        if (p->ai_first <= beats[i] && p->ai_first > next && !(beep_done & (1 << i)))
+        {
+            beep_done |= 1 << i;
+            SFX_PlayCommon(i == 2 ? 2 : 1);
+        }
+    }
+}
+
+static void Ground_Preview(FighterData *fp)
+{
+    int opt = Options_Main[OPT_PREVIEW].val;
+    SimStart start;
+
+    preview_fh = opt == PREVIEW_BOTH || opt == PREVIEW_FULL;
+    preview_sh = opt == PREVIEW_BOTH || opt == PREVIEW_SHORT;
+    if (!preview_fh && !preview_sh)
+        return;
+
+    Floor_BuildCache();
+    if (preview_fh)
+    {
+        Sim_GroundJump(fp, 0, &start);
+        Predict(fp, &start, pred_fh, 1);
+    }
+    if (preview_sh)
+    {
+        Sim_GroundJump(fp, 1, &start);
+        Predict(fp, &start, pred_sh, 1);
+    }
+    Text_Preview();
+}
 
 void Event_Init(GOBJ *gobj)
 {
@@ -1707,11 +2186,22 @@ void Event_Init(GOBJ *gobj)
     common_aerial_stick_x = Common_Float(COMMON_AERIAL_STICK_X);
     common_aerial_stick_y = Common_Float(COMMON_AERIAL_STICK_Y);
     common_aerial_angle = Common_Float(COMMON_AERIAL_ANGLE);
+    common_run_friction = Common_Float(COMMON_RUN_FRICTION);
+    common_jump_back_stick = Common_Float(COMMON_JUMP_BACK_STICK);
+
+    for (int i = 0; i <= LL_CIRCLE_SEGS; i++)
+    {
+        float t = i * (6.2831853f / LL_CIRCLE_SEGS);
+        circle[i].X = cos(t);
+        circle[i].Y = sin(t);
+    }
 
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     Learned_Clear();
     pred_live = calloc(sizeof(Prediction));
     pred_seg = calloc(sizeof(Prediction));
+    pred_fh = calloc(sizeof(Prediction));
+    pred_sh = calloc(sizeof(Prediction));
     actual_pos = calloc(sizeof(Vec2) * (LL_SIM_FRAMES + 1));
     actual_bottom = calloc(sizeof(float) * (LL_SIM_FRAMES + 1));
     floor_cache = calloc(sizeof(FloorLine) * LL_MAX_FLOORS);
@@ -1757,6 +2247,15 @@ void Event_Think(GOBJ *event)
 
     if (prev_tracked_air && !tracked_air)
         Landing_Resolve(fp);
+    else
+        Ghost_Update(sid);
+
+    Panel_UpdateSide(fp);
+    if (sid == ASID_WAIT && fp->coll_data.ecbCurr_right.Y > 1.f)
+        body_offset = fp->coll_data.ecbCurr_right.Y;
+    ring_frames = 0;
+    preview_fh = 0;
+    preview_sh = 0;
 
     if (tracked_air)
     {
@@ -1770,6 +2269,7 @@ void Event_Think(GOBJ *event)
         Predict(fp, &start, pred_live, 1);
         Text_Prediction(pred_live);
         Text_Ai(pred_live);
+        Timing_Update(fp, pred_live);
 
         if (prev_tracked_air && ts != prev_ts)
             Ai_CheckMissed(fp, ts);
@@ -1789,6 +2289,8 @@ void Event_Think(GOBJ *event)
         seg_valid = 0;
         sprintf(text_ai, "-");
     }
+    else if (Ground_CanJump(sid) && !disturbed && !ghost_visible)
+        Ground_Preview(fp);
 
     prev_state_id = sid;
     prev_ts = ts;
@@ -1807,7 +2309,11 @@ void Event_Update(void)
 
 void Event_ChangeCollDisplay(GOBJ *menu, int value)
 {
+    FighterData *fp = Fighter_GetGObj(0)->userdata;
+
     stc_matchcam->show_coll = value;
+    fp->show_model = !value;
+    fp->show_hit = value;
 }
 
 void Event_ClearLearned(GOBJ *menu)

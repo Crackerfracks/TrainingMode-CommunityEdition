@@ -822,6 +822,7 @@ EventVars stc_event_vars = {
     .HUD_DrawActionLogBar = HUD_DrawActionLogBar,
     .HUD_DrawActionLogKey = HUD_DrawActionLogKey,
     .HUD_DrawInfoPanel = HUD_DrawInfoPanel,
+    .HUD_DrawInfoPanelAt = HUD_DrawInfoPanelAt,
 };
 
 static GOBJ *stc_msgmgr;
@@ -1034,12 +1035,17 @@ static const Rect info_item_label_rect = { 0.8f, 2.5f, 8.6f, 2.5f };
 static const Rect info_item_info_rect = { 0.0f, 0.0f, 9.6f, 2.5f };
 
 void HUD_DrawInfoPanel(const char **label, const char **info, int count) {
+    HUD_DrawInfoPanelAt(label, info, count, 18.f);
+}
+
+// x is the panel's left edge: 18 puts it on the right of the screen,
+// -26.7 mirrors it on the left.
+void HUD_DrawInfoPanelAt(const char **label, const char **info, int count, float x) {
     HUDCamData *cam_data = stc_event_vars.hudcam_gobj->userdata;
     if (cam_data->hide) return;
     COBJ *prev_camera = COBJ_GetCurrent();
     CObj_SetCurrent(stc_event_vars.hudcam_gobj->hsd_object);
 
-    float x = 18.f;
     float y = 9.f;
     GXColor grey = { 130, 130, 130, 180 };
     GXColor black = { 0, 0, 0, 180 };

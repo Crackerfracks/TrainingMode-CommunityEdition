@@ -280,6 +280,41 @@ EventDesc LaserLand = {
     .matchData = &LaserLand_MatchData,
 };
 
+// Landing Lab: predicts NILs and aerial interrupts
+static EventMatchData LandingLab_MatchData = {
+    .timer = MATCH_TIMER_HIDE,
+    .matchType = MATCH_MATCHTYPE_TIME,
+    .hideGo = true,
+    .hideReady = true,
+    .isCreateHUD = false,
+    .timerRunOnPause = false,
+    .isCheckForZRetry = false,
+    .isShowScore = false,
+    .isRunStockLogic = false,
+    .isDisableHit = false,
+    .useKOCounter = false,
+    .timerSeconds = 0,
+};
+EventDesc LandingLab = {
+    .eventName = "Landing Lab\n",
+    .eventDescription = "See where Falcon lands if you keep holding:\nNIL, aerial interrupt or landing lag.",
+    .eventFile = "landinglab",
+    .jumpTableIndex = -1,
+    .CSSType = SLCHRKIND_EVENT,
+    .allowed_characters = {
+        .hmn = CSSID_CAPTAIN_FALCON,
+        .cpu = -1,
+    },
+    .playerKind = -1,
+    .cpuKind = -1,
+    .stage = -1,
+    .disable_hazards = true,
+    .force_sopo = false,
+    .scoreType = SCORETYPE_KO,
+    .callbackPriority = 15, // after the fighters' collision (priority 6) this frame
+    .matchData = &LandingLab_MatchData,
+};
+
 
 // Combo Training
 EventDesc Combo = {
@@ -747,6 +782,7 @@ static EventDesc *CharacterSpecific_Events[] = {
     &EscapeSheik,
     &EscapeDThrowKnee,
     &FloatCancel,
+    &LandingLab,
 };
 static EventPage CharacterSpecific_Page = {
     .name = "Character-specific Tech",

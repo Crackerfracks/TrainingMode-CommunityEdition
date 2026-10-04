@@ -5429,12 +5429,62 @@ static void Draw_StickGate(FighterData *fp)
     GFX_AddVtx(sx - LL_DOT * 1.5f, sy + LL_DOT * 1.5f, 0, color_actual);
 }
 
+// For mockups drawn on real game frames: where world points land on screen
+// on the frame being drawn (the stage plane is z = 0, so four points give the
+// exact mapping), and what the timers and the prediction hold. Logged from
+// the draw so the camera is the one this frame is rendered with.
+static int script_cur; // defined with the scripts below
+static int capture_clean; // hide everything the event draws (D-pad up while frame advance is on)
+
+static void Log_Camera(FighterData *fp)
+{
+    static int last = -1;
+    static const Vec2 ref[4] = {{-100.f, 0}, {100.f, 0}, {-100.f, 100.f}, {100.f, 100.f}};
+    if (event_vars->game_timer == last)
+        return;
+    last = event_vars->game_timer;
+
+    COBJ *cobj = *stc_matchcam_cobj;
+    char buf[512];
+    int n = sprintf(buf, "LLCAM %d vp %.1f %.1f %.1f %.1f pts", event_vars->game_timer,
+                    cobj->viewport_left, cobj->viewport_right, cobj->viewport_top, cobj->viewport_bottom);
+    for (int i = 0; i < 4; i++)
+    {
+        Vec3 in = {ref[i].X, ref[i].Y, 0}, out;
+        HSD_GXProject(cobj, &in, &out, 1);
+        n += sprintf(buf + n, " %.2f %.2f", out.X, out.Y);
+    }
+    n += sprintf(buf + n, " falcon %.4f %.4f sid %d face %d stick %.3f %.3f", fp->phys.pos.X, fp->phys.pos.Y, fp->state_id,
+                 fp->facing_direction > 0 ? 1 : -1, fp->input.lstick.X, fp->input.lstick.Y);
+    for (int i = 0; i < CUE_NUM; i++)
+    {
+        Cue *c = &cue_live[i], *e = &cue_end[i];
+        n += sprintf(buf + n, " cue%d %d %d %d %d %.3f %.3f end %d %d %d", i, c->phase, c->left, c->span, c->width,
+                     c->spot.X, c->spot.Y, e->phase, e->age, e->dim);
+    }
+    sprintf(buf + n, "\n");
+    Log(buf);
+
+    Prediction *p = live_visible ? pred_live : 0;
+    if (p && p->land_frame)
+    {
+        int k = p->land_frame;
+        sprintf(buf, "LLPRED %d land %d kind %d at %.3f %.3f lag %d ai %d w%d wl %d w%d\n", event_vars->game_timer, k,
+                p->land_kind, p->pos[k].X, p->pos[k].Y + p->bottom[k], p->lag, p->ai_first, p->ai_width, p->wl_first, p->wl_width);
+        Log(buf);
+    }
+}
+
 static void World_GX(GOBJ *gobj, int pass)
 {
     if (pass != 2)
         return;
 
     FighterData *fp = Fighter_GetGObj(0)->userdata;
+    if (Options_Main[OPT_LOG].val || script_cur >= 0)
+        Log_Camera(fp);
+    if (capture_clean)
+        return;
     if (Options_Main[OPT_COLL].val)
         Draw_CurrentEcb(fp);
     if (Options_Main[OPT_STICK].val)
@@ -5462,7 +5512,7 @@ static void World_GX(GOBJ *gobj, int pass)
 
 static void Hud_GX(GOBJ *gobj, int pass)
 {
-    if (pass != 2 || !Options_Main[OPT_PANEL].val)
+    if (pass != 2 || !Options_Main[OPT_PANEL].val || capture_clean)
         return;
 
     float x = panel_left ? -26.7f : 18.f;
@@ -5547,6 +5597,8 @@ static int Advance_CheckStep(void)
 //                              of jumps: FallAerial), with that speed (0 0),
 //                              jumps used (1) and frames his ECB bottom stays
 //                              at his feet, as after leaving the ground (0)
+//   ledge <left|right>         hang Falcon on the main stage's left or right
+//                              ledge, freshly grabbed (full intangibility)
 //   <n> [inputs]               hold the inputs for n frames (none: let go)
 //   wl <offset> [inputs]       keep the stick of the step before until the
 //                              next perfect waveland window, then press the
@@ -5573,6 +5625,7 @@ enum script_op_kind
     SOP_INPUT,
     SOP_START,
     SOP_AIR,
+    SOP_LEDGE,
     SOP_WL,
     SOP_AI,
     SOP_LAND,
@@ -5836,6 +5889,14 @@ static void Script_Parse(void)
                 op->lock = lock ? (int)Script_Number(&lock) : 0;
             }
         }
+        else if (Script_Is(w, "ledge"))
+        {
+            char *side = Script_Word(&rest);
+            op->kind = SOP_LEDGE;
+            ok = side && (Script_Is(side, "left") || Script_Is(side, "right"));
+            if (ok)
+                op->facing = side[0] == 'l' ? 1 : -1; // facing the stage
+        }
         else if (Script_Is(w, "shot") || Script_Is(w, "mark"))
         {
             op->kind = w[0] == 's' ? SOP_SHOT : SOP_MARK;
@@ -6082,6 +6143,59 @@ static void Script_PlaceAir(GOBJ *ft, ScriptOp *op)
     Script_ResetTracking();
 }
 
+// Hang Falcon on a ledge of the main stage as if he'd just grabbed it:
+// CliffWait with the full ledge intangibility and his double jump back, the
+// way ledgedash.c places a player (Fighter_PlaceOnLedge).
+static int Script_PlaceLedge(GOBJ *ft, ScriptOp *op)
+{
+    FighterData *fp = ft->userdata;
+    CollLine *lines = *stc_collline;
+    int best = -1;
+    float best_x = 0;
+    for (CollGroup *group = *stc_firstcollgroup; group != 0; group = group->next)
+    {
+        int first = group->desc->floor_start;
+        for (int i = first; i < first + group->desc->floor_num; i++)
+        {
+            if (!lines[i].desc->is_ledge)
+                continue;
+            Vec3 end;
+            if (op->facing > 0)
+                GrColl_GetGroundLineEndLeft(i, &end);
+            else
+                GrColl_GetGroundLineEndRight(i, &end);
+            if (best < 0 || (op->facing > 0 ? end.X < best_x : end.X > best_x))
+            {
+                best = i;
+                best_x = end.X;
+            }
+        }
+    }
+    if (best < 0)
+        return 0;
+
+    fp->phys.self_vel.X = 0;
+    fp->phys.self_vel.Y = 0;
+    Fighter_EnterSleep(ft, 0);
+    Fighter_EnterRebirth(ft);
+    fp->facing_direction = op->facing;
+    FtCliffCatch *cliff = (void *)&fp->state_var;
+    cliff->ledge_index = best;
+    Fighter_EnterCliffWait(ft);
+    cliff->timer = 0;
+    Fighter_SetAirborne(fp);
+    Fighter_EnableCollUpdate(fp);
+    Coll_CheckLedge(&fp->coll_data);
+    Fighter_MoveToCliff(ft);
+    Script_UpdatePosition(ft);
+    Fighter_ApplyIntang(ft, (*stc_ftcommon)->cliff_invuln_time + 1);
+    fp->jump.jumps_used = 1;
+    Script_ResetTimers(fp);
+    Script_FixCamera(ft);
+    Script_ResetTracking();
+    return 1;
+}
+
 static void Script_Next(void);
 
 static void Script_Begin(int index)
@@ -6167,6 +6281,18 @@ static int Script_Instant(GOBJ *ft, int pre)
             if (!pre)
                 return 1;
             Script_PlaceAir(ft, op);
+        }
+        else if (op->kind == SOP_LEDGE)
+        {
+            if (!pre)
+                return 1;
+            if (!Script_PlaceLedge(ft, op))
+            {
+                sprintf(buf, "LLSCRIPT no ledge, skipping %s\n", scripts[script_cur].name);
+                Log(buf);
+                Script_End();
+                return 0;
+            }
         }
         else if (op->kind == SOP_SHOT)
         {
@@ -6724,6 +6850,8 @@ void Event_Update(void)
     int down = pad->down;
     if (down & HSD_BUTTON_DPAD_DOWN)
         Options_Main[OPT_FRAME_ADV].val ^= 1;
+    if ((down & HSD_BUTTON_DPAD_UP) && Options_Main[OPT_FRAME_ADV].val)
+        capture_clean ^= 1; // a clean frame for mockups, same frame as the one with cues
     if ((down & HSD_BUTTON_DPAD_LEFT) && Options_Main[OPT_SCRIPT].val)
     {
         script_cur = -1;

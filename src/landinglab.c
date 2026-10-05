@@ -5218,6 +5218,8 @@ static void Hud_Diamond(float x, float y, float r, GXColor c)
 // their first use, so it's set again on every call.
 static void Hud_Text(const char *text, float x, float y, float size, GXColor color)
 {
+    if (!event_vars->HUD_DrawTextEx)
+        return; // a TM-CE menu from before it was set
     HUDCamData *hud = event_vars->hudcam_gobj->userdata;
     int slot = hud->text_cache_used;
     Rect r = {x, y, 0, 2.5f};

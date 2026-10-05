@@ -819,6 +819,7 @@ EventVars stc_event_vars = {
     .HUD_DrawRects = HUD_DrawRects,
     .HUD_DrawTris = HUD_DrawTris,
     .HUD_DrawText = HUD_DrawText,
+    .HUD_DrawTextEx = HUD_DrawTextEx,
     .HUD_DrawActionLogBar = HUD_DrawActionLogBar,
     .HUD_DrawActionLogKey = HUD_DrawActionLogKey,
     .HUD_DrawInfoPanel = HUD_DrawInfoPanel,

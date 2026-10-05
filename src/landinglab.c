@@ -7405,11 +7405,15 @@ static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R
     Hud_Rect(cx - len, cy - dzy * R, cx - dzx * R, cy + dzy * R, band);
     Hud_Rect(cx + dzx * R, cy - dzy * R, cx + len, cy + dzy * R, band);
 
-    // fastfall line
+    // fastfall line: lit on the frames the game takes a flick past it (it
+    // has to be falling, not fastfalling yet, and not in an airdodge or a
+    // Falcon Dive, ft_80084DB0), half lit while a fastfall is on
     if (fp->phys.air_state == 1)
     {
-        int ff = fp->input.lstick.Y <= -common_fastfall_stick && (u8)fp->input.timer_lstick_tilt_y < common_fastfall_window;
-        GXColor c = ff ? color_white : Color_Fill(color_white, 0.35f);
+        int ts = Tracked_Index(fp->state_id);
+        int can = fp->phys.self_vel.Y < 0 && !fp->flags.is_fastfall && ts != TS_ESCAPEAIR && !Tracked_IsUpB(ts);
+        int ff = can && fp->input.lstick.Y <= -common_fastfall_stick && (u8)fp->input.timer_lstick_tilt_y < common_fastfall_window;
+        GXColor c = ff ? color_white : Color_Fill(color_white, fp->flags.is_fastfall ? 0.6f : 0.35f);
         float fy = cy - common_fastfall_stick * R;
         float fw = R * 0.62f;
         Hud_Rect(cx - fw, fy - 0.05f * k, cx + fw, fy + 0.05f * k, c);

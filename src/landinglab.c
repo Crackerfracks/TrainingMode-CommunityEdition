@@ -1091,11 +1091,10 @@ static void Ceil_CacheRange(RawCollLine *lines, CollVert *verts, int start, int 
         if (!(flags & LINEFLAG_CEIL) || !(flags & LINEFLAG_ENABLED) || (flags & LINEFLAG_EMPTY))
             continue;
         FloorLine *c = &ceil_cache[ceil_num++];
-        CollLineDesc *desc = lines[id].desc;
-        c->x0 = verts[(u16)desc->vert_prev].pos_curr.X;
-        c->y0 = verts[(u16)desc->vert_prev].pos_curr.Y;
-        c->x1 = verts[(u16)desc->vert_next].pos_curr.X;
-        c->y1 = verts[(u16)desc->vert_next].pos_curr.Y;
+        // mpCheckCeiling reads the ends as floors do (mpLib_8004ED5C): a
+        // unit longer where another line joins, so a top point rising past
+        // a ceiling's corner with a wall still catches it
+        Line_GetEnds(lines, verts, id, &c->x0, &c->y0, &c->x1, &c->y1);
         c->id = id;
         c->is_platform = 0;
     }

@@ -3185,7 +3185,7 @@ static const char *mark_size_names[] = {"Small", "Medium", "Large"};
 static const float mark_sizes[] = {0.9f, 1.25f, 1.6f};
 static const char *ai_filter_names[] = {"Useful", "All"};
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
-static const char *timer_names[] = {"Above Falcon", "Fixed Strip", "Both", "Off"};
+static const char *timer_names[] = {"Near Falcon", "Fixed Strip", "Both", "Off"};
 static const char *stick_names[] = {"By Percent", "Bottom Left", "Bottom Right", "Off"};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
 static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
@@ -3621,8 +3621,8 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .values = timer_names,
         .desc = {"Count down to each input frame by frame: cells",
                  "slide into the gate, press as one reaches it.",
-                 "Above Falcon follows him; Fixed Strip is a",
-                 "bigger one at the bottom with labels."},
+                 "Near Falcon stays put by him, clear of his path;",
+                 "Fixed Strip is a bigger one with labels."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -6077,58 +6077,224 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     }
 }
 
-// Above Falcon: the meter rides a point over his head, following it with a
-// little slack so it doesn't shake with every move, and stays on screen.
-static float anchor_x, anchor_y;
-static int anchor_valid;
+// Near Falcon: the meter is pinned to one spot on the screen when it shows
+// up, so the eye doesn't have to chase it: over his head if his path stays
+// below it, else above the whole path, or beside it. It moves only when the
+// path, the controller display, the info panel or the fixed strip would run
+// into it, and then glides to the next clear spot. Between two timers close
+// together it stays where it was.
+typedef struct Box
+{
+    float x0, y0, x1, y1;
+} Box;
+
+// the ledge route's path (Ledge Practice, defined below)
+static Vec2 *route_path;
+static float *route_path_bottom;
+static int route_path_num;
+static int hang_ledge;
+static int route_show_num;
+
+#define PIN_BOXES 24
+#define PIN_HOLD 30 // frames the spot is kept after the meter goes away
+static Box pin_path[PIN_BOXES]; // Falcon now and along his path, on the screen
+static int pin_path_num;
+static float pin_x, pin_y;      // where the meter is: its gate's left and its bottom
+static float pin_tx, pin_ty;    // where it's going
+static int pin_valid;
+static int pin_idle;            // frames without a meter
+
+static int Box_Hit(Box *a, Box *b)
+{
+    return a->x0 < b->x1 && b->x0 < a->x1 && a->y0 < b->y1 && b->y0 < a->y1;
+}
+
+// Falcon's body from y0 to y1 at x, as a box on the screen, with a margin.
+static void Pin_AddBody(float x, float y0, float y1)
+{
+    if (pin_path_num >= PIN_BOXES)
+        return;
+    float ax, ay, bx, by;
+    if (!Hud_FromWorld(x - 5.f, y0, &ax, &ay) || !Hud_FromWorld(x + 5.f, y1, &bx, &by))
+        return;
+    Box *b = &pin_path[pin_path_num++];
+    b->x0 = (ax < bx ? ax : bx) - 0.4f;
+    b->x1 = (ax < bx ? bx : ax) + 0.4f;
+    b->y0 = (ay < by ? ay : by) - 0.4f;
+    b->y1 = (ay < by ? by : ay) + 0.4f;
+}
+
+static void Pin_Path(FighterData *fp)
+{
+    pin_path_num = 0;
+    Pin_AddBody(fp->phys.pos.X, fp->phys.pos.Y - 1.f, fp->phys.pos.Y + 20.f);
+    if (live_visible)
+    {
+        Prediction *p = pred_live;
+        int last = p->land_frame ? p->land_frame : p->num;
+        int step = last / (PIN_BOXES - 2) + 1;
+        for (int k = 1; k <= last; k += step)
+            Pin_AddBody(p->pos[k].X, p->pos[k].Y + p->bottom[k], p->pos[k].Y + p->top[k] + 2.f);
+        if (last > 0)
+            Pin_AddBody(p->pos[last].X, p->pos[last].Y + p->bottom[last], p->pos[last].Y + p->top[last] + 2.f);
+    }
+    else if (route_path_num >= 2 && ((hang_ledge >= 0 && route_show_num > 0) || route_active))
+    {
+        int step = route_path_num / (PIN_BOXES - 2) + 1;
+        for (int k = 0; k < route_path_num; k += step)
+            Pin_AddBody(route_path[k].X, route_path[k].Y + route_path_bottom[k], route_path[k].Y + route_path_bottom[k] + 18.f);
+    }
+}
+
+static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1); // with the controller display
+
+// Whether the meter at (gx, base), w by h, is clear of everything else.
+static int Pin_Clear(FighterData *fp, float gx, float base, float w, float h)
+{
+    Box m = {gx - 0.4f, base - 0.3f, gx + w + 0.3f, base + h};
+    if (m.x0 < -SAFE_W - 0.01f || m.x1 > SAFE_W + 0.01f || m.y0 < -SAFE_H - 0.01f || m.y1 > SAFE_H + 0.01f)
+        return 0;
+    for (int i = 0; i < pin_path_num; i++)
+    {
+        if (Box_Hit(&m, &pin_path[i]))
+            return 0;
+    }
+    if (Options_Hud[HOPT_STICK].val != STICK_OFF)
+    {
+        Box pad;
+        Pad_Box(fp, &pad.x0, &pad.y0, &pad.x1, &pad.y1);
+        if (Box_Hit(&m, &pad))
+            return 0;
+    }
+    if (Options_Hud[HOPT_PANEL].val)
+    {
+        // the info panel's lines in its top corner
+        Box panel = {panel_left ? -SAFE_W : SAFE_W - 22.f, SAFE_H - 8.f, panel_left ? -SAFE_W + 22.f : SAFE_W, SAFE_H};
+        if (Box_Hit(&m, &panel))
+            return 0;
+    }
+    int timer = Options_Hud[HOPT_TIMER].val;
+    if (timer == TIMER_BOTH)
+    {
+        // the fixed strip along the bottom
+        Box strip = {-SAFE_W, -SAFE_H, SAFE_W, -SAFE_H + 0.4f + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
+        if (Box_Hit(&m, &strip))
+            return 0;
+    }
+    return 1;
+}
+
+static void Pin_Clamp(float *gx, float *base, float w, float h)
+{
+    if (*gx > SAFE_W - w - 0.3f)
+        *gx = SAFE_W - w - 0.3f;
+    if (*gx < -SAFE_W + 0.4f)
+        *gx = -SAFE_W + 0.4f;
+    if (*base > SAFE_H - h)
+        *base = SAFE_H - h;
+    if (*base < -SAFE_H + 0.3f)
+        *base = -SAFE_H + 0.3f;
+}
+
+// The first clear spot: over his head, over the whole path, then beside
+// it on either side, nearest first. None clear: over the path anyway.
+static void Pin_Choose(FighterData *fp, float head_x, float head_y, float cw, float w, float h, float *gx, float *base)
+{
+    Box u = pin_path[0];
+    for (int i = 1; i < pin_path_num; i++)
+    {
+        Box *b = &pin_path[i];
+        u.x0 = b->x0 < u.x0 ? b->x0 : u.x0;
+        u.y0 = b->y0 < u.y0 ? b->y0 : u.y0;
+        u.x1 = b->x1 > u.x1 ? b->x1 : u.x1;
+        u.y1 = b->y1 > u.y1 ? b->y1 : u.y1;
+    }
+    float over = pin_path_num > 0 ? pin_path[0].y1 + 0.1f : head_y + 0.6f; // just over his head now
+    float cand[6][2] = {
+        {head_x - cw / 2, over},
+        {head_x - cw / 2, u.y1 + 0.3f},
+        {u.x0 - w - 0.6f, head_y - h / 2},
+        {u.x1 + 0.8f, head_y - h / 2},
+        {u.x0 - w - 0.6f, u.y1 - h},
+        {u.x1 + 0.8f, u.y1 - h},
+    };
+    // the side nearer the middle of the screen first
+    if (head_x < 0)
+    {
+        for (int i = 2; i < 6; i += 2)
+        {
+            float tx = cand[i][0], ty = cand[i][1];
+            cand[i][0] = cand[i + 1][0];
+            cand[i][1] = cand[i + 1][1];
+            cand[i + 1][0] = tx;
+            cand[i + 1][1] = ty;
+        }
+    }
+    for (int i = 0; i < 6; i++)
+    {
+        float x = cand[i][0], y = cand[i][1];
+        Pin_Clamp(&x, &y, w, h);
+        if (Pin_Clear(fp, x, y, w, h))
+        {
+            *gx = x;
+            *base = y;
+            return;
+        }
+    }
+    *gx = cand[1][0];
+    *base = cand[1][1];
+    Pin_Clamp(gx, base, w, h);
+}
+
+// Each frame without a meter.
+static void Pin_Idle(void)
+{
+    if (pin_valid && ++pin_idle > PIN_HOLD)
+        pin_valid = 0;
+}
 
 static void Meter_Above(FighterData *fp)
 {
-    float hx, hy, head_x, head_y;
-    Hud_FromWorld(fp->phys.pos.X, fp->phys.pos.Y + 21.f, &hx, &hy);
+    float head_x, head_y;
     Hud_FromWorld(fp->phys.pos.X, fp->phys.pos.Y + 18.f, &head_x, &head_y);
-    if (!anchor_valid)
-    {
-        anchor_x = hx;
-        anchor_y = hy;
-        anchor_valid = 1;
-    }
-    float ex = hx - anchor_x, ey = hy - anchor_y;
-    if (fabs(ex) > 0.92f)
-        anchor_x += (ex - (ex > 0 ? 0.92f : -0.92f)) * 0.35f;
-    if (fabs(ey) > 1.2f)
-        anchor_y += (ey - (ey > 0 ? 1.2f : -1.2f)) * 0.35f;
-    if (anchor_y < head_y + 0.4f)
-        anchor_y = head_y + 0.4f;
 
     int wide = Options_Hud[HOPT_WIDE].val;
     float pitch = MT_PITCH + (wide ? MT_WIDE : 0);
+    float cw = MT_CW + (wide ? MT_WIDE : 0);
     int len = 1;
     for (int i = 0; i < meter_rows; i++)
         if (meter[i].len > len)
             len = meter[i].len;
-    if (len > 31)
-        len = 31;
-    // the gate stays over Falcon: near the screen's right edge the far
-    // frames are cut before the gate moves off him
-    float gx = anchor_x - (MT_CW + (wide ? MT_WIDE : 0)) / 2;
-    int fit = (int)((SAFE_W - gx) / pitch);
-    if (len > fit)
-        len = fit < 12 ? 12 : fit;
+    if (len > 24)
+        len = 24;
     float w = len * pitch, h = meter_rows * (MT_CH + MT_GAP) + 1.5f;
-    if (gx > SAFE_W - w)
-        gx = SAFE_W - w;
-    if (gx < -SAFE_W)
-        gx = -SAFE_W;
-    float base = anchor_y;
-    if (base > SAFE_H - h)
-        base = SAFE_H - h;
-    if (base < -SAFE_H)
-        base = -SAFE_H;
-    Meter_Draw(gx, base, 1.f, len, 0);
-}
 
-static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1); // with the controller display
+    Pin_Path(fp);
+    pin_idle = 0;
+    if (!pin_valid)
+    {
+        Pin_Choose(fp, head_x, head_y, cw, w, h, &pin_tx, &pin_ty);
+        pin_x = pin_tx;
+        pin_y = pin_ty;
+        pin_valid = 1;
+    }
+    else
+    {
+        float x = pin_tx, y = pin_ty;
+        Pin_Clamp(&x, &y, w, h);
+        if (!Pin_Clear(fp, x, y, w, h))
+            Pin_Choose(fp, head_x, head_y, cw, w, h, &pin_tx, &pin_ty);
+        else
+        {
+            pin_tx = x;
+            pin_ty = y;
+        }
+    }
+    // glide to it
+    pin_x += (pin_tx - pin_x) * 0.3f;
+    pin_y += (pin_ty - pin_y) * 0.3f;
+    Meter_Draw(pin_x, pin_y, 1.f, len, 0);
+}
 
 // The fixed strip: bottom left, or bottom right when the controller display
 // is on the left half of the screen.
@@ -7062,7 +7228,7 @@ static void Hud_GX(GOBJ *gobj, int pass)
         Spot_Draw(fp);
     int timer = Options_Hud[HOPT_TIMER].val;
     if (meter_rows == 0)
-        anchor_valid = 0;
+        Pin_Idle();
     else
     {
         if (timer == TIMER_FALCON || timer == TIMER_BOTH)

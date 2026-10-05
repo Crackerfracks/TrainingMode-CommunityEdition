@@ -6255,6 +6255,35 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
 // that start at both ends and converge on the touchdown, thinning as they
 // come; they meet on the frame to press, then ghost back out. A white mark
 // shows where the stick held now would stop the slide.
+// A bump standing on y: a bell curve wb wide at its foot and h tall, the
+// shape of the waveland ticks' wave.
+#define BUMP_SLICES 8
+static void Hud_Bump(float cx, float y, float wb, float h, GXColor c)
+{
+    float x0 = cx - wb / 2, dx = wb / BUMP_SLICES;
+    float prev = 0;
+    for (int i = 1; i <= BUMP_SLICES; i++)
+    {
+        float u = (float)i / BUMP_SLICES * 2.f - 1.f; // -1..1 across the foot
+        float b = 1.f - u * u;
+        float top = h * b * b * b;
+        Quad_Add(x0 + dx * (i - 1), y, x0 + dx * i, y, x0 + dx * i, y + top, x0 + dx * (i - 1), y + prev, c);
+        prev = top;
+    }
+}
+
+// One of the waveland ticks at f of the way from the spot (0) to the slide's
+// end (1): wide and low out at the ends, where it first catches the eye,
+// thinner and taller as it closes in, and a spike where the two meet, like
+// two waves adding up.
+static void Rail_Tick(float x, float y, float f, GXColor c)
+{
+    float n = 1.f - f;
+    float wb = 0.4f + 1.2f * f;
+    float h = 0.8f + 1.9f * n * n * n;
+    Hud_Bump(x, y - 0.15f, wb, h, c);
+}
+
 static void Spot_Rails(Cue *c, FighterData *fp, int ended)
 {
     float reach = Slide_Distance(fp, common_dodge_force);
@@ -6299,18 +6328,14 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
 
         int k = c->phase == PH_WINDOW ? 0 : c->left - 1;
         float f = c->span > 1 ? Clamp01((float)k / (c->span - 1)) : 0;
-        float w = 0.24f + 0.16f * f;
-        GXColor tc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f) : col, am);
+        float n = 1.f - f;
+        GXColor tc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f)
+                                    : Color_Mix(col, color_white, 0.35f * n * n),
+                                (0.75f + 0.25f * n) * am);
         if (ok_l)
-        {
-            float tx = mx + (lx - mx) * f, ty = my + (ly - my) * f;
-            Hud_Rect(tx - w / 2, ty - 0.2f, tx + w / 2, ty + 1.1f, tc);
-        }
+            Rail_Tick(mx + (lx - mx) * f, my + (ly - my) * f, f, tc);
         if (ok_r)
-        {
-            float tx = mx + (rx - mx) * f, ty = my + (ry - my) * f;
-            Hud_Rect(tx - w / 2, ty - 0.2f, tx + w / 2, ty + 1.1f, tc);
-        }
+            Rail_Tick(mx + (rx - mx) * f, my + (ry - my) * f, f, tc);
         if (now)
         {
             for (int j = 0; j < c->width && j <= c->age; j++)
@@ -6849,9 +6874,9 @@ static void Markers_Draw(void);
 // Platform Glow: the floor a waveland or wavedash slides along lights up
 // in the stage, at Falcon's depth. A faint glow marks the slide while the
 // timer counts down and fills in from its ends toward the landing spot,
-// growing brighter; on each frame of the window the whole slide flares
-// (brightest on the first and last), and a hit sends a flash rising off
-// it. Only the directions that work light up.
+// growing brighter and taller, steeply at the end; on each frame of the
+// window the whole slide flares white-hot (hottest on the first and last).
+// Only the directions that work light up.
 // A glow standing on the floor from xa to xb, just behind Falcon's middle:
 // a bright line along the surface and light falling off fast above it.
 #define GLOW_Z -1.f
@@ -6878,6 +6903,14 @@ static void Glow_Span(float xa, float xb, float y, float h, GXColor c)
     GFX_AddVtx(xb, y + 0.1f, GLOW_Z, line);
 }
 
+// How the glow ends: a hit bursts white-cyan and rises off the floor, a
+// miss sinks in violet toward the spot, and a skipped or interrupted one
+// just goes out. All of it is over in a few frames.
+#define GLOW_HIT 10
+#define GLOW_MISS 10
+#define GLOW_SKIP 5
+static const GXColor color_glow_miss = {150, 80, 255, 255};
+
 static void Plat_Glow(FighterData *fp)
 {
     if (!Options_Cues[COPT_GLOW].val || !Cues_Waveland())
@@ -6897,11 +6930,14 @@ static void Plat_Glow(FighterData *fp)
 
         if (pass && c->phase == PH_COUNT && !c->dim)
         {
+            // builds up: fills in from the ends toward the spot, brighter
+            // and taller the closer the press, steeply at the end
             int k = c->left - 1;
             float p = 1.f - (c->span > 1 ? Clamp01((float)k / (c->span - 1)) : 0);
-            GXColor faint = Color_Fill(base, 0.12f);
-            GXColor lit = Color_Fill(base, 0.25f + 0.35f * p);
-            float h = 1.2f + 1.3f * p;
+            float p2 = p * p;
+            GXColor faint = Color_Fill(base, 0.1f + 0.1f * p);
+            GXColor lit = Color_Fill(Color_Mix(base, color_white, 0.2f * p2), 0.2f + 0.6f * p2);
+            float h = 0.9f + 2.4f * p2;
             if (ok_l)
             {
                 Glow_Span(L, m, y, 0.8f, faint);
@@ -6915,24 +6951,42 @@ static void Plat_Glow(FighterData *fp)
         }
         else if (pass && c->phase == PH_WINDOW && !c->dim)
         {
+            // the window: the whole slide flares white-hot, the first and
+            // last frames hottest, with a tall haze over it
             int edge = c->age == 0 || c->age == c->width - 1;
-            GXColor flare = Color_Fill(Color_Mix(base, color_white, edge ? 0.6f : 0.25f), edge ? 0.8f : 0.55f);
-            float h = edge ? 3.f : 2.2f;
+            GXColor core = Color_Fill(Color_Mix(base, color_white, edge ? 0.7f : 0.45f), edge ? 1.f : 0.85f);
+            GXColor haze = Color_Fill(base, edge ? 0.45f : 0.3f);
+            float h = edge ? 4.5f : 3.5f;
             if (ok_l)
-                Glow_Span(L, m, y, h, flare);
+            {
+                Glow_Span(L, m, y, h * 2.2f, haze);
+                Glow_Span(L, m, y, h, core);
+            }
             if (ok_r)
-                Glow_Span(m, R, y, h, flare);
+            {
+                Glow_Span(m, R, y, h * 2.2f, haze);
+                Glow_Span(m, R, y, h, core);
+            }
         }
-        else if (!pass && c->phase == PH_HIT && c->age < 16)
+        else if (!pass && c->phase == PH_HIT && c->age < GLOW_HIT)
         {
-            float q = c->age / 16.f;
-            GXColor flash = Color_Fill(Color_Mix(base, color_white, 0.6f * (1.f - q)), (c->soft ? 0.5f : 0.9f) * (1.f - q));
-            Glow_Span(L, R, y, 2.5f + 3.f * Ease_Out(q), flash);
+            float q = (float)c->age / GLOW_HIT;
+            float a = (1.f - q) * (1.f - q) * (c->soft ? 0.55f : 1.f);
+            GXColor flash = Color_Fill(Color_Mix(base, color_white, 0.7f * (1.f - q)), a);
+            Glow_Span(L, R, y, 3.f + 5.f * Ease_Out(q), flash);
         }
-        else if (!pass && c->phase == PH_FADE && c->age < LL_FADE)
+        else if (!pass && c->phase == PH_FADE && c->dim == DIM_MISS && c->age < GLOW_MISS)
         {
-            float q = (float)c->age / LL_FADE;
-            Glow_Span(L, R, y, 1.2f * (1.f - q), Color_Fill(Dim_Color(c->dim), 0.4f * (1.f - q)));
+            // folds in toward the spot
+            float q = (float)c->age / GLOW_MISS;
+            float a = 0.7f * (1.f - q);
+            float l = L + (m - L) * Ease_Out(q), r = R - (R - m) * Ease_Out(q);
+            Glow_Span(l, r, y, 2.2f * (1.f - q) + 0.4f, Color_Fill(color_glow_miss, a));
+        }
+        else if (!pass && (c->phase == PH_FADE || c->phase == PH_CUT) && c->age < GLOW_SKIP)
+        {
+            float q = (float)c->age / GLOW_SKIP;
+            Glow_Span(L, R, y, 0.8f, Color_Fill(base, 0.12f * (1.f - q)));
         }
     }
 }

@@ -1078,6 +1078,29 @@ typedef struct FloorLine
 static FloorLine *floor_cache; // [LL_MAX_FLOORS]
 static int floor_num;
 
+#define LL_MAX_CEILS 128
+static FloorLine *ceil_cache; // [LL_MAX_CEILS], the stage's undersides
+static int ceil_num;
+
+static void Ceil_CacheRange(RawCollLine *lines, CollVert *verts, int start, int num)
+{
+    for (int i = 0; i < num && ceil_num < LL_MAX_CEILS; i++)
+    {
+        int id = start + i;
+        u32 flags = lines[id].flags;
+        if (!(flags & LINEFLAG_CEIL) || !(flags & LINEFLAG_ENABLED) || (flags & LINEFLAG_EMPTY))
+            continue;
+        FloorLine *c = &ceil_cache[ceil_num++];
+        CollLineDesc *desc = lines[id].desc;
+        c->x0 = verts[(u16)desc->vert_prev].pos_curr.X;
+        c->y0 = verts[(u16)desc->vert_prev].pos_curr.Y;
+        c->x1 = verts[(u16)desc->vert_next].pos_curr.X;
+        c->y1 = verts[(u16)desc->vert_next].pos_curr.Y;
+        c->id = id;
+        c->is_platform = 0;
+    }
+}
+
 static void Floor_CacheRange(RawCollLine *lines, CollVert *verts, int start, int num)
 {
     for (int i = 0; i < num && floor_num < LL_MAX_FLOORS; i++)
@@ -1102,11 +1125,14 @@ static void Floor_BuildCache(void)
     CollVert *verts = *stc_collvert;
 
     floor_num = 0;
+    ceil_num = 0;
     for (CollGroup *group = *stc_firstcollgroup; group != 0; group = group->next)
     {
         CollGroupDesc *desc = group->desc;
         Floor_CacheRange(lines, verts, desc->floor_start, desc->floor_num);
         Floor_CacheRange(lines, verts, desc->dyn_start, desc->dyn_num);
+        Ceil_CacheRange(lines, verts, desc->ceil_start, desc->ceil_num);
+        Ceil_CacheRange(lines, verts, desc->dyn_start, desc->dyn_num);
     }
 
     Wall_BuildCache(lines, verts);
@@ -1127,6 +1153,22 @@ static int Floor_Check(float ax, float ay, float bx, float by, int pass_platform
                 return 1;
         }
         else if (ay >= by && Line_CrossFlat(f->x0, f->y0, f->x1, ax, ay, bx, by))
+            return 1;
+    }
+    return 0;
+}
+
+// mpCheckCeiling: does the ECB top rising from a to b hit the underside of
+// something? Jumps and falls then bonk (ftCo_StopCeil) and fall, and an
+// aerial is pushed back down: either way, not the path predicted.
+static int Ceil_Check(float ax, float ay, float bx, float by)
+{
+    if (by <= ay)
+        return 0;
+    for (int i = 0; i < ceil_num; i++)
+    {
+        FloorLine *c = &ceil_cache[i];
+        if (Line_Cross(c->x0, c->y0, c->x1, c->y1, ax, ay, bx, by))
             return 1;
     }
     return 0;
@@ -1805,6 +1847,7 @@ typedef struct SimState
 typedef struct SimStep
 {
     int landed;
+    int ceiling;          // the ECB top hit a ceiling (and didn't land)
     int first_ecb;        // an aerial's or airdodge's own ECB bottom was used for the first time
     int unlearned;        // relied on data the event hasn't learned yet
     int fastfall_started;
@@ -2479,6 +2522,7 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
 {
     sim_steps++;
     out->landed = 0;
+    out->ceiling = 0;
     out->first_ecb = 0;
     out->unlearned = 0;
     out->fastfall_started = 0;
@@ -2615,6 +2659,7 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
 
     // walls push the fighter out before the floor test (mpColl_80046904)
     Sim_Walls(&s->x, s->y, s->pos_x, s->pos_y, &s->ecb, &ecb);
+    int ceiling = Ceil_Check(s->pos_x, s->pos_y + s->ecb.top, s->x, s->y + ecb.top);
     s->ecb = ecb;
     s->pos_x = s->x;
     s->pos_y = s->y;
@@ -2624,6 +2669,7 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     float bx = s->x;
     float by = s->y + s->bottom;
     out->landed = Floor_Check(s->prev_x, s->prev_y, bx, by, pass_platforms, start->skip_line);
+    out->ceiling = ceiling && !out->landed; // a touchdown is handled first (ft_800835B0)
     s->prev_x = bx;
     s->prev_y = by;
 }
@@ -2701,6 +2747,8 @@ static int Branch_Press(FighterData *fp, SimStart *start, SimState *before, int 
             *unlearned = 1;
             return -1;
         }
+        if (step.ceiling)
+            return -1;
         if (step.landed)
         {
             // touching down on the locked bottom isn't an interrupt
@@ -2884,6 +2932,11 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
             p->land_frame = k;
             p->land_ecb = *step.ecb;
             p->land_kind = Landing_Kind(fp, &s, step.ecb, step.first_ecb, &p->lag, &p->lcancel_lag);
+            break;
+        }
+        if (step.ceiling)
+        {
+            Mark_Uncertain(p, k); // bonks: no landing on this path
             break;
         }
         if (s.vy < 0 && s.y < sim_bottom_y)
@@ -7516,7 +7569,7 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
         path[n] = (Vec2){s.x, s.y};
         bottom[n++] = s.bottom;
     }
-    if (step.landed)
+    if (step.landed || step.ceiling)
         return;
 
     st.stick_x = hold ? L->facing : 0;
@@ -8833,6 +8886,7 @@ void Event_Init(GOBJ *gobj)
     actual_pos = calloc(sizeof(Vec2) * (LL_SIM_FRAMES + 1));
     actual_bottom = calloc(sizeof(float) * (LL_SIM_FRAMES + 1));
     floor_cache = calloc(sizeof(FloorLine) * LL_MAX_FLOORS);
+    ceil_cache = calloc(sizeof(FloorLine) * LL_MAX_CEILS);
     quads = calloc(sizeof(Quad) * LL_QUADS);
     ledges = calloc(sizeof(LedgeEntry) * LR_LEDGES);
     pred_route = calloc(sizeof(Prediction));

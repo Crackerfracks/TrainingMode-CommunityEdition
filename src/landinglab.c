@@ -64,6 +64,8 @@
 #define COMMON_WAVELAND_LAG 0x344   // float: landing lag out of an airdodge
 #define COMMON_FALL_LEAN_DEADZONE 0x444 // float: |x speed / drift max| above this leans the fall pose
 #define COMMON_FALL_LEAN_RATE 0x448     // float: how fast the lean moves to its target each frame
+#define COMMON_AIR_FRICTION_OOB 0x1FC   // float: air friction while faster than the drift max
+#define COMMON_UPB_DRIFT_STICK 0x258    // float: |stick x| below this stops a Falcon Dive's drift
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
@@ -106,9 +108,15 @@ enum TrackedState
     TS_AIRHI,
     TS_AIRLW,
     TS_ESCAPEAIR,
+    TS_FALLSPECIAL, // helpless fall: after a Falcon Dive, or an airdodge that ran out
+    TS_UPB,         // Falcon Dive started on the ground, once he's airborne
+    TS_UPBA,        // Falcon Dive started in the air
 
     TS_COUNT
 };
+
+#define ASID_CAPTAIN_SPECIALHI 353    // Falcon's own states start at 341
+#define ASID_CAPTAIN_SPECIALAIRHI 354
 
 static const int tracked_state_ids[TS_COUNT] = {
     ASID_JUMPF,
@@ -123,15 +131,21 @@ static const int tracked_state_ids[TS_COUNT] = {
     ASID_ATTACKAIRHI,
     ASID_ATTACKAIRLW,
     ASID_ESCAPEAIR,
+    ASID_FALLSPECIAL,
+    ASID_CAPTAIN_SPECIALHI,
+    ASID_CAPTAIN_SPECIALAIRHI,
 };
 
 static const char *tracked_state_names[TS_COUNT] = {
     "JumpF", "JumpB", "DJumpF", "DJumpB", "Fall", "FallAerial",
     "Nair", "Fair", "Bair", "Uair", "Dair", "Airdodge",
+    "FallSpecial", "UpB", "UpBAir",
 };
 
 static int Tracked_Index(int state_id)
 {
+    if (state_id == ASID_FALLSPECIALF || state_id == ASID_FALLSPECIALB)
+        return TS_FALLSPECIAL;
     for (int i = 0; i < TS_COUNT; i++)
     {
         if (tracked_state_ids[i] == state_id)
@@ -145,19 +159,32 @@ static int Tracked_IsAerial(int ts)
     return ts >= TS_AIRN && ts <= TS_AIRLW;
 }
 
-// Jump, double jump and fall collision pass the drop-through callback
-// (ftCo_80096CC8); aerials and the airdodge (ft_80081D0C) collide without it
-// and always land on platforms.
+static int Tracked_IsUpB(int ts)
+{
+    return ts == TS_UPB || ts == TS_UPBA;
+}
+
+// Nothing can be pressed out of a Falcon Dive or the helpless fall after
+// it: no aerial, airdodge or jump.
+static int Tracked_IsHelpless(int ts)
+{
+    return ts >= TS_FALLSPECIAL;
+}
+
+// Jump, double jump, fall and helpless fall collision pass the drop-through
+// callback (ftCo_80096CC8); aerials, the airdodge (ft_80081D0C) and Falcon
+// Dive (ft_CheckGroundAndLedge) collide without it and always land on
+// platforms.
 static int Tracked_UsesPlatformDrop(int ts)
 {
-    return ts <= TS_FALLAERIAL;
+    return ts <= TS_FALLAERIAL || ts == TS_FALLSPECIAL;
 }
 
 // The state the game enters when this one's animation runs out, or -1 if it
 // loops or isn't tracked. Jump and aerials go to Fall (ftCo_Fall_Enter),
-// double jump goes to FallAerial (ftCo_FallAerial_Enter), the airdodge goes
-// to FallSpecial, which isn't tracked. Once a state has been seen ending,
-// state_next (below) holds what really followed.
+// double jump goes to FallAerial (ftCo_FallAerial_Enter), the airdodge and
+// Falcon Dive go to FallSpecial (ftCo_80096900). Once a state has been seen
+// ending, state_next (below) holds what really followed.
 static int Tracked_NaturalNext(int ts)
 {
     switch (ts)
@@ -173,6 +200,10 @@ static int Tracked_NaturalNext(int ts)
     case TS_JUMPAERIALF:
     case TS_JUMPAERIALB:
         return TS_FALLAERIAL;
+    case TS_ESCAPEAIR:
+    case TS_UPB:
+    case TS_UPBA:
+        return TS_FALLSPECIAL;
     default:
         return -1;
     }
@@ -242,10 +273,11 @@ static s16 state_len[TS_COUNT];   // frames a state lasts before ending by itsel
 static s8 state_next[TS_COUNT];   // state that followed when it ended, -1 = not seen
 
 // Did prev end by itself into ts? Its animation ending is the only way from
-// jump, double jump or an aerial into a fall state.
+// jump, double jump, an aerial, the airdodge or Falcon Dive into a fall
+// state.
 static int Tracked_EndedInto(int prev, int ts)
 {
-    return Tracked_NaturalNext(prev) >= 0 && (ts == TS_FALL || ts == TS_FALLAERIAL);
+    return Tracked_NaturalNext(prev) >= 0 && (ts == TS_FALL || ts == TS_FALLAERIAL || ts == TS_FALLSPECIAL);
 }
 
 static int Tracked_Next(int ts)
@@ -253,20 +285,35 @@ static int Tracked_Next(int ts)
     return state_next[ts] >= 0 ? state_next[ts] : Tracked_NaturalNext(ts);
 }
 
+static void Upb_Clear(void);
+
 static void Learned_Clear(void)
 {
+    Upb_Clear();
     memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     memset(state_len, 0, sizeof(state_len));
     memset(state_next, -1, sizeof(state_next));
 }
 
-static EcbSample *Ecb_Get(int ts, int frame)
+// Where a frame is learned.
+static EcbSample *Ecb_Slot(int ts, int frame)
 {
-    if (ts == TS_FALL || ts == TS_FALLAERIAL)
+    if (ts == TS_FALL || ts == TS_FALLAERIAL || ts == TS_FALLSPECIAL)
         frame %= LL_FALL_LOOP; // the fall animations loop
     if (frame >= LL_STATE_FRAMES)
         frame = LL_STATE_FRAMES - 1;
     return &ecb_table[ts * LL_STATE_FRAMES + frame];
+}
+
+// What the simulation uses for a frame: the helpless fall's pose, until
+// it's been seen, is the plain fall's. It only decides the frame of a
+// landing with lag.
+static EcbSample *Ecb_Get(int ts, int frame)
+{
+    EcbSample *e = Ecb_Slot(ts, frame);
+    if (ts == TS_FALLSPECIAL && !e->seen)
+        e = Ecb_Slot(TS_FALL, frame);
+    return e;
 }
 
 // Falcon's ECB on every frame of his jumps, double jumps, falls and aerials,
@@ -731,7 +778,7 @@ static void Learned_Bake(void)
     for (int i = 0; i < (int)countof(baked_ecb); i++)
     {
         const BakedEcb *b = &baked_ecb[i];
-        EcbSample *e = Ecb_Get(b->ts, b->frame);
+        EcbSample *e = Ecb_Slot(b->ts, b->frame);
         if (b->flags & BAKED_BOTTOM)
         {
             e->bottom = b->bottom;
@@ -750,8 +797,10 @@ static void Learned_Bake(void)
     }
 
     // how long each runs before ending by itself, from captures run to the
-    // end (2026-10-03); aerials end in Fall, double jumps in FallAerial
+    // end (2026-10-03); aerials end in Fall, double jumps in FallAerial, the
+    // airdodge in FallSpecial
     static const s8 baked_len[][2] = {
+        {TS_ESCAPEAIR, 49},
         {TS_JUMPF, 35},
         {TS_JUMPB, 50},
         {TS_JUMPAERIALF, 50},
@@ -794,7 +843,7 @@ static void Ecb_Record(FighterData *fp, int ts, int frame)
     if (frame >= LL_STATE_FRAMES)
         return;
 
-    EcbSample *s = Ecb_Get(ts, frame);
+    EcbSample *s = Ecb_Slot(ts, frame);
     CollData *cd = &fp->coll_data;
 
     // While the bottom is locked the game keeps the old bottom, so only the
@@ -821,6 +870,72 @@ static void Ecb_Record(FighterData *fp, int ts, int frame)
     s->aerial_lag = fp->ftcmd_var.flag0 != 0;
     if (s->seen < 255)
         s->seen++;
+}
+
+// Falcon Dive moves by its animation (ft_80085134) plus a drift speed of its
+// own, which the stick steers (ftCa_SpecialHi_Phys). The animation's part is
+// learned from every frame seen: one table for the dive started on the
+// ground, one for the air. Its state variables (mv.ca.specialhi): a short,
+// a byte of flags, a byte, then the drift speed.
+#define UPB_FLAGS 2          // byte holding x2_b1, set by its IASA: from then on
+#define UPB_CAN_LAND 0x40    // touching the floor lands, and he may turn around
+#define UPB_DRIFT 4          // Vec2
+#define FALLSPECIAL_LAG 0x14 // mv.co.fallspecial.landing_lag
+
+// Falcon's own attributes (ftCaptain_DatAttrs) for Falcon Dive
+#define CA_UPB_DRIFT_ACCEL 0x40 // times the air drift stick multiplier
+#define CA_UPB_DRIFT_MAX 0x44   // times the air drift max
+#define CA_UPB_LANDING_LAG 0x4C
+#define CA_UPB_TURN_STICK 0x58  // |stick x| above this at its IASA turns him that way
+
+typedef struct UpbFrame
+{
+    float x, y;  // the animation's movement, as if facing right
+    u8 seen;
+    u8 can_land;
+} UpbFrame;
+
+static UpbFrame *upb_table; // [2][LL_STATE_FRAMES]
+static s16 upb_turn[2];     // its first can_land frame, -1 = not seen
+
+static float Captain_Attr(FighterData *fp, int offset)
+{
+    return *(float *)((u8 *)fp->special_attributes + offset);
+}
+
+static UpbFrame *Upb_Get(int ts, int frame)
+{
+    if (frame >= LL_STATE_FRAMES)
+        frame = LL_STATE_FRAMES - 1;
+    return &upb_table[(ts - TS_UPB) * LL_STATE_FRAMES + frame];
+}
+
+static Vec2 Upb_Drift(FighterData *fp)
+{
+    Vec2 v;
+    memcpy(&v, (u8 *)&fp->state_var + UPB_DRIFT, sizeof(v));
+    return v;
+}
+
+static void Upb_Clear(void)
+{
+    memset(upb_table, 0, sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
+    upb_turn[0] = upb_turn[1] = -1;
+}
+
+static void Upb_Record(FighterData *fp, int ts, int frame)
+{
+    if (frame >= LL_STATE_FRAMES)
+        return;
+    UpbFrame *a = Upb_Get(ts, frame);
+    Vec2 drift = Upb_Drift(fp);
+    a->x = (fp->phys.self_vel.X - drift.X) * fp->facing_direction;
+    a->y = fp->phys.self_vel.Y - drift.Y;
+    a->can_land = (((u8 *)&fp->state_var)[UPB_FLAGS] & UPB_CAN_LAND) != 0;
+    a->seen = 1;
+    int k = ts - TS_UPB;
+    if (a->can_land && (upb_turn[k] < 0 || frame < upb_turn[k]))
+        upb_turn[k] = frame;
 }
 
 ///////////////////////
@@ -1822,6 +1937,8 @@ typedef struct SimStart
     int ecb_lock;
     int skip_line;
     float lean;          // a fall's blend toward its leaning pose (mv.co.fall.x4)
+    Vec2 drift;          // Falcon Dive's own drift speed (mv.ca.specialhi.vel)
+    float special_lag;   // the helpless fall's landing lag (mv.co.fallspecial.landing_lag)
 } SimStart;
 
 // The simulated fighter between two frames.
@@ -1846,6 +1963,9 @@ typedef struct SimState
     float lean;      // a fall's blend toward its leaning pose
     int lean_side;   // LEAN_FORWARD, LEAN_BACK or LEAN_NONE
     float locked_bottom; // bottom kept while the lock lasts
+    float face;          // facing: Falcon Dive can turn him around
+    Vec2 drift;          // Falcon Dive's drift speed
+    float special_lag;   // landing lag once helpless
 } SimState;
 
 // What happened on one simulated frame.
@@ -1940,6 +2060,8 @@ static float common_dodge_decay;
 static float common_waveland_lag;
 static float common_fall_lean_deadzone;
 static float common_fall_lean_rate;
+static float common_air_friction_oob;
+static float common_upb_drift_stick;
 
 static int ai_show_all; // the AI Filter option is on All
 
@@ -1999,6 +2121,40 @@ static float Drift_Accel(FighterData *fp, float vel, float stick_x)
             if (vel + accel < -max_vel)
                 accel = -max_vel - vel;
         }
+    }
+    return accel;
+}
+
+// Falcon Dive's drift speed with the stick held at stick_x
+// (ftCa_SpecialHi_Phys): over its max it slows by the out-of-bounds friction
+// (DeaccelQuick); otherwise it goes straight for the stick's target
+// (DriftSimple_NoFriction), and stops at once with the stick near the middle.
+static float Upb_DriftAccel(FighterData *fp, float vel, float stick_x)
+{
+    float max = Captain_Attr(fp, CA_UPB_DRIFT_MAX) * fp->attr.aerial_drift_max;
+    float accel;
+    if (fabs(vel) > max)
+    {
+        accel = common_air_friction_oob;
+        if (fabs(accel) >= fabs(vel))
+            return -vel;
+        return vel > 0 ? -accel : accel;
+    }
+    if (fabs(stick_x) < common_upb_drift_stick)
+        return -vel;
+
+    // ftCommon_CalcSelfAccel_AccelToVel
+    accel = stick_x * fp->attr.aerial_drift_stick_mult * Captain_Attr(fp, CA_UPB_DRIFT_ACCEL);
+    float target = stick_x * max;
+    if (!(vel * accel < 0))
+    {
+        if (accel > 0)
+        {
+            if (vel + accel > target)
+                accel = target - vel;
+        }
+        else if (vel + accel < target)
+            accel = target - vel;
     }
     return accel;
 }
@@ -2450,20 +2606,22 @@ static int Is_Fall(int ts)
     return ts == TS_FALL || ts == TS_FALLAERIAL;
 }
 
-// The live fall's blend (mv.co.fall.x4, the second state variable).
+// The live fall's blend (mv.co.fall.x4, the second state variable; the
+// helpless fall keeps its own in the same place).
 static float Lean_FromFighter(FighterData *fp, int ts)
 {
     float lean = 0;
-    if (Is_Fall(ts))
+    if (Is_Fall(ts) || ts == TS_FALLSPECIAL)
         memcpy(&lean, &fp->state_var.state_var2, sizeof(lean));
     return lean;
 }
 
 // Whether the live frame's ECB can be learned: a fall only teaches its plain
-// pose. vx is the speed the animation saw (last frame's).
+// pose. vx is the speed the animation saw (last frame's). The helpless
+// fall's leaning poses aren't simulated, so it only learns its plain one.
 static int Lean_IsPlain(FighterData *fp, int ts, float vx)
 {
-    if (!Is_Fall(ts))
+    if (!Is_Fall(ts) && ts != TS_FALLSPECIAL)
         return 1;
     float target;
     return Lean_FromFighter(fp, ts) < 0.002f || Lean_Target(fp, vx, fp->facing_direction, &target) == LEAN_NONE;
@@ -2502,6 +2660,12 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->ecb_lock = cd->u.ecb_bot_lock_frames;
     s->skip_line = cd->ignore_line;
     s->lean = Lean_FromFighter(fp, ts);
+    s->drift = (Vec2){0, 0};
+    s->special_lag = 0;
+    if (Tracked_IsUpB(ts))
+        s->drift = Upb_Drift(fp);
+    else if (ts == TS_FALLSPECIAL)
+        memcpy(&s->special_lag, (u8 *)&fp->state_var + FALLSPECIAL_LAG, sizeof(float));
 }
 
 static void Sim_Init(SimStart *start, SimState *s)
@@ -2534,6 +2698,9 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->lean = start->lean;
     s->lean_side = LEAN_NONE;
     s->locked_bottom = start->locked_bottom;
+    s->face = start->facing;
+    s->drift = start->drift;
+    s->special_lag = start->special_lag;
 }
 
 // One frame, in the game's order: animation (the state can end), interrupt
@@ -2577,6 +2744,12 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
             // ftCo_FallAerial_Enter doesn't keep a fastfall
             s->fastfall = 0;
         }
+        else if (next == TS_FALLSPECIAL)
+        {
+            // ftCo_80096900 keeps the speed and fastfall; the landing lag
+            // comes from what ran out
+            s->special_lag = s->ts == TS_ESCAPEAIR ? common_waveland_lag : Captain_Attr(fp, CA_UPB_LANDING_LAG);
+        }
 
         s->ts = next;
         s->frame = 0;
@@ -2614,8 +2787,14 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
             s->lean_side = LEAN_NONE;
         }
         else
-            s->lean_side = Lean_Update(fp, s->vx, start->facing, &s->lean);
+            s->lean_side = Lean_Update(fp, s->vx, s->face, &s->lean);
     }
+
+    // Falcon Dive's IASA turns him toward a stick held far enough sideways
+    // (ftCommon_UpdateFacing), before its movement this frame
+    if (Tracked_IsUpB(s->ts) && s->frame == upb_turn[s->ts - TS_UPB] &&
+        fabs(start->stick_x) > Captain_Attr(fp, CA_UPB_TURN_STICK))
+        s->face = start->stick_x >= 0 ? 1.f : -1.f;
 
     // input: the stick is held, so its timers keep counting
     if (s->tilt_timer < LL_TIMER_MAX)
@@ -2635,6 +2814,17 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
         // ftCo_EscapeAir_Phys: the dodge's speed decays, no gravity or drift
         s->vx *= common_dodge_decay;
         s->vy *= common_dodge_decay;
+    }
+    else if (Tracked_IsUpB(s->ts))
+    {
+        // ftCa_SpecialHi_Phys: its own drift speed, with the animation's
+        // movement on top; no gravity
+        UpbFrame *a = Upb_Get(s->ts, s->frame);
+        if (!a->seen)
+            out->unlearned = 1;
+        s->drift.X += Upb_DriftAccel(fp, s->drift.X, start->stick_x);
+        s->vx = a->x * s->face + s->drift.X;
+        s->vy = a->y + s->drift.Y;
     }
     else
     {
@@ -2683,7 +2873,7 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     SimEcb ecb = s->ecb;
     ecb.bottom = s->bottom;
     if (e->has_shape)
-        Ecb_FromSample(e, start->facing, &ecb);
+        Ecb_FromSample(e, s->face, &ecb);
     Ecb_Fix(&ecb);
 
     // walls push the fighter out before the floor test (mpColl_80046904)
@@ -2712,13 +2902,33 @@ static void Mark_Uncertain(Prediction *p, int frame)
 
 // What a touchdown in state ts gives: ft_80082B1C for jumps and falls,
 // ftCo_LandingAir_EnterWithLag for aerials, ftCo_LandingFallSpecial_Enter
-// for the airdodge. An aerial whose own ECB touches down the first time it's
-// used is an aerial interrupt, whatever its lag; a horizontal airdodge that
-// does the same is a perfect waveland.
+// for the airdodge, Falcon Dive and the helpless fall. An aerial whose own
+// ECB touches down the first time it's used is an aerial interrupt,
+// whatever its lag; a horizontal airdodge that does the same is a perfect
+// waveland.
 static int Landing_Kind(FighterData *fp, SimState *s, EcbSample *e, int first_ecb, int *lag, int *lcancel_lag)
 {
     float normal_lag = fp->attr.normal_landing_lag;
     *lcancel_lag = 0;
+
+    if (Tracked_IsHelpless(s->ts))
+    {
+        // before its IASA, Falcon Dive goes on along the floor instead
+        // (ft_80083B68)
+        if (Tracked_IsUpB(s->ts))
+        {
+            UpbFrame *a = Upb_Get(s->ts, s->frame);
+            if (a->seen && !a->can_land)
+            {
+                *lag = 0;
+                return LAND_OTHER;
+            }
+            *lag = (int)Captain_Attr(fp, CA_UPB_LANDING_LAG);
+        }
+        else
+            *lag = (int)s->special_lag;
+        return LAND_NORMAL;
+    }
 
     if (s->ts == TS_ESCAPEAIR)
     {
@@ -2818,7 +3028,7 @@ static int Branch_Press(FighterData *fp, SimStart *start, SimState *before, int 
 static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, Prediction *p, int k, int landing, int branches)
 {
     int ts = p->ts[k];
-    if (Tracked_IsAerial(ts) || ts == TS_ESCAPEAIR)
+    if (Tracked_IsAerial(ts) || ts == TS_ESCAPEAIR || Tracked_IsHelpless(ts))
         return;
 
     if (!landing && (branches & BR_AI))
@@ -3114,6 +3324,9 @@ static int Sim_GroundJump(FighterData *fp, int short_hop, SimStart *s)
     s->trigger_timer = trigger < LL_TIMER_MAX ? trigger : LL_TIMER_MAX;
     s->ecb_lock = 9; // set to 10 on takeoff, counted down before collision
     s->skip_line = -1;
+    s->lean = 0;
+    s->drift = (Vec2){0, 0};
+    s->special_lag = 0;
     return until;
 }
 
@@ -3165,6 +3378,9 @@ static void Sim_ToStart(SimState *s, SimStart *start, SimStart *out)
     out->trigger_timer = s->trigger_timer;
     out->ecb_lock = s->lock;
     out->lean = s->lean;
+    out->facing = s->face;
+    out->drift = s->drift;
+    out->special_lag = s->special_lag;
 }
 
 ///////////////////////
@@ -4058,38 +4274,23 @@ static void Log_Frame(FighterData *fp, int ts, int frame)
 
     // a fall leans its pose toward FallF or FallB with the drift speed
     // (ftCo_Fall_Anim_Inner): which one, and how far
-    if (ts == TS_FALL || ts == TS_FALLAERIAL)
+    if (ts == TS_FALL || ts == TS_FALLAERIAL || ts == TS_FALLSPECIAL)
     {
         float weight;
         memcpy(&weight, &fp->state_var.state_var2, sizeof(weight));
         sprintf(buf, "LLLEAN %d sm %d w %.5f\n", event_vars->game_timer, fp->state_var.state_var1, weight);
         Log(buf);
     }
-}
 
-// FallSpecial (after an airdodge or up-B) isn't predicted yet; its frames are
-// logged in the same form so it can be built in later. It leans with drift
-// like the other falls (ftCo_Fall_Anim_Inner, smid and blend in the same
-// state variables).
-static void Log_FallSpecial(FighterData *fp, int sid, int frame)
-{
-    char buf[256];
-    CollData *cd = &fp->coll_data;
-    static const char *names[] = {"FallSpecial", "FallSpecialF", "FallSpecialB"};
-
-    sprintf(buf, "LL %d %s f%d pos %.4f %.4f vel %.5f %.5f ff%d lock%d ecb top %.4f bot %.4f l %.4f r %.4f side %.4f used bot %.4f ac%d stick %.4f %.4f face %d\n",
-            event_vars->game_timer, names[sid - ASID_FALLSPECIAL], frame,
-            fp->phys.pos.X, fp->phys.pos.Y, fp->phys.self_vel.X, fp->phys.self_vel.Y,
-            fp->flags.is_fastfall, cd->u.ecb_bot_lock_frames,
-            cd->ecbCurr_top.Y, cd->ecbCurr_bot.Y, cd->ecbCurr_left.X, cd->ecbCurr_right.X, cd->ecbCurr_right.Y,
-            cd->ecbCurrCorrect_bot.Y, fp->ftcmd_var.flag0 != 0,
-            fp->input.lstick.X, fp->input.lstick.Y, fp->facing_direction > 0 ? 1 : -1);
-    Log(buf);
-
-    float weight;
-    memcpy(&weight, &fp->state_var.state_var2, sizeof(weight));
-    sprintf(buf, "LLLEAN %d sm %d w %.5f\n", event_vars->game_timer, fp->state_var.state_var1, weight);
-    Log(buf);
+    // Falcon Dive: its own drift speed and flags, to check the learned
+    // animation movement against
+    if (Tracked_IsUpB(ts))
+    {
+        Vec2 drift = Upb_Drift(fp);
+        sprintf(buf, "LLUPB %d drift %.5f %.5f flags %02x\n", event_vars->game_timer, drift.X, drift.Y,
+                ((u8 *)&fp->state_var)[UPB_FLAGS]);
+        Log(buf);
+    }
 }
 
 // A jumpsquat frame: animation frame, position, ground speed, stick and
@@ -4464,7 +4665,7 @@ static int prev_wl_late;       // last frame's prediction: a late window on its 
 
 static int Jump_Or_Fall(int ts)
 {
-    return ts >= 0 && !Tracked_IsAerial(ts) && ts != TS_ESCAPEAIR;
+    return ts >= 0 && ts <= TS_FALLAERIAL;
 }
 
 #define LL_NEAR_MISS 4 // how far from a window a press still counts as aimed at it
@@ -4489,7 +4690,7 @@ static int Window_Offset(Prediction *p, u8 *mask, int k, u8 bit)
 // Pressed a few frames off a window instead, the panel says by how much.
 static void Press_CheckMissed(FighterData *fp, int ts)
 {
-    if (!seg_valid || !Jump_Or_Fall(prev_ts) || Jump_Or_Fall(ts))
+    if (!seg_valid || !Jump_Or_Fall(prev_ts) || !(Tracked_IsAerial(ts) || ts == TS_ESCAPEAIR))
         return;
     if (fp->coll_data.u.ecb_bot_lock_frames > 0)
         return;
@@ -4919,6 +5120,8 @@ static void Landing_Resolve(FighterData *fp)
     int kind;
     if (sid == ASID_WAIT)
         kind = LAND_NIL;
+    else if (Tracked_IsHelpless(prev_ts))
+        kind = LAND_NORMAL; // Falcon Dive or the helpless fall: their own lag
     else if (sid == ASID_LANDINGFALLSPECIAL)
     {
         // perfect: a dodge sideways or just below whose own ECB touched down
@@ -10088,8 +10291,11 @@ void Event_Init(GOBJ *gobj)
     common_waveland_lag = Common_Float(COMMON_WAVELAND_LAG);
     common_fall_lean_deadzone = Common_Float(COMMON_FALL_LEAN_DEADZONE);
     common_fall_lean_rate = Common_Float(COMMON_FALL_LEAN_RATE);
+    common_air_friction_oob = Common_Float(COMMON_AIR_FRICTION_OOB);
+    common_upb_drift_stick = Common_Float(COMMON_UPB_DRIFT_STICK);
 
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
+    upb_table = calloc(sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
     Learned_Clear();
     Learned_Bake();
     Lean_Index();
@@ -10242,6 +10448,8 @@ static void Event_ThinkFrame(GOBJ *event)
     {
         if (Lean_IsPlain(fp, ts, prev_vel.X))
             Ecb_Record(fp, ts, frame_in_state);
+        if (Tracked_IsUpB(ts))
+            Upb_Record(fp, ts, frame_in_state);
         if (logging)
         {
             if (!stage_logged)
@@ -10278,12 +10486,10 @@ static void Event_ThinkFrame(GOBJ *event)
     }
     else if (airborne)
     {
-        // in the air but in a state we don't predict (up-B, hitstun, ...)
+        // in the air but in a state we don't predict (hitstun, side-B, ...)
         live_visible = 0;
         seg_valid = 0;
         sprintf(text_ai, "-");
-        if (logging && !disturbed && sid >= ASID_FALLSPECIAL && sid <= ASID_FALLSPECIALB)
-            Log_FallSpecial(fp, sid, frame_in_state);
     }
     else if (Ground_CanJump(sid) && !disturbed && !ghost_visible)
         Ground_Preview(fp);

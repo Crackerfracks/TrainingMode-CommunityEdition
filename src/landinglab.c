@@ -2931,6 +2931,17 @@ static void Windows_Summarize(FighterData *fp, Prediction *p)
     }
 }
 
+// The airdodge directions that work on frame k in the kind of window the
+// prediction shows (frame one, or a frame late), on the floors the cues
+// cover.
+static u8 WL_Mask(Prediction *p, int k)
+{
+    u8 m = p->wl_late ? p->wl_late_mask[k] : p->wl_mask[k];
+    if (!Cues_WavelandGround())
+        m &= ~p->wl_ground[k];
+    return m;
+}
+
 // How far Predict goes: all of LL_SIM_FRAMES, and until it falls below
 // sim_bottom_y. The ledge route search looks less far.
 static int sim_limit = LL_SIM_FRAMES;
@@ -3170,6 +3181,8 @@ static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f /
 static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
 static const char *tick_names[] = {"Frame Advance", "Always", "Off"};
+static const char *mark_size_names[] = {"Small", "Medium", "Large"};
+static const float mark_sizes[] = {0.9f, 1.25f, 1.6f};
 static const char *ai_filter_names[] = {"Useful", "All"};
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
 static const char *timer_names[] = {"Above Falcon", "Fixed Strip", "Both", "Off"};
@@ -3508,6 +3521,7 @@ enum options_paths
     POPT_PATH,
     POPT_BODY,
     POPT_INPUTS,
+    POPT_MARK_SIZE,
     POPT_TICKS,
     POPT_SLIDEOFF,
     POPT_PREVIEW,
@@ -3536,8 +3550,18 @@ static EventOption Options_Paths[POPT_COUNT] = {
         .name = "Input Markers",
         .val = 1,
         .desc = {"Mark the inputs along the path where each is",
-                 "due: a ledge route's drop, fastfall, jump and",
-                 "aerial, and a waveland's airdodge."},
+                 "due, and which aerials interrupt. White: stick.",
+                 "Yellow: jump. Pink: aerial (C-stick directions",
+                 "that work light up). Cyan: airdodge."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Marker Size",
+        .val = 1,
+        .value_num = countof(mark_size_names),
+        .values = mark_size_names,
+        .desc = {"How big the input markers and the aerial",
+                 "picker are."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -3546,7 +3570,8 @@ static EventOption Options_Paths[POPT_COUNT] = {
         .values = tick_names,
         .desc = {"A small ring on the paths at every frame: closer",
                  "rings mean slower movement. Shown during Frame",
-                 "Advance, always, or never."},
+                 "Advance (always on ledge routes), always, or",
+                 "never."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -4562,7 +4587,7 @@ static void Window_Remember(Prediction *p)
     prev_ai_first = Cues_Ai() && p->ai_first < p->uncertain_from ? p->ai_first : 0;
     prev_wl_first = Cues_Waveland() && p->wl_first < p->uncertain_from ? p->wl_first : 0;
     prev_ai_now = p->num >= 1 ? p->ai_mask[1] : 0;
-    prev_wl_now = p->num >= 1 ? p->wl_mask[1] : 0;
+    prev_wl_now = p->num >= 1 ? WL_Mask(p, 1) : 0;
 }
 
 static void Window_Forget(void)
@@ -4942,7 +4967,7 @@ static void Landing_Resolve(FighterData *fp)
         }
         else
         {
-            predicted = in_range && (pred_seg->wl_mask[k] & dodge);
+            predicted = in_range && (WL_Mask(pred_seg, k) & dodge);
             learning = !predicted && (!in_range || k >= pred_seg->uncertain_from || pred_seg->wl_unlearned);
         }
         const char *name = pressed >= 0 ? "AI" : land_kind_names[kind];
@@ -5210,58 +5235,24 @@ static void Draw_CurrentEcb(FighterData *fp)
     GFX_AddVtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
 }
 
-// The C-stick direction of each aerial in mask, drawn from (x, y): arrows
-// for fair, bair, uair and dair, a small square for nair.
-static void Draw_AerialArrows(float x, float y, u8 mask, float facing, GXColor color)
+// The aerial pickers (Compass_Draw), queued here while the stage is drawn
+// and drawn on the HUD after it.
+#define CP_MAX 4
+typedef struct Compass
 {
-    static const float dirs[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}}; // N F B U D
-    int count = 0;
-    for (int a = 0; a < 5; a++)
-    {
-        if (mask & (1 << a))
-            count += a == 0 ? 8 : 6;
-    }
-    if (count == 0)
+    float x, y;
+    u8 mask;
+    s8 facing;
+    GXColor color;
+} Compass;
+static Compass compass[CP_MAX];
+static int compass_num;
+
+static void Compass_Queue(float x, float y, u8 mask, float facing, GXColor color)
+{
+    if (compass_num >= CP_MAX || !mask)
         return;
-
-    int on_top = world_on_top;
-    world_on_top = 1;
-    World_Start(count, GX_LINES, 24);
-    world_on_top = on_top;
-    for (int a = 0; a < 5; a++)
-    {
-        if (!(mask & (1 << a)))
-            continue;
-
-        if (a == 0)
-        {
-            float r = 1.2f;
-            GFX_AddVtx(x - r, y - r, 0, color);
-            GFX_AddVtx(x + r, y - r, 0, color);
-            GFX_AddVtx(x + r, y - r, 0, color);
-            GFX_AddVtx(x + r, y + r, 0, color);
-            GFX_AddVtx(x + r, y + r, 0, color);
-            GFX_AddVtx(x - r, y + r, 0, color);
-            GFX_AddVtx(x - r, y + r, 0, color);
-            GFX_AddVtx(x - r, y - r, 0, color);
-            continue;
-        }
-
-        float dx = dirs[a][0] * facing; // forward and back follow facing
-        float dy = dirs[a][1];
-        float tip_x = x + dx * 6.f;
-        float tip_y = y + dy * 6.f;
-        // arrowhead: back from the tip, 40 degrees either side
-        float bx = -dx * 0.766f, by = -dy * 0.766f;
-        float px = -dy * 0.643f, py = dx * 0.643f;
-
-        GFX_AddVtx(x + dx * 1.5f, y + dy * 1.5f, 0, color);
-        GFX_AddVtx(tip_x, tip_y, 0, color);
-        GFX_AddVtx(tip_x, tip_y, 0, color);
-        GFX_AddVtx(tip_x + (bx + px) * 2.f, tip_y + (by + py) * 2.f, 0, color);
-        GFX_AddVtx(tip_x, tip_y, 0, color);
-        GFX_AddVtx(tip_x + (bx - px) * 2.f, tip_y + (by - py) * 2.f, 0, color);
-    }
+    compass[compass_num++] = (Compass){x, y, mask, facing > 0 ? 1 : -1, color};
 }
 
 // Windows after the next one of their kind: the same color at 40%
@@ -5304,10 +5295,10 @@ static void Draw_Windows(Prediction *p)
         int index = 0;
         for (int k = 1; k <= last_wl; k++)
         {
-            if (!p->wl_mask[k])
+            if (!WL_Mask(p, k))
                 continue;
             int e = k;
-            while (e < last_wl && p->wl_mask[e + 1])
+            while (e < last_wl && WL_Mask(p, e + 1))
                 e++;
 
             GXColor color = k >= p->uncertain_from ? color_learning : land_kind_colors[LAND_PERFECT_WL];
@@ -5334,7 +5325,8 @@ static void Draw_Windows(Prediction *p)
             if (index++ > 0)
                 color = Color_Dim(color);
             Draw_Bar(p, k, e, color, 60);
-            Draw_AerialArrows(p->pos[k].X, p->pos[k].Y + p->bottom[k], mask, p->facing, color);
+            if (Options_Paths[POPT_INPUTS].val)
+                Compass_Queue(p->pos[k].X, p->pos[k].Y + p->bottom[k], mask, p->facing, color);
             k = e;
         }
     }
@@ -5404,6 +5396,14 @@ static const GXColor color_skip = {140, 149, 168, 255};
 static const GXColor color_white = {255, 255, 255, 255};
 static const GXColor color_galint = {128, 128, 255, 255};
 static const GXColor color_plate = {6, 8, 16, 255};
+
+// What each input is drawn in wherever it shows (the markers along the
+// paths, the timer's glyphs, the controller display): the stick white, a
+// jump yellow, an aerial pink like the AI cues, an airdodge cyan like the
+// waveland cues.
+static const GXColor color_in_jump = {255, 220, 40, 255};
+#define color_in_aerial land_kind_colors[LAND_AI]
+#define color_in_dodge land_kind_colors[LAND_PERFECT_WL]
 
 // A color at a fraction of its strength (colors are premultiplied).
 static GXColor Color_Fill(GXColor c, float a)
@@ -5671,6 +5671,7 @@ enum glyph_kind
     GLYPH_JUMP,   // jump
     GLYPH_AERIAL, // an aerial
     GLYPH_DODGE,  // airdodge
+    GLYPH_UP,     // stick (or C-stick) up
 };
 
 typedef struct MeterRow
@@ -5878,16 +5879,21 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
         case GLYPH_DOWN:
             Hud_Tri(x - r, y + r * 0.7f, x + r, y + r * 0.7f, x, y - r, col);
             break;
-        case GLYPH_JUMP:
+        case GLYPH_UP:
             Hud_Tri(x + r, y - r * 0.7f, x - r, y - r * 0.7f, x, y + r, col);
             break;
+        case GLYPH_JUMP:
+            // a button with an up arrow cut into it
+            Hud_Disc(x, y, r, col);
+            if (pass)
+                Hud_Tri(x + s * 0.55f, y - s * 0.3f, x - s * 0.55f, y - s * 0.3f, x, y + s * 0.5f, shade);
+            break;
         case GLYPH_AERIAL:
-            Hud_Diamond(x, y, r, col);
+            Hud_Disc(x, y, r, col);
             break;
         case GLYPH_DODGE:
-            Hud_Diamond(x, y, r, col);
-            if (pass)
-                Hud_Diamond(x, y, r * 0.45f, shade);
+            // a shield bubble
+            Hud_Ring(x, y, s * 0.75f, (pass ? 0.45f : 0.45f + 0.24f / s) * s, col);
             break;
         }
     }
@@ -6492,7 +6498,6 @@ static float pad_glow_prev[PIN_COUNT]; // ... as it was a record ago
 static int assist_frozen; // Assist holds the game on the frame before an input
 
 static const GXColor color_btn_b = {255, 90, 70, 255};
-static const GXColor color_btn_jump = {255, 220, 40, 255};
 static const GXColor color_btn_z = {170, 110, 255, 255};
 
 // Which inputs are down on a pad.
@@ -6731,8 +6736,8 @@ static void Pad_Draw(FighterData *fp)
 
     Pad_Button(bx + 8.3f, by + 2.6f, 0.8f, land_kind_colors[LAND_AI], PIN_A, glow[PIN_A]);
     Pad_Button(bx + 7.0f, by + 1.5f, 0.48f, color_btn_b, PIN_B, glow[PIN_B]);
-    Pad_Button(bx + 9.6f, by + 3.1f, 0.48f, color_btn_jump, PIN_X, glow[PIN_X]);
-    Pad_Button(bx + 8.0f, by + 4.0f, 0.48f, color_btn_jump, PIN_Y, glow[PIN_Y]);
+    Pad_Button(bx + 9.6f, by + 3.1f, 0.48f, color_in_jump, PIN_X, glow[PIN_X]);
+    Pad_Button(bx + 8.0f, by + 4.0f, 0.48f, color_in_jump, PIN_Y, glow[PIN_Y]);
 
     // Z, a pill
     float zx = bx + 9.6f, zy = by + 4.35f;
@@ -6870,6 +6875,7 @@ static void Log_Camera(FighterData *fp)
 static void Draw_SlideOff(void);
 static void Draw_RoutePath(void);
 static void Markers_Draw(void);
+static void Compass_Draw(void);
 
 // Platform Glow: the floor a waveland or wavedash slides along lights up
 // in the stage, at Falcon's depth. A faint glow marks the slide while the
@@ -6997,6 +7003,7 @@ static void World_GX(GOBJ *gobj, int pass)
         return;
 
     FighterData *fp = Fighter_GetGObj(0)->userdata;
+    compass_num = 0;
     if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
         Log_Camera(fp);
     if (capture_clean)
@@ -7064,6 +7071,7 @@ static void Hud_GX(GOBJ *gobj, int pass)
             Meter_Fixed(fp);
     }
     Markers_Draw();
+    Compass_Draw();
     Pad_Draw(fp);
     Panel_Draw();
     Quad_Flush();
@@ -8682,8 +8690,10 @@ static void Draw_RoutePath(void)
     if (!show)
         return;
     GXColor c = land_kind_colors[route_path_of.kind];
-    Draw_Path(route_path, route_path_bottom, 0, route_path_num - 1, c, 18);
-    if (Ticks_On())
+    // a dark edge under it, so it reads over Falcon and any stage
+    Draw_Path(route_path, route_path_bottom, 0, route_path_num - 1, Color_Fill(color_plate, 0.75f), 42);
+    Draw_Path(route_path, route_path_bottom, 0, route_path_num - 1, c, 24);
+    if (Options_Paths[POPT_TICKS].val != 2)
         Draw_Ticks(route_path, route_path_bottom, 0, route_path_num - 1, c, 12);
 }
 
@@ -8693,9 +8703,14 @@ static void Draw_RoutePath(void)
 // order, so the quick inputs at the ledge stay apart. On the HUD, so they
 // stay on top of everything and keep their size.
 #define MK_MAX 6
-#define MK_H 1.2f   // chip height
+#define MK_H 1.2f   // chip height, at Marker Size 1
 #define MK_GW 1.0f  // width per glyph
 #define MK_GAP 0.25f
+
+static float Marker_Scale(void)
+{
+    return mark_sizes[Options_Paths[POPT_MARK_SIZE].val];
+}
 
 typedef struct Marker
 {
@@ -8732,13 +8747,13 @@ static void Marker_Glyph(Marker *m, int glyph, GXColor c)
 }
 
 // The chip placed before this one that it would overlap, -1 none.
-static int Marker_Hit(int i)
+static int Marker_Hit(int i, float h, float gap)
 {
     Marker *m = &mk[i];
     for (int j = 0; j < i; j++)
     {
         Marker *o = &mk[j];
-        if (fabs(o->cx - m->cx) < (o->w + m->w) / 2 + MK_GAP && fabs(o->cy - m->cy) < MK_H + MK_GAP)
+        if (fabs(o->cx - m->cx) < (o->w + m->w) / 2 + gap && fabs(o->cy - m->cy) < h + gap)
             return j;
     }
     return -1;
@@ -8747,19 +8762,21 @@ static int Marker_Hit(int i)
 // side: -1 puts the chips left of the line, 1 right.
 static void Markers_Flush(int side)
 {
+    float S = Marker_Scale();
+    float h = MK_H * S, gw = MK_GW * S, gap = MK_GAP * S;
     for (int i = 0; i < mk_num; i++)
     {
         Marker *m = &mk[i];
-        m->w = m->n * MK_GW + 0.3f;
-        m->cx = m->px + side * (1.3f + m->w / 2);
+        m->w = m->n * gw + 0.3f * S;
+        m->cx = m->px + side * (1.3f * S + m->w / 2);
         float lim = SAFE_W - m->w / 2;
         if (m->cx > lim)
             m->cx = lim;
         if (m->cx < -lim)
             m->cx = -lim;
         m->cy = m->py;
-        for (int tries = 0, j; tries < MK_MAX && (j = Marker_Hit(i)) >= 0; tries++)
-            m->cy = mk[j].cy - MK_H - MK_GAP;
+        for (int tries = 0, j; tries < MK_MAX && (j = Marker_Hit(i, h, gap)) >= 0; tries++)
+            m->cy = mk[j].cy - h - gap;
     }
     for (int i = 0; i < mk_num; i++)
     {
@@ -8774,12 +8791,52 @@ static void Markers_Flush(int side)
     {
         Marker *m = &mk[i];
         float x0 = m->cx - m->w / 2, x1 = m->cx + m->w / 2;
-        Hud_Rect(x0, m->cy - MK_H / 2, x1, m->cy + MK_H / 2, Color_Fill(color_plate, 0.8f));
-        Hud_Frame(x0, m->cy - MK_H / 2, x1, m->cy + MK_H / 2, 0.07f, Color_Fill(m->color[0], 0.7f));
+        Hud_Rect(x0, m->cy - h / 2, x1, m->cy + h / 2, Color_Fill(color_plate, 0.85f));
+        Hud_Frame(x0, m->cy - h / 2, x1, m->cy + h / 2, 0.07f * S, Color_Fill(m->color[0], 0.7f));
         for (int g = 0; g < m->n; g++)
-            Glyph_Draw(m->glyph[g], x0 + 0.15f + MK_GW * (g + 0.5f), m->cy, 0.33f, m->color[g]);
+            Glyph_Draw(m->glyph[g], x0 + 0.15f * S + gw * (g + 0.5f), m->cy, 0.36f * S, m->color[g]);
     }
     mk_num = 0;
+}
+
+// The aerial picker: at the start of an aerial interrupt's window, a small
+// C-stick face with the directions that interrupt there lit (the middle for
+// a nair), forward turned the way Falcon faces. Queued from the stage's
+// drawing and drawn on the HUD, above its frame.
+static void Compass_Draw(void)
+{
+    float S = Marker_Scale();
+    float r = 0.95f * S;
+    for (int i = 0; i < compass_num; i++)
+    {
+        Compass *c = &compass[i];
+        float px, py;
+        if (!Hud_FromWorld(c->x, c->y, &px, &py))
+            continue;
+        float cx = px, cy = py + 1.2f * S + r;
+        Hud_Seg(px, py, cx, cy - r, 0.1f, Color_Fill(color_plate, 0.7f));
+        Hud_Seg(px, py, cx, cy - r, 0.05f, Color_Fill(c->color, 0.7f));
+        Hud_Disc(cx, cy, r + 0.15f * S, Color_Fill(color_plate, 0.85f));
+        Hud_Ring(cx, cy, r, 0.08f * S, Color_Fill(c->color, 0.6f));
+        GXColor off = Color_Fill(color_white, 0.12f);
+        // N F B U D, as the aerial bits
+        static const float dirs[5][2] = {{0, 0}, {1, 0}, {-1, 0}, {0, 1}, {0, -1}};
+        for (int a = 0; a < 5; a++)
+        {
+            GXColor col = (c->mask & (1 << a)) ? c->color : off;
+            if (a == 0)
+            {
+                Hud_Disc(cx, cy, 0.22f * r, col);
+                continue;
+            }
+            float dx = dirs[a][0] * c->facing, dy = dirs[a][1];
+            float tx = cx + dx * 0.9f * r, ty = cy + dy * 0.9f * r;     // tip
+            float bx = cx + dx * 0.38f * r, by = cy + dy * 0.38f * r;   // base
+            float wx = -dy * 0.36f * r, wy = dx * 0.36f * r;
+            Hud_Tri(tx, ty, bx + wx, by + wy, bx - wx, by - wy, col);
+        }
+    }
+    compass_num = 0;
 }
 
 // The C-stick direction of an aerial, nothing for nair.
@@ -8792,7 +8849,7 @@ static int Aerial_Glyph(int aerial, int facing)
     case TS_AIRB:
         return facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
     case TS_AIRHI:
-        return GLYPH_JUMP; // up
+        return GLYPH_UP;
     case TS_AIRLW:
         return GLYPH_DOWN;
     }
@@ -8820,7 +8877,6 @@ static void Markers_Draw(void)
         LedgeRoute *r = &route_path_of;
         int facing = ledges[route_path_ledge].facing;
         int from = route_active ? route_e + 1 : 0;
-        GXColor cue = land_kind_colors[r->kind];
         int away = facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
         int in = facing > 0 ? GLYPH_RIGHT : GLYPH_LEFT;
         if (from <= 0)
@@ -8828,11 +8884,12 @@ static void Markers_Draw(void)
         if (r->ff > 0 && Route_FF(r) >= from)
             Route_Marker(Route_FF(r), GLYPH_DOWN, color_white, 0, color_white);
         if (r->dj >= from)
-            Route_Marker(r->dj, GLYPH_JUMP, cue, in, color_white);
+            Route_Marker(r->dj, GLYPH_JUMP, color_in_jump, in, color_white);
         if (r->kind == LAND_AI && r->press >= from)
-            Route_Marker(r->press, GLYPH_AERIAL, cue, Aerial_Glyph(r->aerial, facing), color_white);
-        // beside the line, away from the stage
-        Markers_Flush(facing > 0 ? -1 : 1);
+            Route_Marker(r->press, GLYPH_AERIAL, color_in_aerial, Aerial_Glyph(r->aerial, facing), color_in_aerial);
+        // beside the line on the stage's side, clear of Falcon hanging
+        // and dropping off it
+        Markers_Flush(facing > 0 ? 1 : -1);
         return;
     }
 
@@ -8843,9 +8900,8 @@ static void Markers_Draw(void)
         p->wl_first > 0 && p->wl_first < p->uncertain_from)
     {
         int k = p->wl_first - 1; // where Falcon is as he presses it
-        GXColor wl = land_kind_colors[LAND_PERFECT_WL];
         Marker *m = Marker_Add(p->pos[k].X, p->pos[k].Y + p->bottom[k]);
-        Marker_Glyph(m, GLYPH_DODGE, wl);
+        Marker_Glyph(m, GLYPH_DODGE, color_in_dodge);
         if (p->wl_dirs & DODGE_LEFT)
             Marker_Glyph(m, GLYPH_LEFT, color_white);
         if (p->wl_dirs & DODGE_RIGHT)

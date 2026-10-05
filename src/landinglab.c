@@ -286,6 +286,7 @@ static int Tracked_Next(int ts)
 }
 
 static void Upb_Clear(void);
+static void Upb_Bake(void);
 
 static void Learned_Clear(void)
 {
@@ -771,6 +772,132 @@ static const BakedEcb baked_ecb[] = {
     {TS_ESCAPEAIR, 46, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 1.9671f, 12.5610f, 7.2640f, 7.5193f, -3.2823f},
     {TS_ESCAPEAIR, 47, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.1325f, 13.4229f, 7.7777f, 7.4470f, -2.5792f},
     {TS_ESCAPEAIR, 48, BAKED_BOTTOM|BAKED_SHAPE|BAKED_LAG, 2.2812f, 14.2740f, 8.2776f, 4.4994f, -4.4994f},
+    // Falcon Dive in the air (from the ground from frame 13, when he lifts
+    // off) and the helpless fall's plain 8-frame loop, from a scripted
+    // capture (2026-10-05). Frames 13-16 keep the bottom from before.
+    {TS_UPB, 13, BAKED_SHAPE, 0.0000f, 8.1604f, 4.0802f, 4.4296f, -4.4296f},
+    {TS_UPB, 14, BAKED_SHAPE, 0.0000f, 10.6500f, 5.3250f, 3.3929f, -3.3929f},
+    {TS_UPB, 15, BAKED_SHAPE, 0.0000f, 19.2369f, 10.5359f, 3.1052f, -3.1052f},
+    {TS_UPB, 16, BAKED_SHAPE, 0.0000f, 19.5940f, 10.8937f, 3.1246f, -3.1246f},
+    {TS_UPB, 17, BAKED_SHAPE|BAKED_BOTTOM, 2.3288f, 19.7247f, 11.0268f, 3.1696f, -3.1696f},
+    {TS_UPB, 18, BAKED_SHAPE|BAKED_BOTTOM, 2.3028f, 19.6934f, 10.9981f, 3.2295f, -3.2295f},
+    {TS_UPB, 19, BAKED_SHAPE|BAKED_BOTTOM, 2.1788f, 19.5644f, 10.8716f, 3.3094f, -3.3094f},
+    {TS_UPB, 20, BAKED_SHAPE|BAKED_BOTTOM, 2.0204f, 19.4023f, 10.7113f, 3.3977f, -3.3977f},
+    {TS_UPB, 21, BAKED_SHAPE|BAKED_BOTTOM, 1.8911f, 19.2714f, 10.5813f, 3.4839f, -3.4839f},
+    {TS_UPB, 22, BAKED_SHAPE|BAKED_BOTTOM, 1.8542f, 19.2363f, 10.5452f, 3.5755f, -3.5755f},
+    {TS_UPB, 23, BAKED_SHAPE|BAKED_BOTTOM, 2.0144f, 19.2362f, 10.6253f, 3.8499f, -3.8499f},
+    {TS_UPB, 24, BAKED_SHAPE|BAKED_BOTTOM, 2.3423f, 19.1915f, 10.7669f, 4.1488f, -4.1488f},
+    {TS_UPB, 25, BAKED_SHAPE|BAKED_BOTTOM, 2.7811f, 19.1071f, 10.9441f, 4.3859f, -4.3859f},
+    {TS_UPB, 26, BAKED_SHAPE|BAKED_BOTTOM, 3.2598f, 18.6334f, 10.9466f, 4.6656f, -4.6656f},
+    {TS_UPB, 27, BAKED_SHAPE|BAKED_BOTTOM, 3.7039f, 17.6724f, 10.6882f, 4.6162f, -4.6162f},
+    {TS_UPB, 28, BAKED_SHAPE|BAKED_BOTTOM, 4.0941f, 19.2829f, 11.6885f, 4.5386f, -4.5386f},
+    {TS_UPB, 29, BAKED_SHAPE|BAKED_BOTTOM, 4.4665f, 20.3604f, 12.4134f, 4.7037f, -4.7037f},
+    {TS_UPB, 30, BAKED_SHAPE|BAKED_BOTTOM, 4.8335f, 20.8578f, 12.8457f, 4.5893f, -4.5893f},
+    {TS_UPB, 31, BAKED_SHAPE|BAKED_BOTTOM, 4.9177f, 20.7514f, 12.8345f, 3.7503f, -3.7503f},
+    {TS_UPB, 32, BAKED_SHAPE|BAKED_BOTTOM, 5.2077f, 20.0487f, 12.6282f, 3.1405f, -3.1405f},
+    {TS_UPB, 33, BAKED_SHAPE|BAKED_BOTTOM, 5.9174f, 18.6492f, 12.2833f, 3.9376f, -3.9376f},
+    {TS_UPB, 34, BAKED_SHAPE|BAKED_BOTTOM, 6.6842f, 16.8173f, 11.7508f, 4.5602f, -4.5602f},
+    {TS_UPB, 35, BAKED_SHAPE|BAKED_BOTTOM, 7.1691f, 14.7178f, 10.9435f, 10.8109f, -2.0000f},
+    {TS_UPB, 36, BAKED_SHAPE|BAKED_BOTTOM, 7.2426f, 12.8845f, 10.0635f, 10.4583f, -2.0000f},
+    {TS_UPB, 37, BAKED_SHAPE|BAKED_BOTTOM, 7.6481f, 13.4430f, 10.5456f, 4.9802f, -4.9802f},
+    {TS_UPB, 38, BAKED_SHAPE|BAKED_BOTTOM, 8.4507f, 14.7134f, 11.5821f, 3.9806f, -3.9806f},
+    {TS_UPB, 39, BAKED_SHAPE|BAKED_BOTTOM, 8.6402f, 15.5272f, 12.0837f, 3.3716f, -3.3716f},
+    {TS_UPB, 40, BAKED_SHAPE|BAKED_BOTTOM, 9.2960f, 15.5592f, 12.4276f, 2.9335f, -2.9335f},
+    {TS_UPB, 41, BAKED_SHAPE|BAKED_BOTTOM, 10.9848f, 17.9472f, 14.4660f, 3.6769f, -3.6769f},
+    {TS_UPB, 42, BAKED_SHAPE|BAKED_BOTTOM, 13.0311f, 21.2544f, 17.1427f, 3.1017f, -3.1017f},
+    {TS_UPB, 43, BAKED_SHAPE|BAKED_BOTTOM, 12.4750f, 22.0293f, 17.2522f, 2.9029f, -2.9029f},
+    {TS_UPB, 44, BAKED_SHAPE|BAKED_BOTTOM, 12.4047f, 21.7174f, 17.0610f, 4.0376f, -4.0376f},
+    {TS_UPB, 45, BAKED_SHAPE|BAKED_BOTTOM, 12.8465f, 22.0650f, 17.4557f, 4.5948f, -4.5948f},
+    {TS_UPB, 46, BAKED_SHAPE|BAKED_BOTTOM, 13.5443f, 21.4167f, 17.4805f, 5.9173f, -5.0136f},
+    {TS_UPB, 47, BAKED_SHAPE|BAKED_BOTTOM, 14.3430f, 20.0716f, 17.2073f, 5.6589f, -5.9363f},
+    {TS_UPB, 48, BAKED_SHAPE|BAKED_BOTTOM, 13.1542f, 19.3151f, 16.2346f, 5.5669f, -6.1039f},
+    {TS_UPB, 49, BAKED_SHAPE|BAKED_BOTTOM, 11.5959f, 18.3337f, 14.9648f, 6.4005f, -5.3434f},
+    {TS_UPB, 50, BAKED_SHAPE|BAKED_BOTTOM, 9.9269f, 15.6031f, 12.7650f, 3.9335f, -3.9335f},
+    {TS_UPB, 51, BAKED_SHAPE|BAKED_BOTTOM, 7.7268f, 12.2857f, 10.0063f, 2.5684f, -2.5684f},
+    {TS_UPB, 52, BAKED_SHAPE|BAKED_BOTTOM, 6.4143f, 11.8865f, 9.1504f, 2.0181f, -2.0181f},
+    {TS_UPB, 53, BAKED_SHAPE|BAKED_BOTTOM, 6.5881f, 11.7692f, 9.1786f, 2.0000f, -2.0000f},
+    {TS_UPB, 54, BAKED_SHAPE|BAKED_BOTTOM, 7.8066f, 12.3797f, 10.0932f, 2.3789f, -2.3789f},
+    {TS_UPB, 55, BAKED_SHAPE|BAKED_BOTTOM, 9.4036f, 14.5532f, 11.9784f, 2.7759f, -2.7759f},
+    {TS_UPB, 56, BAKED_SHAPE|BAKED_BOTTOM, 11.8997f, 16.9006f, 14.4001f, 2.3293f, -2.3293f},
+    {TS_UPB, 57, BAKED_SHAPE|BAKED_BOTTOM, 11.6275f, 16.8228f, 14.2252f, 2.6130f, -2.6130f},
+    {TS_UPB, 58, BAKED_SHAPE|BAKED_BOTTOM, 10.7898f, 16.2599f, 13.5248f, 2.5098f, -2.5098f},
+    {TS_UPB, 59, BAKED_SHAPE|BAKED_BOTTOM, 9.7823f, 14.4689f, 12.1256f, 2.1326f, -2.1326f},
+    {TS_UPB, 60, BAKED_SHAPE|BAKED_BOTTOM, 8.7493f, 13.0281f, 10.8887f, 2.5772f, -2.5772f},
+    {TS_UPB, 61, BAKED_SHAPE|BAKED_BOTTOM, 7.6332f, 11.2262f, 9.4297f, 2.8173f, -2.8173f},
+    {TS_UPB, 62, BAKED_SHAPE|BAKED_BOTTOM, 4.9690f, 11.3863f, 8.1777f, 2.9519f, -2.9519f},
+    {TS_UPB, 63, BAKED_SHAPE|BAKED_BOTTOM, 3.1936f, 13.5086f, 8.3511f, 3.6430f, -3.6430f},
+    {TS_UPBA, 0, BAKED_SHAPE|BAKED_BOTTOM, 3.0555f, 11.0717f, 7.0636f, 4.6822f, -4.6822f},
+    {TS_UPBA, 1, BAKED_SHAPE|BAKED_BOTTOM, 4.4012f, 11.4629f, 7.9321f, 3.2647f, -3.2647f},
+    {TS_UPBA, 2, BAKED_SHAPE|BAKED_BOTTOM, 4.6451f, 11.5290f, 8.0871f, 3.2518f, -3.2518f},
+    {TS_UPBA, 3, BAKED_SHAPE|BAKED_BOTTOM, 4.3990f, 11.2975f, 7.8483f, 8.7902f, -4.0142f},
+    {TS_UPBA, 4, BAKED_SHAPE|BAKED_BOTTOM, 2.1716f, 10.5536f, 6.3626f, 9.2829f, -3.6621f},
+    {TS_UPBA, 5, BAKED_SHAPE|BAKED_BOTTOM, 2.0420f, 10.3964f, 6.2192f, 9.3124f, -3.5309f},
+    {TS_UPBA, 6, BAKED_SHAPE|BAKED_BOTTOM, 1.9571f, 10.2973f, 6.1272f, 9.3287f, -3.4281f},
+    {TS_UPBA, 7, BAKED_SHAPE|BAKED_BOTTOM, 1.9131f, 10.2545f, 6.0838f, 9.3343f, -3.3639f},
+    {TS_UPBA, 8, BAKED_SHAPE|BAKED_BOTTOM, 1.9061f, 10.2575f, 6.0818f, 9.3321f, -3.3420f},
+    {TS_UPBA, 9, BAKED_SHAPE|BAKED_BOTTOM, 1.9323f, 10.2951f, 6.1137f, 9.3226f, -3.3649f},
+    {TS_UPBA, 10, BAKED_SHAPE|BAKED_BOTTOM, 1.9878f, 10.3568f, 6.1723f, 9.3029f, -3.4308f},
+    {TS_UPBA, 11, BAKED_SHAPE|BAKED_BOTTOM, 2.0689f, 10.4399f, 6.2544f, 9.2723f, -3.5406f},
+    {TS_UPBA, 12, BAKED_SHAPE|BAKED_BOTTOM, 2.1716f, 10.5441f, 6.3578f, 9.2255f, -3.6938f},
+    {TS_UPBA, 13, BAKED_SHAPE, 0.0000f, 12.1894f, 6.9468f, 4.4818f, -4.4818f},
+    {TS_UPBA, 14, BAKED_SHAPE, 0.0000f, 13.1398f, 7.0260f, 2.7994f, -2.7994f},
+    {TS_UPBA, 15, BAKED_SHAPE, 0.0000f, 19.2367f, 10.5356f, 3.1050f, -3.1050f},
+    {TS_UPBA, 16, BAKED_SHAPE, 0.0000f, 19.4623f, 10.7529f, 3.1559f, -3.1559f},
+    {TS_UPBA, 17, BAKED_SHAPE|BAKED_BOTTOM, 2.0919f, 19.5165f, 10.8042f, 3.2133f, -3.2133f},
+    {TS_UPBA, 18, BAKED_SHAPE|BAKED_BOTTOM, 2.0345f, 19.4571f, 10.7458f, 3.2776f, -3.2776f},
+    {TS_UPBA, 19, BAKED_SHAPE|BAKED_BOTTOM, 1.9265f, 19.3417f, 10.6341f, 3.3464f, -3.3464f},
+    {TS_UPBA, 20, BAKED_SHAPE|BAKED_BOTTOM, 1.8233f, 19.2279f, 10.5256f, 3.4177f, -3.4177f},
+    {TS_UPBA, 21, BAKED_SHAPE|BAKED_BOTTOM, 1.7804f, 19.1734f, 10.4769f, 3.4913f, -3.4913f},
+    {TS_UPBA, 22, BAKED_SHAPE|BAKED_BOTTOM, 1.8533f, 19.2360f, 10.5447f, 3.5768f, -3.5768f},
+    {TS_UPBA, 23, BAKED_SHAPE|BAKED_BOTTOM, 2.0941f, 19.3039f, 10.6990f, 3.8592f, -3.8592f},
+    {TS_UPBA, 24, BAKED_SHAPE|BAKED_BOTTOM, 2.4376f, 19.2675f, 10.8525f, 4.1486f, -4.1486f},
+    {TS_UPBA, 25, BAKED_SHAPE|BAKED_BOTTOM, 2.8468f, 19.1572f, 11.0020f, 4.3865f, -4.3865f},
+    {TS_UPBA, 26, BAKED_SHAPE|BAKED_BOTTOM, 3.2853f, 18.6493f, 10.9673f, 4.6660f, -4.6660f},
+    {TS_UPBA, 27, BAKED_SHAPE|BAKED_BOTTOM, 3.7127f, 17.6754f, 10.6940f, 4.6156f, -4.6156f},
+    {TS_UPBA, 28, BAKED_SHAPE|BAKED_BOTTOM, 4.1113f, 19.2861f, 11.6987f, 4.5511f, -4.5511f},
+    {TS_UPBA, 29, BAKED_SHAPE|BAKED_BOTTOM, 4.4680f, 20.3624f, 12.4152f, 4.6993f, -4.6993f},
+    {TS_UPBA, 30, BAKED_SHAPE|BAKED_BOTTOM, 4.8230f, 20.8584f, 12.8407f, 4.5740f, -4.5740f},
+    {TS_UPBA, 31, BAKED_SHAPE|BAKED_BOTTOM, 4.9176f, 20.7506f, 12.8341f, 3.7549f, -3.7549f},
+    {TS_UPBA, 32, BAKED_SHAPE|BAKED_BOTTOM, 5.2076f, 20.0330f, 12.6203f, 3.1484f, -3.1484f},
+    {TS_UPBA, 33, BAKED_SHAPE|BAKED_BOTTOM, 5.9174f, 18.6256f, 12.2715f, 3.9448f, -3.9448f},
+    {TS_UPBA, 34, BAKED_SHAPE|BAKED_BOTTOM, 6.6841f, 16.7832f, 11.7337f, 4.5457f, -4.5457f},
+    {TS_UPBA, 35, BAKED_SHAPE|BAKED_BOTTOM, 7.1689f, 14.6674f, 10.9182f, 11.0110f, -2.0000f},
+    {TS_UPBA, 36, BAKED_SHAPE|BAKED_BOTTOM, 7.2424f, 12.8844f, 10.0634f, 10.6240f, -2.0000f},
+    {TS_UPBA, 37, BAKED_SHAPE|BAKED_BOTTOM, 7.6480f, 13.4429f, 10.5454f, 4.9755f, -4.9755f},
+    {TS_UPBA, 38, BAKED_SHAPE|BAKED_BOTTOM, 8.4476f, 14.7464f, 11.5970f, 3.9803f, -3.9803f},
+    {TS_UPBA, 39, BAKED_SHAPE|BAKED_BOTTOM, 8.5446f, 15.5572f, 12.0509f, 3.3604f, -3.3604f},
+    {TS_UPBA, 40, BAKED_SHAPE|BAKED_BOTTOM, 9.1296f, 15.5742f, 12.3519f, 2.9427f, -2.9427f},
+    {TS_UPBA, 41, BAKED_SHAPE|BAKED_BOTTOM, 11.2095f, 17.9689f, 14.5892f, 3.6853f, -3.6853f},
+    {TS_UPBA, 42, BAKED_SHAPE|BAKED_BOTTOM, 13.1787f, 21.2524f, 17.2156f, 3.1006f, -3.1006f},
+    {TS_UPBA, 43, BAKED_SHAPE|BAKED_BOTTOM, 12.4758f, 22.0323f, 17.2541f, 2.7566f, -2.7566f},
+    {TS_UPBA, 44, BAKED_SHAPE|BAKED_BOTTOM, 12.4295f, 21.8440f, 17.1367f, 3.8939f, -3.8939f},
+    {TS_UPBA, 45, BAKED_SHAPE|BAKED_BOTTOM, 12.8642f, 22.2277f, 17.5459f, 4.6004f, -4.6004f},
+    {TS_UPBA, 46, BAKED_SHAPE|BAKED_BOTTOM, 13.5591f, 21.6127f, 17.5859f, 6.0037f, -4.9484f},
+    {TS_UPBA, 47, BAKED_SHAPE|BAKED_BOTTOM, 14.3572f, 20.1898f, 17.2735f, 5.7370f, -5.8363f},
+    {TS_UPBA, 48, BAKED_SHAPE|BAKED_BOTTOM, 13.1611f, 18.9347f, 16.0479f, 5.6334f, -6.0442f},
+    {TS_UPBA, 49, BAKED_SHAPE|BAKED_BOTTOM, 11.5961f, 17.9518f, 14.7739f, 6.4880f, -5.3040f},
+    {TS_UPBA, 50, BAKED_SHAPE|BAKED_BOTTOM, 9.9264f, 15.5997f, 12.7631f, 3.9387f, -3.9387f},
+    {TS_UPBA, 51, BAKED_SHAPE|BAKED_BOTTOM, 7.7271f, 12.2858f, 10.0064f, 2.5843f, -2.5843f},
+    {TS_UPBA, 52, BAKED_SHAPE|BAKED_BOTTOM, 6.4143f, 11.8865f, 9.1504f, 2.0000f, -2.0000f},
+    {TS_UPBA, 53, BAKED_SHAPE|BAKED_BOTTOM, 6.5879f, 11.7691f, 9.1785f, 2.0000f, -2.0000f},
+    {TS_UPBA, 54, BAKED_SHAPE|BAKED_BOTTOM, 8.2609f, 12.4515f, 10.3562f, 2.3789f, -2.3789f},
+    {TS_UPBA, 55, BAKED_SHAPE|BAKED_BOTTOM, 9.8475f, 14.5531f, 12.2003f, 2.7759f, -2.7759f},
+    {TS_UPBA, 56, BAKED_SHAPE|BAKED_BOTTOM, 12.0901f, 16.9134f, 14.5018f, 2.3810f, -2.3810f},
+    {TS_UPBA, 57, BAKED_SHAPE|BAKED_BOTTOM, 11.6258f, 16.8103f, 14.2181f, 2.3955f, -2.3955f},
+    {TS_UPBA, 58, BAKED_SHAPE|BAKED_BOTTOM, 10.7667f, 16.2046f, 13.4856f, 2.3052f, -2.3052f},
+    {TS_UPBA, 59, BAKED_SHAPE|BAKED_BOTTOM, 9.7304f, 13.9406f, 11.8355f, 2.1955f, -2.1955f},
+    {TS_UPBA, 60, BAKED_SHAPE|BAKED_BOTTOM, 8.7297f, 12.3754f, 10.5526f, 2.6375f, -2.6375f},
+    {TS_UPBA, 61, BAKED_SHAPE|BAKED_BOTTOM, 7.3496f, 10.6797f, 9.0147f, 2.8061f, -2.8061f},
+    {TS_UPBA, 62, BAKED_SHAPE|BAKED_BOTTOM, 4.8378f, 11.4973f, 8.1675f, 2.8991f, -2.8991f},
+    {TS_UPBA, 63, BAKED_SHAPE|BAKED_BOTTOM, 3.1949f, 13.3378f, 8.2664f, 3.6351f, -3.6351f},
+    {TS_FALLSPECIAL, 0, BAKED_SHAPE|BAKED_BOTTOM, 2.3062f, 14.6213f, 8.4638f, 3.8894f, -3.8894f},
+    {TS_FALLSPECIAL, 1, BAKED_SHAPE|BAKED_BOTTOM, 2.3489f, 14.4178f, 8.3834f, 4.0366f, -4.0366f},
+    {TS_FALLSPECIAL, 2, BAKED_SHAPE|BAKED_BOTTOM, 2.5954f, 14.4364f, 8.5159f, 4.3550f, -4.3550f},
+    {TS_FALLSPECIAL, 3, BAKED_SHAPE|BAKED_BOTTOM, 2.8486f, 14.4099f, 8.6293f, 4.6503f, -4.6503f},
+    {TS_FALLSPECIAL, 4, BAKED_SHAPE|BAKED_BOTTOM, 2.9127f, 14.3312f, 8.6220f, 4.8356f, -4.8356f},
+    {TS_FALLSPECIAL, 5, BAKED_SHAPE|BAKED_BOTTOM, 2.9072f, 14.4049f, 8.6561f, 4.5973f, -4.5973f},
+    {TS_FALLSPECIAL, 6, BAKED_SHAPE|BAKED_BOTTOM, 2.6730f, 14.3948f, 8.5339f, 4.2984f, -4.2984f},
+    {TS_FALLSPECIAL, 7, BAKED_SHAPE|BAKED_BOTTOM, 2.4065f, 14.4815f, 8.4440f, 4.0367f, -4.0367f},
 };
 
 static void Learned_Bake(void)
@@ -797,10 +924,12 @@ static void Learned_Bake(void)
     }
 
     // how long each runs before ending by itself, from captures run to the
-    // end (2026-10-03); aerials end in Fall, double jumps in FallAerial, the
-    // airdodge in FallSpecial
+    // end (2026-10-03, 2026-10-05); aerials end in Fall, double jumps in
+    // FallAerial, the airdodge and Falcon Dive in FallSpecial
     static const s8 baked_len[][2] = {
         {TS_ESCAPEAIR, 49},
+        {TS_UPB, 64},
+        {TS_UPBA, 64},
         {TS_JUMPF, 35},
         {TS_JUMPB, 50},
         {TS_JUMPAERIALF, 50},
@@ -817,6 +946,7 @@ static void Learned_Bake(void)
         state_len[ts] = baked_len[i][1];
         state_next[ts] = Tracked_NaturalNext(ts);
     }
+    Upb_Bake();
 }
 
 static float Aerial_LandingLag(FighterData *fp, int ts)
@@ -936,6 +1066,153 @@ static void Upb_Record(FighterData *fp, int ts, int frame)
     int k = ts - TS_UPB;
     if (a->can_land && (upb_turn[k] < 0 || frame < upb_turn[k]))
         upb_turn[k] = frame;
+}
+
+// Its animation's movement on every frame in the air, from the same
+// capture as its ECB. The IASA comes on frame 12 for both, which for the
+// one from the ground is still on the ground.
+#define UPB_IASA_FRAME 12
+#define UPB_LIFTOFF_FRAME 13 // ftCommon_8007D60C: in the air, out of jumps,
+#define UPB_LIFTOFF_LOCK 5   // and the ECB bottom kept for 5 frames
+
+typedef struct BakedUpb
+{
+    s8 ts;
+    u8 frame;
+    u8 can_land;
+    float x, y;
+} BakedUpb;
+
+static const BakedUpb baked_upb[] = {
+    {TS_UPB, 13, 1, 0.24060f, 5.08534f},
+    {TS_UPB, 14, 1, 0.24060f, 4.69613f},
+    {TS_UPB, 15, 1, 0.24060f, 4.32428f},
+    {TS_UPB, 16, 1, 0.24060f, 3.96980f},
+    {TS_UPB, 17, 1, 0.24060f, 3.63268f},
+    {TS_UPB, 18, 1, 0.24060f, 3.31294f},
+    {TS_UPB, 19, 1, 0.24060f, 3.01056f},
+    {TS_UPB, 20, 1, 0.24060f, 2.72555f},
+    {TS_UPB, 21, 1, 0.24060f, 2.45791f},
+    {TS_UPB, 22, 1, 0.24060f, 2.20763f},
+    {TS_UPB, 23, 1, 0.24060f, 1.97473f},
+    {TS_UPB, 24, 1, 0.24060f, 1.75920f},
+    {TS_UPB, 25, 1, 0.24060f, 1.56103f},
+    {TS_UPB, 26, 1, 0.24060f, 1.38022f},
+    {TS_UPB, 27, 1, 0.24060f, 1.21680f},
+    {TS_UPB, 28, 1, 0.24060f, 1.07074f},
+    {TS_UPB, 29, 1, 0.24060f, 0.94204f},
+    {TS_UPB, 30, 1, 0.24060f, 0.83073f},
+    {TS_UPB, 31, 1, 0.24060f, 0.73674f},
+    {TS_UPB, 32, 1, 0.24060f, 0.66018f},
+    {TS_UPB, 33, 1, 0.24060f, 0.60094f},
+    {TS_UPB, 34, 1, 0.24060f, 0.46750f},
+    {TS_UPB, 35, 1, 0.24060f, 0.25555f},
+    {TS_UPB, 36, 1, 0.24060f, 0.05447f},
+    {TS_UPB, 37, 1, 0.24060f, -0.13570f},
+    {TS_UPB, 38, 1, 0.24060f, -0.31498f},
+    {TS_UPB, 39, 1, 0.24060f, -0.48337f},
+    {TS_UPB, 40, 1, 0.24060f, -0.64086f},
+    {TS_UPB, 41, 1, 0.24060f, -0.78747f},
+    {TS_UPB, 42, 1, 0.24060f, -0.92316f},
+    {TS_UPB, 43, 1, 0.24060f, -1.04797f},
+    {TS_UPB, 44, 1, 0.24060f, -1.16189f},
+    {TS_UPB, 45, 1, 0.24060f, -1.26490f},
+    {TS_UPB, 46, 1, 0.24060f, -1.35703f},
+    {TS_UPB, 47, 1, 0.24060f, -1.43826f},
+    {TS_UPB, 48, 1, 0.24060f, -1.50860f},
+    {TS_UPB, 49, 1, 0.24060f, -1.56804f},
+    {TS_UPB, 50, 1, 0.24060f, -1.61658f},
+    {TS_UPB, 51, 1, 0.24060f, -1.65424f},
+    {TS_UPB, 52, 1, 0.24060f, -1.68100f},
+    {TS_UPB, 53, 1, 0.24060f, -1.69686f},
+    {TS_UPB, 54, 1, 0.24060f, -1.70183f},
+    {TS_UPB, 55, 1, 0.24060f, -1.69590f},
+    {TS_UPB, 56, 1, 0.24060f, -1.67908f},
+    {TS_UPB, 57, 1, 0.24060f, -1.65137f},
+    {TS_UPB, 58, 1, 0.24060f, -1.61276f},
+    {TS_UPB, 59, 1, 0.24060f, -1.56326f},
+    {TS_UPB, 60, 1, 0.24060f, -1.50285f},
+    {TS_UPB, 61, 1, 0.24060f, -1.43156f},
+    {TS_UPB, 62, 1, 0.24060f, -1.34938f},
+    {TS_UPB, 63, 1, 0.24060f, -1.25629f},
+    {TS_UPBA, 0, 0, 0.00000f, 0.00000f},
+    {TS_UPBA, 1, 0, 0.00000f, 0.00000f},
+    {TS_UPBA, 2, 0, 0.00000f, 0.00000f},
+    {TS_UPBA, 3, 0, 0.00000f, 0.00000f},
+    {TS_UPBA, 4, 0, 0.00000f, 0.00000f},
+    {TS_UPBA, 5, 0, -0.00191f, -0.00078f},
+    {TS_UPBA, 6, 0, -0.00464f, -0.00189f},
+    {TS_UPBA, 7, 0, -0.00573f, -0.00233f},
+    {TS_UPBA, 8, 0, -0.00518f, -0.00211f},
+    {TS_UPBA, 9, 0, -0.00300f, -0.00122f},
+    {TS_UPBA, 10, 0, 0.00082f, 0.00033f},
+    {TS_UPBA, 11, 0, 0.00628f, 0.00255f},
+    {TS_UPBA, 12, 1, 0.01337f, 0.00544f},
+    {TS_UPBA, 13, 1, 0.34782f, 2.55553f},
+    {TS_UPBA, 14, 1, 0.35129f, 2.45635f},
+    {TS_UPBA, 15, 1, 0.35466f, 2.35818f},
+    {TS_UPBA, 16, 1, 0.35790f, 2.26101f},
+    {TS_UPBA, 17, 1, 0.36104f, 2.16485f},
+    {TS_UPBA, 18, 1, 0.36407f, 2.06970f},
+    {TS_UPBA, 19, 1, 0.36698f, 1.97556f},
+    {TS_UPBA, 20, 1, 0.36979f, 1.88242f},
+    {TS_UPBA, 21, 1, 0.37248f, 1.79029f},
+    {TS_UPBA, 22, 1, 0.37506f, 1.69916f},
+    {TS_UPBA, 23, 1, 0.37753f, 1.60904f},
+    {TS_UPBA, 24, 1, 0.37989f, 1.51993f},
+    {TS_UPBA, 25, 1, 0.38213f, 1.43183f},
+    {TS_UPBA, 26, 1, 0.38427f, 1.34473f},
+    {TS_UPBA, 27, 1, 0.38629f, 1.25863f},
+    {TS_UPBA, 28, 1, 0.38820f, 1.17355f},
+    {TS_UPBA, 29, 1, 0.39000f, 1.08947f},
+    {TS_UPBA, 30, 1, 0.39169f, 1.00640f},
+    {TS_UPBA, 31, 1, 0.39326f, 0.92434f},
+    {TS_UPBA, 32, 1, 0.39473f, 0.84328f},
+    {TS_UPBA, 33, 1, 0.39608f, 0.76322f},
+    {TS_UPBA, 34, 1, 0.39732f, 0.68419f},
+    {TS_UPBA, 35, 1, 0.39845f, 0.60614f},
+    {TS_UPBA, 36, 1, 0.39947f, 0.52912f},
+    {TS_UPBA, 37, 1, 0.40038f, 0.45309f},
+    {TS_UPBA, 38, 1, 0.40117f, 0.37807f},
+    {TS_UPBA, 39, 1, 0.40186f, 0.30406f},
+    {TS_UPBA, 40, 1, 0.40243f, 0.23106f},
+    {TS_UPBA, 41, 1, 0.40290f, 0.15906f},
+    {TS_UPBA, 42, 1, 0.40324f, 0.08807f},
+    {TS_UPBA, 43, 1, 0.40349f, 0.01808f},
+    {TS_UPBA, 44, 1, 0.40361f, -0.05088f},
+    {TS_UPBA, 45, 1, 0.40362f, -0.11886f},
+    {TS_UPBA, 46, 1, 0.40353f, -0.27163f},
+    {TS_UPBA, 47, 1, 0.40332f, -0.49663f},
+    {TS_UPBA, 48, 1, 0.40300f, -0.70176f},
+    {TS_UPBA, 49, 1, 0.40257f, -0.88704f},
+    {TS_UPBA, 50, 1, 0.40203f, -1.05243f},
+    {TS_UPBA, 51, 1, 0.40137f, -1.19797f},
+    {TS_UPBA, 52, 1, 0.40061f, -1.32366f},
+    {TS_UPBA, 53, 1, 0.39973f, -1.42945f},
+    {TS_UPBA, 54, 1, 0.39874f, -1.51540f},
+    {TS_UPBA, 55, 1, 0.39764f, -1.58148f},
+    {TS_UPBA, 56, 1, 0.39643f, -1.62769f},
+    {TS_UPBA, 57, 1, 0.39511f, -1.65403f},
+    {TS_UPBA, 58, 1, 0.39367f, -1.66051f},
+    {TS_UPBA, 59, 1, 0.39212f, -1.64713f},
+    {TS_UPBA, 60, 1, 0.39047f, -1.61388f},
+    {TS_UPBA, 61, 1, 0.38869f, -1.56076f},
+    {TS_UPBA, 62, 1, 0.38682f, -1.48778f},
+    {TS_UPBA, 63, 1, 0.38482f, -1.39494f},
+};
+
+static void Upb_Bake(void)
+{
+    for (int i = 0; i < (int)countof(baked_upb); i++)
+    {
+        const BakedUpb *b = &baked_upb[i];
+        UpbFrame *a = Upb_Get(b->ts, b->frame);
+        a->x = b->x;
+        a->y = b->y;
+        a->can_land = b->can_land;
+        a->seen = 1;
+    }
+    upb_turn[0] = upb_turn[1] = UPB_IASA_FRAME;
 }
 
 ///////////////////////
@@ -2795,6 +3072,12 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     if (Tracked_IsUpB(s->ts) && s->frame == upb_turn[s->ts - TS_UPB] &&
         fabs(start->stick_x) > Captain_Attr(fp, CA_UPB_TURN_STICK))
         s->face = start->stick_x >= 0 ? 1.f : -1.f;
+    // ... and lifts off, keeping the ECB bottom it had
+    if (Tracked_IsUpB(s->ts) && s->frame == UPB_LIFTOFF_FRAME)
+    {
+        s->lock = UPB_LIFTOFF_LOCK;
+        s->locked_bottom = s->bottom;
+    }
 
     // input: the stick is held, so its timers keep counting
     if (s->tilt_timer < LL_TIMER_MAX)
@@ -8281,7 +8564,6 @@ static int Script_WindowStart(ScriptOp *op, FighterData *fp, int *width)
         return -1;
 
     int wl = op->kind == SOP_WL;
-    u8 *mask = wl ? p->wl_mask : p->ai_mask;
     int last = p->land_frame ? p->land_frame - !wl : p->num;
     int bit;
     if (wl)
@@ -8294,12 +8576,15 @@ static int Script_WindowStart(ScriptOp *op, FighterData *fp, int *width)
     if (!bit)
         bit = 0xFF;
 
+    // the windows the cues show: for a waveland, a late one when that's all
+    // there is
     for (int k = 1; k <= last && k < p->uncertain_from; k++)
     {
-        if (mask[k] & bit)
+        if ((wl ? WL_Mask(p, k) : p->ai_mask[k]) & bit)
         {
             *width = 0;
-            while (k + *width <= last && k + *width < p->uncertain_from && (mask[k + *width] & bit))
+            while (k + *width <= last && k + *width < p->uncertain_from &&
+                   ((wl ? WL_Mask(p, k + *width) : p->ai_mask[k + *width]) & bit))
                 (*width)++;
             return live_timer + k;
         }

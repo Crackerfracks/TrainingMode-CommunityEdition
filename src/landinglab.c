@@ -2216,6 +2216,7 @@ typedef struct SimStart
     float lean;          // a fall's blend toward its leaning pose (mv.co.fall.x4)
     Vec2 drift;          // Falcon Dive's own drift speed (mv.ca.specialhi.vel)
     float special_lag;   // the helpless fall's landing lag (mv.co.fallspecial.landing_lag)
+    int dodge_late;      // an airdodge's first frame, pressed in a late window
 } SimStart;
 
 // The simulated fighter between two frames.
@@ -2243,6 +2244,7 @@ typedef struct SimState
     float face;          // facing: Falcon Dive can turn him around
     Vec2 drift;          // Falcon Dive's drift speed
     float special_lag;   // landing lag once helpless
+    int dodge_late;      // landing on the airdodge's second frame is perfect too
 } SimState;
 
 // What happened on one simulated frame.
@@ -2939,6 +2941,7 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->lean = Lean_FromFighter(fp, ts);
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
+    s->dodge_late = 0;
     if (Tracked_IsUpB(ts))
         s->drift = Upb_Drift(fp);
     else if (ts == TS_FALLSPECIAL)
@@ -2978,6 +2981,7 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->face = start->facing;
     s->drift = start->drift;
     s->special_lag = start->special_lag;
+    s->dodge_late = start->dodge_late;
 }
 
 // One frame, in the game's order: animation (the state can end), interrupt
@@ -3215,8 +3219,11 @@ static int Landing_Kind(FighterData *fp, SimState *s, EcbSample *e, int first_ec
 
     if (s->ts == TS_ESCAPEAIR)
     {
+        // pressed in a late window, landing a frame later counts (as the
+        // judge does)
+        int now = first_ecb || (s->dodge_late && s->frame == 1);
         *lag = (int)common_waveland_lag;
-        return first_ecb && (s->dodge_flat || s->dodge_low) ? LAND_PERFECT_WL : LAND_WAVELAND;
+        return now && (s->dodge_flat || s->dodge_low) ? LAND_PERFECT_WL : LAND_WAVELAND;
     }
 
     if (!Tracked_IsAerial(s->ts))
@@ -3610,6 +3617,7 @@ static int Sim_GroundJump(FighterData *fp, int short_hop, SimStart *s)
     s->lean = 0;
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
+    s->dodge_late = 0;
     return until;
 }
 
@@ -3664,6 +3672,7 @@ static void Sim_ToStart(SimState *s, SimStart *start, SimStart *out)
     out->facing = s->face;
     out->drift = s->drift;
     out->special_lag = s->special_lag;
+    out->dodge_late = 0;
 }
 
 ///////////////////////
@@ -10748,6 +10757,7 @@ static void Event_ThinkFrame(GOBJ *event)
         Floor_BuildCache();
         SimStart start;
         Sim_FromFighter(fp, ts, frame_in_state, &start);
+        start.dodge_late = ts == TS_ESCAPEAIR && frame_in_state == 0 && dodge_late_ok;
         Predict(fp, &start, pred_live, BR_ALL);
         live_timer = event_vars->game_timer;
         Text_Prediction(pred_live);

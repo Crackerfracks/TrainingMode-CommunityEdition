@@ -3662,6 +3662,7 @@ static char text_predict[32] = "-";
 static char text_ai[32] = "-";
 static char text_last[48] = "-";
 static char text_next[64] = "-"; // the panel's first line: what's coming up
+static char text_steps[48];       // ... and a ledge route's inputs under it
 static int next_kind = -1;       // the cue (CUE_*) whose color the panel's lines start with, -1 none
 static int last_kind = -1;
 static char text_exact[32] = "-";
@@ -5243,7 +5244,7 @@ static void Hud_Text(const char *text, float x, float y, float size, GXColor col
 // A rough width for a dark plate behind a line of text.
 static float Text_Width(const char *text, float size)
 {
-    return strlen(text) * size * 1.02f;
+    return strlen(text) * size * 1.4f; // measured in game: about 6.5 px a glyph at 0.45
 }
 
 ///////////////////////
@@ -5719,8 +5720,13 @@ static void Meter_Above(FighterData *fp)
             len = meter[i].len;
     if (len > 31)
         len = 31;
-    float w = len * pitch, h = meter_rows * (MT_CH + MT_GAP) + 1.5f;
+    // the gate stays over Falcon: near the screen's right edge the far
+    // frames are cut before the gate moves off him
     float gx = anchor_x - (MT_CW + (wide ? MT_WIDE : 0)) / 2;
+    int fit = (int)((SAFE_W - gx) / pitch);
+    if (len > fit)
+        len = fit < 12 ? 12 : fit;
+    float w = len * pitch, h = meter_rows * (MT_CH + MT_GAP) + 1.5f;
     if (gx > SAFE_W - w)
         gx = SAFE_W - w;
     if (gx < -SAFE_W)
@@ -5730,7 +5736,7 @@ static void Meter_Above(FighterData *fp)
         base = SAFE_H - h;
     if (base < -SAFE_H)
         base = -SAFE_H;
-    Meter_Draw(gx, base, 1.f, 31, 0);
+    Meter_Draw(gx, base, 1.f, len, 0);
 }
 
 // The fixed strip: bottom left, or bottom right when the stick display is
@@ -6104,7 +6110,7 @@ static void Panel_Line(float x, float y, int right, const char *text, int kind)
     float w = 1.7f + Text_Width(text, size);
     float x0 = right ? x - w : x;
     Hud_Rect(x0, y + 0.15f, x0 + w, y + 2.35f, Color_Fill(color_plate, 0.6f));
-    GXColor sq = kind >= 0 ? Cue_Color(kind) : Color_Fill(color_white, 0.3f);
+    GXColor sq = kind >= 0 ? Cue_Color(kind) : Color_Fill(color_white, kind == -2 ? 0 : 0.3f); // -2: no square
     GXColor tc = {235, 235, 235, 255};
     if (right)
     {
@@ -6126,6 +6132,11 @@ static void Panel_Draw(void)
     float x = right ? SAFE_W : -SAFE_W;
     float y = SAFE_H - 3.0f;
     Panel_Line(x, y, right, text_next, next_kind);
+    if (text_steps[0])
+    {
+        y -= 2.4f;
+        Panel_Line(x, y, right, text_steps, -2);
+    }
     Panel_Line(x, y - 2.4f, right, text_last, last_kind);
     if (Options_Dev[DOPT_EXACT].val)
         Panel_Line(x, y - 4.8f, right, text_exact, -1);
@@ -7322,7 +7333,7 @@ static int drill_side = 1;   // facing on the ledge to start from
 
 static int assist_wait; // real frames Assist has waited
 
-static void Route_Text(LedgeRoute *r, int galint, char *out);
+static void Route_Text(LedgeRoute *r, int galint);
 static void Drill_Finish(int success);
 
 static int Routes_On(void)
@@ -7859,19 +7870,24 @@ static void Draw_RoutePath(void)
         Draw_Ticks(route_path, route_path_bottom, 0, route_path_num - 1, c, 12);
 }
 
-static void Route_Text(LedgeRoute *r, int galint, char *out)
+// The panel's lines for a route: its kind and GALINT, like "NIL  11
+// GALINT", and its inputs under it, like "away, wait 1, FF 2, DJ in".
+static void Route_Text(LedgeRoute *r, int galint)
 {
-    char *t = out;
-    t += sprintf(t, "%s  drop %s", r->kind == LAND_AI ? "AI" : "NIL", r->drop == DROP_AWAY ? "away" : "down");
+    char *t = text_next;
+    t += sprintf(t, "%s", r->kind == LAND_AI ? "AI " : "NIL");
+    if (r->kind == LAND_AI)
+        t += sprintf(t, "%s", tracked_state_names[r->aerial]);
+    if (galint > 0)
+        sprintf(t, "  %d GALINT", galint);
+
+    t = text_steps;
+    t += sprintf(t, "%s", r->drop == DROP_AWAY ? "away" : "down");
     if (r->wait > 0)
         t += sprintf(t, ", wait %d", r->wait);
     if (r->ff > 0)
         t += sprintf(t, ", FF %d", r->ff);
-    t += sprintf(t, ", DJ in, %s", r->hold ? "hold" : "let go");
-    if (r->kind == LAND_AI)
-        t += sprintf(t, ", %s", tracked_state_names[r->aerial]);
-    if (galint >= 0)
-        sprintf(t, "  %d GALINT", galint);
+    sprintf(t, ", DJ in%s", r->hold ? ", hold" : "");
 }
 
 // A step of the route went wrong: say which and by how much, and drop it.
@@ -7951,19 +7967,19 @@ static void Ledge_Think(FighterData *fp, int sid)
             if (route_show_num > 0 && Routes_On())
             {
                 Route_Path(fp, hang_ledge, &route_show[0]);
-                Route_Text(&route_show[0], Route_Galint(&route_show[0], -1, intang), text_next);
+                Route_Text(&route_show[0], Route_Galint(&route_show[0], -1, intang));
                 next_kind = route_show[0].kind == LAND_AI ? CUE_AI : CUE_NIL;
             }
             else if (Routes_On())
             {
                 int kind = Options_Ledge[LOPT_KIND].val;
-                sprintf(text_next, "No %s route keeps GALINT here", kind == ROUTES_BOTH ? "NIL or AI" : route_kind_names[kind]);
+                sprintf(text_next, "No %s route with GALINT", kind == ROUTES_BOTH ? "NIL or AI" : route_kind_names[kind]);
                 next_kind = -1;
             }
         }
         else if (Routes_On())
         {
-            sprintf(text_next, "Finding routes from this ledge...");
+            sprintf(text_next, "Finding ledge routes...");
             next_kind = -1;
         }
     }
@@ -8028,7 +8044,7 @@ static void Ledge_Think(FighterData *fp, int sid)
             route_active = 0; // hit, or back on a ledge: no longer the route
             return;
         }
-        Route_Text(r, route_galint >= 0 ? route_galint : Route_Galint(r, e, intang), text_next);
+        Route_Text(r, route_galint >= 0 ? route_galint : Route_Galint(r, e, intang));
         next_kind = r->kind == LAND_AI ? CUE_AI : CUE_NIL;
 
         if (route_landed < 0)
@@ -8929,6 +8945,7 @@ static void Event_ThinkFrame(GOBJ *event)
 
     galint_now = sid == ASID_CLIFFWAIT ? 0 : fp->hurt.intang_frames.ledge;
     sprintf(text_next, "-");
+    text_steps[0] = 0;
     next_kind = -1;
 
     Cues_Begin();

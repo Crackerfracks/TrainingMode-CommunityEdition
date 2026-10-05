@@ -5213,10 +5213,11 @@ static void Hud_Diamond(float x, float y, float r, GXColor c)
     Quad_Add(x, y - r, x + r, y, x, y + r, x - r, y, c);
 }
 
-// Left-aligned text with its line's bottom at y, as the info panels use it
-// (rows 2.5 units tall). The HUD's texts are made with the alignment of
-// their first use, so it's set again on every call.
-static void Hud_Text(const char *text, float x, float y, float size, GXColor color)
+// Text with its line's bottom at y, as the info panels use it (rows 2.5
+// units tall), starting at x (align 0) or ending there (align 2). The HUD's
+// texts are made with the alignment of their first use, so it's set again
+// on every call.
+static void Hud_TextAligned(const char *text, float x, float y, float size, GXColor color, int align)
 {
     if (!event_vars->HUD_DrawTextEx)
         return; // a TM-CE menu from before it was set
@@ -5225,7 +5226,12 @@ static void Hud_Text(const char *text, float x, float y, float size, GXColor col
     Rect r = {x, y, 0, 2.5f};
     event_vars->HUD_DrawTextEx(text, &r, size, color, (GXColor){0, 0, 0, 0}, 0, 0);
     if (slot < (int)countof(hud->text_cache) && hud->text_cache[slot])
-        hud->text_cache[slot]->align = 0;
+        hud->text_cache[slot]->align = align;
+}
+
+static void Hud_Text(const char *text, float x, float y, float size, GXColor color)
+{
+    Hud_TextAligned(text, x, y, size, color, 0);
 }
 
 // A rough width for a dark plate behind a line of text.
@@ -6081,8 +6087,9 @@ static void Stick_Draw(FighterData *fp)
 ///////////////////////
 
 // Two lines in a top corner: what's coming up, and how the last attempt
-// went (a third, the accuracy count, in Developer). Each starts with a
-// square in its cue's color.
+// went (a third, the accuracy count, in Developer). Each has a square in
+// its cue's color at the screen's edge, and its text runs from there toward
+// the middle, so a long line can't run off the screen.
 
 static void Panel_Line(float x, float y, int right, const char *text, int kind)
 {
@@ -6091,8 +6098,17 @@ static void Panel_Line(float x, float y, int right, const char *text, int kind)
     float x0 = right ? x - w : x;
     Hud_Rect(x0, y + 0.15f, x0 + w, y + 2.35f, Color_Fill(color_plate, 0.6f));
     GXColor sq = kind >= 0 ? Cue_Color(kind) : Color_Fill(color_white, 0.3f);
-    Hud_Rect(x0 + 0.35f, y + 0.8f, x0 + 1.05f, y + 1.5f, sq);
-    Hud_Text(text, x0 + 1.4f, y, size, (GXColor){235, 235, 235, 255});
+    GXColor tc = {235, 235, 235, 255};
+    if (right)
+    {
+        Hud_Rect(x - 1.05f, y + 0.8f, x - 0.35f, y + 1.5f, sq);
+        Hud_TextAligned(text, x - 1.4f, y, size, tc, 2);
+    }
+    else
+    {
+        Hud_Rect(x + 0.35f, y + 0.8f, x + 1.05f, y + 1.5f, sq);
+        Hud_TextAligned(text, x + 1.4f, y, size, tc, 0);
+    }
 }
 
 static void Panel_Draw(void)

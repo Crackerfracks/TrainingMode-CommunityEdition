@@ -2761,6 +2761,7 @@ static int Landing_Kind(FighterData *fp, SimState *s, EcbSample *e, int first_ec
 // when the lock runs out, and only that first use counts. Returns the
 // frames from k to that touchdown, or -1 for none.
 static int branch_platform; // where Branch_Press landed: a platform
+static int branch_first;    // ... with its own ECB's first use (not late)
 
 // late: frames its own ECB may already be in use and still count (the
 // late waveland window).
@@ -2791,6 +2792,7 @@ static int Branch_Press(FighterData *fp, SimStart *start, SimState *before, int 
                 return -1;
             *lag = step.ecb->aerial_lag;
             branch_platform = step.platform;
+            branch_first = step.first_ecb;
             return n;
         }
         if (!b.ecb_pending && ++used > late)
@@ -2844,10 +2846,10 @@ static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, P
         u8 bit = d == 0 ? DODGE_RIGHT : DODGE_LEFT;
         float dx = d == 0 ? WL_LOW_COS : -WL_LOW_COS;
         int unlearned = 0, lag = 0;
-        int n = Branch_Press(fp, start, before, TS_ESCAPEAIR, dx, 0, &unlearned, &lag);
-        if (n >= 0)
+        int n = Branch_Press(fp, start, before, TS_ESCAPEAIR, dx, 1, &unlearned, &lag);
+        if (n >= 0 && branch_first)
             p->wl_mask[k] |= bit;
-        else if ((n = Branch_Press(fp, start, before, TS_ESCAPEAIR, dx, 1, &unlearned, &lag)) >= 0)
+        else if (n >= 0)
             p->wl_late_mask[k] |= bit;
         if (n >= 0 && !branch_platform)
             p->wl_ground[k] |= bit;

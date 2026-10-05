@@ -3173,7 +3173,7 @@ static const char *tick_names[] = {"Frame Advance", "Always", "Off"};
 static const char *ai_filter_names[] = {"Useful", "All"};
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
 static const char *timer_names[] = {"Above Falcon", "Fixed Strip", "Both", "Off"};
-static const char *stick_names[] = {"Bottom", "Bottom Left", "Bottom Right", "Off"};
+static const char *stick_names[] = {"By Percent", "Bottom Left", "Bottom Right", "Off"};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
 static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
 static const char *route_kind_names[] = {"NIL", "AI", "Both"};
@@ -3199,7 +3199,7 @@ enum timer_kind
 
 enum stick_place
 {
-    STICK_BOTTOM,
+    STICK_PERCENT,
     STICK_LEFT,
     STICK_RIGHT,
     STICK_OFF,
@@ -3581,6 +3581,7 @@ enum options_hud
     HOPT_WIDE,
     HOPT_SPOT,
     HOPT_STICK,
+    HOPT_BUTTONS,
     HOPT_PANEL,
     HOPT_PANEL_SIDE,
 
@@ -3614,12 +3615,21 @@ static EventOption Options_Hud[HOPT_COUNT] = {
     },
     {
         .kind = OPTKIND_STRING,
-        .name = "Stick Display",
+        .name = "Controller",
         .value_num = countof(stick_names),
         .values = stick_names,
-        .desc = {"Show the control stick at the bottom of the",
-                 "screen, with its last few frames as a trail and",
-                 "a line where down starts a fastfall."},
+        .desc = {"Your real stick, the band where Melee reads an",
+                 "axis as zero, a trail of the last frames, and the",
+                 "fastfall line (lit when a flick would fastfall).",
+                 "By Percent puts it beside your percent display."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Buttons and Triggers",
+        .val = 1,
+        .desc = {"Show the buttons, triggers and C-stick too.",
+                 "Colors match the input markers: yellow jump,",
+                 "pink aerial, cyan airdodge."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -3786,8 +3796,8 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_MENU,
         .name = "HUD",
         .menu = &Menu_Hud,
-        .desc = {"The timer, spot timers, stick display and the",
-                 "info panel."},
+        .desc = {"The timer, spot timers, controller display",
+                 "and the info panel."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -5488,7 +5498,7 @@ static int Hud_FromWorld(float x, float y, float *hx, float *hy)
 }
 
 // Shapes are queued as quads and drawn in one go, in the order queued.
-#define LL_QUADS 900
+#define LL_QUADS 1600
 typedef struct Quad
 {
     Vec2 v[4];
@@ -5555,6 +5565,37 @@ static void Hud_Tri(float ax, float ay, float bx, float by, float cx, float cy, 
 static void Hud_Diamond(float x, float y, float r, GXColor c)
 {
     Quad_Add(x, y - r, x + r, y, x, y + r, x - r, y, c);
+}
+
+#define DISC_SEGS 16
+
+// A filled circle: a fan of triangles.
+static void Hud_Disc(float cx, float cy, float r, GXColor c)
+{
+    float px = cx + r, py = cy;
+    for (int i = 1; i <= DISC_SEGS; i++)
+    {
+        float ang = i * (6.2831853f / DISC_SEGS);
+        float nx = cx + cos(ang) * r, ny = cy + sin(ang) * r;
+        Hud_Tri(cx, cy, px, py, nx, ny, c);
+        px = nx;
+        py = ny;
+    }
+}
+
+// A circle's outline, w wide and centered on radius r.
+static void Hud_Ring(float cx, float cy, float r, float w, GXColor c)
+{
+    float r0 = r - w / 2, r1 = r + w / 2;
+    float px = 1.f, py = 0.f;
+    for (int i = 1; i <= DISC_SEGS; i++)
+    {
+        float ang = i * (6.2831853f / DISC_SEGS);
+        float nx = cos(ang), ny = sin(ang);
+        Quad_Add(cx + px * r0, cy + py * r0, cx + px * r1, cy + py * r1, cx + nx * r1, cy + ny * r1, cx + nx * r0, cy + ny * r0, c);
+        px = nx;
+        py = ny;
+    }
 }
 
 // Text with its line's bottom at y, as the info panels use it (rows 2.5
@@ -6081,11 +6122,15 @@ static void Meter_Above(FighterData *fp)
     Meter_Draw(gx, base, 1.f, len, 0);
 }
 
-// The fixed strip: bottom left, or bottom right when the stick display is
-// in the bottom left corner.
-static void Meter_Fixed(void)
+static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1); // with the controller display
+
+// The fixed strip: bottom left, or bottom right when the controller display
+// is on the left half of the screen.
+static void Meter_Fixed(FighterData *fp)
 {
-    float gx = Options_Hud[HOPT_STICK].val == STICK_LEFT ? 3.6f : -SAFE_W + 3.2f;
+    float x0, y0, x1, y1;
+    Pad_Box(fp, &x0, &y0, &x1, &y1);
+    float gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 3.2f;
     Meter_Draw(gx, -SAFE_H + 0.4f, MT_FIXED, MT_FIXED_MAX, 1);
 }
 
@@ -6375,32 +6420,126 @@ static void Spot_Draw(FighterData *fp)
 }
 
 ///////////////////////
-/// Stick display   ///
+/// Controller      ///
 ///////////////////////
 
-#define STICK_TRAIL 8
-static Vec2 stick_trail[STICK_TRAIL]; // the last frames' stick, newest at stick_trail_pos
-static int stick_trail_pos;
+// A compact picture of the whole controller, from the raw pad (what the
+// player's hands did, before Melee's deadzones): the stick with its
+// deadzone cross, trail and fastfall line, the C-stick, the face buttons
+// and both triggers. A button stays lit for a few frames after it's let go,
+// so a one-frame tap can still be seen.
+//
+// Laid out from the block's bottom left corner, in HUD units: 12.7 wide and
+// 5.3 tall, or just the stick (5.2 square) with Buttons and Triggers off.
+#define PAD_W 12.7f
+#define PAD_H 5.3f
+#define PAD_STICK_W 5.2f
+#define PAD_STICK_H 5.2f
+#define PAD_STICK_X 3.5f // the stick's center in the full block
+#define PAD_R 2.6f       // the stick gate's radius
+#define PCT_HALF_W 4.8f  // half the percent display's width (a guess)
 
-static void Stick_Record(float x, float y)
+#define PAD_TRAIL 8
+#define PAD_CTRAIL 4
+
+// The inputs that glow.
+enum pad_input
 {
-    stick_trail_pos = (stick_trail_pos + 1) % STICK_TRAIL;
-    stick_trail[stick_trail_pos] = (Vec2){x, y};
+    PIN_A,
+    PIN_B,
+    PIN_X,
+    PIN_Y,
+    PIN_Z,
+    PIN_L,
+    PIN_R,
+    PIN_C, // the C-stick past the aerial threshold
+
+    PIN_COUNT
+};
+
+static Vec2 pad_trail[PAD_TRAIL];   // the last frames' raw stick, newest at pad_trail_pos
+static int pad_trail_pos;
+static Vec2 pad_ctrail[PAD_CTRAIL]; // and the C-stick's
+static int pad_ctrail_pos;
+static float pad_glow[PIN_COUNT];      // 1 while held, then fading
+static float pad_glow_prev[PIN_COUNT]; // ... as it was a record ago
+
+static int assist_frozen; // Assist holds the game on the frame before an input
+
+static const GXColor color_btn_b = {255, 90, 70, 255};
+static const GXColor color_btn_jump = {255, 220, 40, 255};
+static const GXColor color_btn_z = {170, 110, 255, 255};
+
+// Which inputs are down on a pad.
+static void Pad_Held(HSD_Pad *pad, int *held)
+{
+    held[PIN_A] = (pad->held & HSD_BUTTON_A) != 0;
+    held[PIN_B] = (pad->held & HSD_BUTTON_B) != 0;
+    held[PIN_X] = (pad->held & HSD_BUTTON_X) != 0;
+    held[PIN_Y] = (pad->held & HSD_BUTTON_Y) != 0;
+    held[PIN_Z] = (pad->held & HSD_TRIGGER_Z) != 0;
+    held[PIN_L] = (pad->held & HSD_TRIGGER_L) != 0;
+    held[PIN_R] = (pad->held & HSD_TRIGGER_R) != 0;
+    held[PIN_C] = fabs(pad->fsubstickX) >= common_aerial_stick_x || fabs(pad->fsubstickY) >= common_aerial_stick_y;
 }
 
-// The control stick, big and always in the same place at the bottom of the
-// screen: its gate, the last frames as a trail, and the line where pulling
-// down starts a fastfall (lit while a fastfall flick is live).
-static void Stick_Draw(FighterData *fp)
+// Once per game frame, and per real frame while Assist holds the game: the
+// pad's sticks into the trails, and its inputs into their glows.
+static void Pad_Record(HSD_Pad *pad)
 {
-    int place = Options_Hud[HOPT_STICK].val;
-    if (place == STICK_OFF)
-        return;
-    float R = 2.6f;
-    float cx = place == STICK_LEFT ? -SAFE_W + R : place == STICK_RIGHT ? SAFE_W - R : 0.f;
-    float cy = -SAFE_H + R;
+    pad_trail_pos = (pad_trail_pos + 1) % PAD_TRAIL;
+    pad_trail[pad_trail_pos] = (Vec2){pad->fstickX, pad->fstickY};
+    pad_ctrail_pos = (pad_ctrail_pos + 1) % PAD_CTRAIL;
+    pad_ctrail[pad_ctrail_pos] = (Vec2){pad->fsubstickX, pad->fsubstickY};
 
-    // the gate: an octagon with corners at the notches
+    int held[PIN_COUNT];
+    Pad_Held(pad, held);
+    for (int i = 0; i < PIN_COUNT; i++)
+    {
+        pad_glow_prev[i] = pad_glow[i];
+        float g = held[i] ? 1.f : pad_glow[i] * 0.55f;
+        pad_glow[i] = g < 0.05f ? 0.f : g;
+    }
+}
+
+// The pad the display shows: the one the game reads, or while the game is
+// paused the master pad, which still moves.
+static HSD_Pad *Pad_Live(FighterData *fp)
+{
+    int paused = (stc_hsd_update->pause_kind & 1) || assist_frozen;
+    return paused ? PadGetMaster(fp->pad_index) : PadGetEngine(fp->pad_index);
+}
+
+// Where the display goes: the bottom of the screen, in a corner or beside
+// the player's percent. Other drawing keeps clear of this box.
+static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
+{
+    int buttons = Options_Hud[HOPT_BUTTONS].val;
+    float w = buttons ? PAD_W : PAD_STICK_W;
+    float h = buttons ? PAD_H : PAD_STICK_H;
+    float left = SAFE_W - w;
+    int place = Options_Hud[HOPT_STICK].val;
+    if (place == STICK_LEFT)
+        left = -SAFE_W;
+    else if (place == STICK_PERCENT)
+    {
+        Vec3 *hp = Match_GetPlayerHUDPos(fp->ply);
+        if (hp)
+        {
+            left = hp->X + PCT_HALF_W;
+            if (left + w > SAFE_W)
+                left = hp->X - PCT_HALF_W - w;
+        }
+    }
+    *x0 = left;
+    *y0 = -SAFE_H + 0.4f;
+    *x1 = left + w;
+    *y1 = *y0 + h;
+}
+
+// A stick's gate: an octagon with corners at the notches.
+static void Pad_Gate(float cx, float cy, float R, float rim_w, GXColor rim)
+{
     float vx[9], vy[9];
     for (int i = 0; i <= 8; i++)
     {
@@ -6411,30 +6550,174 @@ static void Stick_Draw(FighterData *fp)
     GXColor plate = Color_Fill(color_plate, 0.6f);
     for (int i = 0; i < 8; i++)
         Hud_Tri(cx, cy, vx[i], vy[i], vx[i + 1], vy[i + 1], plate);
-    GXColor rim = Color_Fill(color_white, 0.45f);
     for (int i = 0; i < 8; i++)
-        Hud_Seg(vx[i], vy[i], vx[i + 1], vy[i + 1], 0.12f, rim);
-    Hud_Rect(cx - R * 0.92f, cy - 0.03f, cx + R * 0.92f, cy + 0.03f, Color_Fill(color_white, 0.15f));
-    Hud_Rect(cx - 0.03f, cy - R * 0.92f, cx + 0.03f, cy + R * 0.92f, Color_Fill(color_white, 0.15f));
+        Hud_Seg(vx[i], vy[i], vx[i + 1], vy[i + 1], rim_w, rim);
+}
+
+// A pill's ten corners: half circles joined by straight edges.
+static void Pill_Points(float cx, float cy, float w, float h, float *px, float *py)
+{
+    float r = h / 2, d = w / 2 - r;
+    for (int i = 0; i < 5; i++)
+    {
+        float ang = (-90 + 45 * i) * 0.01745329f;
+        px[i] = cx + d + cos(ang) * r;
+        py[i] = cy + sin(ang) * r;
+        px[5 + i] = cx - d - cos(ang) * r;
+        py[5 + i] = cy - sin(ang) * r;
+    }
+}
+
+static void Hud_Pill(float cx, float cy, float w, float h, GXColor c)
+{
+    float px[10], py[10];
+    Pill_Points(cx, cy, w, h, px, py);
+    for (int i = 0; i < 10; i++)
+        Hud_Tri(cx, cy, px[i], py[i], px[(i + 1) % 10], py[(i + 1) % 10], c);
+}
+
+static void Hud_PillRing(float cx, float cy, float w, float h, float lw, GXColor c)
+{
+    float px[10], py[10];
+    Pill_Points(cx, cy, w, h, px, py);
+    for (int i = 0; i < 10; i++)
+        Hud_Seg(px[i], py[i], px[(i + 1) % 10], py[(i + 1) % 10], lw, c);
+}
+
+// A round button: a faint outline, filled by its glow, and a bigger bright
+// ring on the frame it goes down.
+static void Pad_Button(float cx, float cy, float r, GXColor c, int in, float glow)
+{
+    Hud_Ring(cx, cy, r - 0.035f, 0.07f, Color_Fill(c, 0.5f));
+    if (glow > 0)
+        Hud_Disc(cx, cy, r - 0.07f, Color_Fill(c, glow));
+    if (pad_glow[in] >= 1.f && pad_glow_prev[in] < 1.f)
+        Hud_Ring(cx, cy, r + 0.2f, 0.1f, Color_Mix(c, color_white, 0.5f));
+}
+
+// A trigger: a bar filled from the bottom by how far it's pressed, and a cap
+// above it that lights while the click is down. by is the block's bottom.
+static void Pad_Trigger(float x, float by, float analog, float glow)
+{
+    GXColor c = land_kind_colors[LAND_PERFECT_WL];
+    GXColor plate = Color_Fill(color_plate, 0.6f);
+    float x1 = x + 0.5f;
+    Hud_Rect(x, by + 0.2f, x1, by + 4.6f, plate);
+    Hud_Frame(x, by + 0.2f, x1, by + 4.6f, 0.06f, Color_Fill(c, 0.4f));
+    analog = Clamp01(analog);
+    if (analog > 0)
+        Hud_Rect(x + 0.06f, by + 0.26f, x1 - 0.06f, by + 0.26f + 4.28f * analog, Color_Fill(c, 0.7f));
+    Hud_Rect(x, by + 4.8f, x1, by + 5.3f, plate);
+    Hud_Frame(x, by + 4.8f, x1, by + 5.3f, 0.06f, Color_Fill(c, 0.4f));
+    if (glow > 0)
+        Hud_Rect(x + 0.06f, by + 4.86f, x1 - 0.06f, by + 5.24f, Color_Fill(c, glow));
+}
+
+// The stick: its gate, the band Melee reads as zero, the last frames as a
+// trail, where the stick is, and while falling the line where pulling down
+// starts a fastfall (lit while a fastfall flick is live).
+static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy)
+{
+    float R = PAD_R;
+    Pad_Gate(cx, cy, R, 0.12f, Color_Fill(color_white, 0.45f));
+
+    // the deadzone cross, where an axis reads as zero
+    float rx = pad->fstickX, ry = pad->fstickY;
+    float dzx = Common_Float(0x0), dzy = Common_Float(0x4);
+    GXColor band = Color_Fill(color_white, 0.08f);
+    float len = R * 0.88f;
+    Hud_Rect(cx - dzx * R, cy - len, cx + dzx * R, cy + len, band);
+    Hud_Rect(cx - len, cy - dzy * R, cx - dzx * R, cy + dzy * R, band);
+    Hud_Rect(cx + dzx * R, cy - dzy * R, cx + len, cy + dzy * R, band);
 
     // fastfall line
-    float sx = fp->input.lstick.X, sy = fp->input.lstick.Y;
-    int ff = sy <= -common_fastfall_stick && (u8)fp->input.timer_lstick_tilt_y < common_fastfall_window;
-    float fy = cy - common_fastfall_stick * R;
-    float fw = R * 0.62f;
-    Hud_Rect(cx - fw, fy - 0.05f, cx + fw, fy + 0.05f, ff ? color_white : Color_Fill(color_white, 0.35f));
+    if (fp->phys.air_state == 1)
+    {
+        int ff = fp->input.lstick.Y <= -common_fastfall_stick && (u8)fp->input.timer_lstick_tilt_y < common_fastfall_window;
+        GXColor c = ff ? color_white : Color_Fill(color_white, 0.35f);
+        float fy = cy - common_fastfall_stick * R;
+        float fw = R * 0.62f;
+        Hud_Rect(cx - fw, fy - 0.05f, cx + fw, fy + 0.05f, c);
+        Glyph_Draw(GLYPH_DOWN, cx + fw + 0.3f, fy, 0.2f, c);
+    }
 
     // trail, oldest first
-    for (int n = STICK_TRAIL - 1; n >= 1; n--)
+    for (int n = PAD_TRAIL - 1; n >= 1; n--)
     {
-        Vec2 *p = &stick_trail[(stick_trail_pos - n + STICK_TRAIL) % STICK_TRAIL];
-        float a = 0.5f * (1.f - (float)n / STICK_TRAIL);
-        float r = 0.14f + 0.12f * (1.f - (float)n / STICK_TRAIL);
+        Vec2 *p = &pad_trail[(pad_trail_pos - n + PAD_TRAIL) % PAD_TRAIL];
+        float a = 0.5f * (1.f - (float)n / PAD_TRAIL);
+        float r = 0.14f + 0.12f * (1.f - (float)n / PAD_TRAIL);
         Hud_Rect(cx + p->X * R - r, cy + p->Y * R - r, cx + p->X * R + r, cy + p->Y * R + r, Color_Fill(color_white, a));
     }
-    float dx = cx + sx * R, dy = cy + sy * R;
+    float dx = cx + rx * R, dy = cy + ry * R;
     Hud_Seg(cx, cy, dx, dy, 0.14f, Color_Fill(color_white, 0.8f));
-    Hud_Rect(dx - 0.32f, dy - 0.32f, dx + 0.32f, dy + 0.32f, color_white);
+    Hud_Rect(dx - 0.28f, dy - 0.28f, dx + 0.28f, dy + 0.28f, color_white);
+
+    // where the game reads it, when that isn't where it is
+    float gx = fabs(rx) <= dzx ? 0.f : rx;
+    float gy = fabs(ry) <= dzy ? 0.f : ry;
+    if (gx != rx || gy != ry)
+        Hud_Ring(cx + gx * R, cy + gy * R, 0.4f, 0.09f, Color_Fill(color_white, 0.85f));
+}
+
+// The C-stick: a small gate with a dot. Dot and rim turn pink past where it
+// throws an aerial (aerial is how much, 1 while it does and fading after).
+static void Pad_CStick(HSD_Pad *pad, float cx, float cy, float aerial)
+{
+    float R = 1.15f;
+    GXColor pink = land_kind_colors[LAND_AI];
+    GXColor c = Color_Mix(color_white, pink, aerial);
+    Pad_Gate(cx, cy, R, 0.09f, Color_Mix(Color_Fill(color_white, 0.45f), pink, aerial));
+    for (int n = PAD_CTRAIL - 1; n >= 1; n--)
+    {
+        Vec2 *p = &pad_ctrail[(pad_ctrail_pos - n + PAD_CTRAIL) % PAD_CTRAIL];
+        float a = 0.5f * (1.f - (float)n / PAD_CTRAIL);
+        float r = 0.07f + 0.07f * (1.f - (float)n / PAD_CTRAIL);
+        Hud_Rect(cx + p->X * R - r, cy + p->Y * R - r, cx + p->X * R + r, cy + p->Y * R + r, Color_Fill(color_white, a));
+    }
+    float dx = cx + pad->fsubstickX * R, dy = cy + pad->fsubstickY * R;
+    Hud_Rect(dx - 0.17f, dy - 0.17f, dx + 0.17f, dy + 0.17f, c);
+}
+
+// The controller display. Reads the pad live; the trails and glows come
+// from what Pad_Record saw.
+static void Pad_Draw(FighterData *fp)
+{
+    if (Options_Hud[HOPT_STICK].val == STICK_OFF)
+        return;
+    float bx, by, x1, y1;
+    Pad_Box(fp, &bx, &by, &x1, &y1);
+    HSD_Pad *pad = Pad_Live(fp);
+    int buttons = Options_Hud[HOPT_BUTTONS].val;
+
+    Pad_Stick(fp, pad, buttons ? bx + PAD_STICK_X : bx + PAD_R, by + PAD_R);
+    if (!buttons)
+        return;
+
+    // what's down now counts as lit too, so it also shows while paused
+    int held[PIN_COUNT];
+    Pad_Held(pad, held);
+    float glow[PIN_COUNT];
+    for (int i = 0; i < PIN_COUNT; i++)
+        glow[i] = held[i] ? 1.f : pad_glow[i];
+
+    Pad_Trigger(bx, by, pad->ftriggerLeft, glow[PIN_L]);
+    Pad_Trigger(bx + PAD_W - 0.5f, by, pad->ftriggerRight, glow[PIN_R]);
+
+    Pad_Button(bx + 8.3f, by + 2.6f, 0.8f, land_kind_colors[LAND_AI], PIN_A, glow[PIN_A]);
+    Pad_Button(bx + 7.0f, by + 1.5f, 0.48f, color_btn_b, PIN_B, glow[PIN_B]);
+    Pad_Button(bx + 9.6f, by + 3.1f, 0.48f, color_btn_jump, PIN_X, glow[PIN_X]);
+    Pad_Button(bx + 8.0f, by + 4.0f, 0.48f, color_btn_jump, PIN_Y, glow[PIN_Y]);
+
+    // Z, a pill
+    float zx = bx + 9.6f, zy = by + 4.35f;
+    Hud_PillRing(zx, zy, 1.0f, 0.36f, 0.07f, Color_Fill(color_btn_z, 0.5f));
+    if (glow[PIN_Z] > 0)
+        Hud_Pill(zx, zy, 0.93f, 0.29f, Color_Fill(color_btn_z, glow[PIN_Z]));
+    if (pad_glow[PIN_Z] >= 1.f && pad_glow_prev[PIN_Z] < 1.f)
+        Hud_PillRing(zx, zy, 1.3f, 0.66f, 0.1f, Color_Mix(color_btn_z, color_white, 0.5f));
+
+    Pad_CStick(pad, bx + 10.6f, by + 1.3f, glow[PIN_C]);
 }
 
 ///////////////////////
@@ -6523,6 +6806,22 @@ static void Log_Camera(FighterData *fp)
     }
     sprintf(buf + n, " intang %d\n", fp->hurt.intang_frames.ledge);
     Log(buf);
+
+    // where the percent is and where the controller display went, to check
+    // the guess at its width (when either moves)
+    static float last_hud[3];
+    Vec3 *hp = Match_GetPlayerHUDPos(fp->ply);
+    float px0, py0, px1, py1;
+    Pad_Box(fp, &px0, &py0, &px1, &py1);
+    float hx = hp ? hp->X : -999.f, hy = hp ? hp->Y : -999.f;
+    if (hx != last_hud[0] || hy != last_hud[1] || px0 != last_hud[2])
+    {
+        last_hud[0] = hx;
+        last_hud[1] = hy;
+        last_hud[2] = px0;
+        sprintf(buf, "LLHUD ply %d pct %.2f %.2f pad %.2f %.2f %.2f %.2f\n", fp->ply, hx, hy, px0, py0, px1, py1);
+        Log(buf);
+    }
 
     Prediction *p = live_visible ? pred_live : 0;
     if (p && p->num > 0)
@@ -6708,10 +7007,10 @@ static void Hud_GX(GOBJ *gobj, int pass)
         if (timer == TIMER_FALCON || timer == TIMER_BOTH)
             Meter_Above(fp);
         if (timer == TIMER_FIXED || timer == TIMER_BOTH)
-            Meter_Fixed();
+            Meter_Fixed(fp);
     }
     Markers_Draw();
-    Stick_Draw(fp);
+    Pad_Draw(fp);
     Panel_Draw();
     Quad_Flush();
 
@@ -6734,8 +7033,7 @@ static int Advance_Port(void)
     return Fighter_GetControllerPort(0);
 }
 
-static int assist_frozen; // Assist holds the game on the frame before an input
-static int assist_advance; // ... and runs one frame further into the window
+static int assist_advance; // Assist runs one frame further into the window
 
 static int Advance_CheckPause(void)
 {
@@ -9086,7 +9384,7 @@ static void Assist_Mirror(FighterData *fp, HSD_Pad *pad)
     u8 *t = (u8 *)&fp->input.timer_lstick_tilt_x;
     Timer_Axis(x, prev.X, Common_Float(0x8), &t[0], &t[3], &t[6], &t[9]);
     Timer_Axis(y, prev.Y, Common_Float(0xC), &t[1], &t[4], &t[7], &t[10]);
-    Stick_Record(x, y);
+    Pad_Record(pad);
 }
 
 // Whether the pad now holds the input the route needs, as the game will
@@ -9722,7 +10020,7 @@ static void Event_ThinkFrame(GOBJ *event)
     Assist_Think(fp, sid);
     Body_Flash(fp, sid);
     Slide_Update(fp);
-    Stick_Record(fp->input.lstick.X, fp->input.lstick.Y);
+    Pad_Record(PadGetEngine(fp->pad_index));
     int t_solve = OSGetTick();
     Ledge_Solve(fp, tracked_air ? LR_BUDGET_AIR : LR_BUDGET);
     float solve_ms = OSTicksToMicroseconds(OSGetTick() - t_solve) / 1000.f;

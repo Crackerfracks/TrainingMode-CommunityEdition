@@ -7253,6 +7253,7 @@ typedef struct LedgeEntry
 {
     u8 used;
     u8 done;
+    u8 logged;   // its routes went to the log
     s8 facing;   // the way Falcon faces while hanging: toward the stage
     float x, y;  // where he hangs
     int next;    // the next candidate to simulate
@@ -7327,6 +7328,7 @@ static int Ledge_Add(float x, float y, int facing)
             L->x = x;
             L->y = y;
             L->done = 0;
+            L->logged = 0;
             L->next = 0;
             memset(L->sig, 0, sizeof(L->sig));
         }
@@ -7861,6 +7863,15 @@ static void Route_Fail(const char *step, int off)
     Drill_Finish(0);
 }
 
+static void Route_Log(const char *what, LedgeEntry *L, LedgeRoute *r, int galint)
+{
+    char buf[200];
+    sprintf(buf, "LLROUTE %s ledge %.4f %.4f facing %d kind %s drop %s wait %d ff %d hold %d dj %d ff_at %d press %d w %d aerial %d land %d act %d galint %d\n",
+            what, L->x, L->y, L->facing, r->kind == LAND_AI ? "AI" : "NIL", r->drop == DROP_AWAY ? "away" : "down", r->wait,
+            r->ff, r->hold, r->dj, r->ff_at, r->press, r->press_w, r->aerial, r->land, r->act, galint);
+    Log(buf);
+}
+
 static void Route_Step(void)
 {
     route_hit = event_vars->game_timer;
@@ -7898,6 +7909,14 @@ static void Ledge_Think(FighterData *fp, int sid)
         if (hang_ledge >= 0 && ledges[hang_ledge].done)
         {
             route_show_num = Ledge_Routes(&ledges[hang_ledge], route_show);
+            if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+            {
+                LedgeEntry *L = &ledges[hang_ledge];
+                static const char *names[LR_KEEP] = {"1st", "2nd", "3rd"};
+                for (int i = 0; i < route_show_num && !L->logged; i++)
+                    Route_Log(names[i], L, &route_show[i], Route_Galint(&route_show[i], -1, intang));
+                L->logged = 1;
+            }
             if (route_show_num > 0 && Routes_On())
             {
                 Route_Path(fp, hang_ledge, &route_show[0]);
@@ -7948,6 +7967,8 @@ static void Ledge_Think(FighterData *fp, int sid)
                 route_landed = -1;
                 route_galint = -1;
                 route_pred = Route_Galint(&route_cur, 0, intang);
+                if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+                    Route_Log("follow", &ledges[ledge], &route_cur, route_pred);
                 route_hit = event_vars->game_timer;
                 prev_fastfall = 0;
                 Route_Path(fp, ledge, &route_cur);
@@ -8793,7 +8814,35 @@ void Event_Init(GOBJ *gobj)
     GObj_AddProc(script_gobj, Script_Think, 3);
 }
 
+static void Event_ThinkFrame(GOBJ *event);
+
+// The event's work each frame, timed for the log: the most it took over
+// each second, all of it and the ledge route search in it.
+static float perf_think, perf_solve;
+static int perf_frames;
+
 void Event_Think(GOBJ *event)
+{
+    int t0 = OSGetTick();
+    Event_ThinkFrame(event);
+    float ms = OSTicksToMicroseconds(OSGetTick() - t0) / 1000.f;
+    if (ms > perf_think)
+        perf_think = ms;
+    if (++perf_frames >= 60)
+    {
+        if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+        {
+            char buf[96];
+            sprintf(buf, "LLPERF %d think %.2f ms solve %.2f ms\n", event_vars->game_timer, perf_think, perf_solve);
+            Log(buf);
+        }
+        perf_frames = 0;
+        perf_think = 0;
+        perf_solve = 0;
+    }
+}
+
+static void Event_ThinkFrame(GOBJ *event)
 {
     GOBJ *ft = Fighter_GetGObj(0);
     FighterData *fp = ft->userdata;
@@ -8924,7 +8973,11 @@ void Event_Think(GOBJ *event)
     Body_Flash(fp, sid);
     Slide_Update(fp);
     Stick_Record(fp->input.lstick.X, fp->input.lstick.Y);
+    int t_solve = OSGetTick();
     Ledge_Solve(fp, tracked_air ? LR_BUDGET_AIR : LR_BUDGET);
+    float solve_ms = OSTicksToMicroseconds(OSGetTick() - t_solve) / 1000.f;
+    if (solve_ms > perf_solve)
+        perf_solve = solve_ms;
 
     // the jumpsquat and takeoff, to check the ground previews against
     if (sid == ASID_KNEEBEND && logging)

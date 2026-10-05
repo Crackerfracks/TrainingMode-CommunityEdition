@@ -1138,6 +1138,8 @@ static void Floor_BuildCache(void)
 }
 
 // mpCheckFloor: does the ECB bottom moving from a to b touch down on a floor?
+static int floor_hit_platform; // the floor Floor_Check last found is a platform
+
 static int Floor_Check(float ax, float ay, float bx, float by, int pass_platforms, int skip_line)
 {
     for (int i = 0; i < floor_num; i++)
@@ -1146,13 +1148,16 @@ static int Floor_Check(float ax, float ay, float bx, float by, int pass_platform
         if (f->id == skip_line || (pass_platforms && f->is_platform))
             continue;
 
+        int hit;
         if (fabs(f->y0 - f->y1) > 0.0001f)
+            hit = Line_Cross(f->x0, f->y0, f->x1, f->y1, ax, ay, bx, by);
+        else
+            hit = ay >= by && Line_CrossFlat(f->x0, f->y0, f->x1, ax, ay, bx, by);
+        if (hit)
         {
-            if (Line_Cross(f->x0, f->y0, f->x1, f->y1, ax, ay, bx, by))
-                return 1;
-        }
-        else if (ay >= by && Line_CrossFlat(f->x0, f->y0, f->x1, ax, ay, bx, by))
+            floor_hit_platform = f->is_platform;
             return 1;
+        }
     }
     return 0;
 }
@@ -1837,6 +1842,7 @@ typedef struct SimState
     int lock;
     int ecb_pending; // in an aerial or airdodge whose own ECB bottom hasn't been used yet (lock)
     int dodge_flat;  // the airdodge started with no vertical speed
+    int dodge_low;   // ... or at the shallowest angle down (WL_LOW_*)
     float lean;      // a fall's blend toward its leaning pose
     int lean_side;   // LEAN_FORWARD, LEAN_BACK or LEAN_NONE
     float locked_bottom; // bottom kept while the lock lasts
@@ -1848,6 +1854,7 @@ typedef struct SimStep
     int landed;
     int ceiling;          // the ECB top hit a ceiling (and didn't land)
     int first_ecb;        // an aerial's or airdodge's own ECB bottom was used for the first time
+    int platform;         // it landed on a platform (not the main floor)
     int unlearned;        // relied on data the event hasn't learned yet
     int fastfall_started;
     EcbSample *ecb;       // learned ECB for this frame
@@ -1862,6 +1869,17 @@ typedef struct SimStep
 // Horizontal airdodge directions, as bits
 #define DODGE_RIGHT 1
 #define DODGE_LEFT 2
+
+// The waveland the cues time: the airdodge at the shallowest angle below
+// sideways that isn't flat. Melee reads a stick axis within 0.2875 of the
+// middle as 0, so y = -0.3 with the stick out to the gate's edge (about
+// 0.925) is as flat as a down angle gets: about 18 degrees. It lands from
+// a little higher than a flat dodge and slides 95% as fast. Pressed up to
+// WL_LOW_MAX_TAN (22 degrees), a dodge that lands right away is judged
+// perfect.
+#define WL_LOW_COS 0.95122f
+#define WL_LOW_SIN 0.30851f
+#define WL_LOW_MAX_TAN 0.40403f
 
 typedef struct Prediction
 {
@@ -1891,13 +1909,19 @@ typedef struct Prediction
     int ai_width;                      // frames in that window
     u8 ai_aerials;                     // aerials that work somewhere in that window
 
-    // perfect wavelands: a horizontal airdodge on frame k whose ECB touches
-    // down the first time it is used, keeping all of the dodge's speed
-    u8 wl_mask[LL_SIM_FRAMES + 1]; // DODGE_RIGHT / DODGE_LEFT that work when pressed on frame k
-    u8 wl_unlearned;               // the airdodge's ECB isn't learned yet
-    int wl_first;                  // first frame of the first window, 0 = none
+    // perfect wavelands: an airdodge sideways or at the shallowest angle
+    // down, on frame k, whose ECB touches down the first time it is used,
+    // keeping all (or 95%) of the dodge's speed. Off a plain fall that's
+    // there on about every other jump, so when it isn't the window is the
+    // frames where it lands one frame later instead (wl_late).
+    u8 wl_mask[LL_SIM_FRAMES + 1];   // DODGE_RIGHT / DODGE_LEFT that work when pressed on frame k
+    u8 wl_late_mask[LL_SIM_FRAMES + 1]; // ... that land on the dodge's second frame
+    u8 wl_ground[LL_SIM_FRAMES + 1]; // ... of those, the ones landing on the main floor
+    u8 wl_unlearned;                 // the airdodge's ECB isn't learned yet
+    int wl_first;                    // first frame of the first window, 0 = none
     int wl_width;
-    u8 wl_dirs;                    // directions that work somewhere in that window
+    u8 wl_dirs;                      // directions that work somewhere in that window
+    int wl_late;                     // the window lands a frame late
 } Prediction;
 
 static float common_fastfall_stick;
@@ -2506,6 +2530,7 @@ static void Sim_Init(SimStart *start, SimState *s)
     // bottom yet
     s->ecb_pending = (Tracked_IsAerial(start->ts) || start->ts == TS_ESCAPEAIR) && start->ecb_lock > 0;
     s->dodge_flat = start->ts == TS_ESCAPEAIR && start->vel.Y == 0 && start->vel.X != 0;
+    s->dodge_low = start->ts == TS_ESCAPEAIR && start->vel.Y < 0 && -start->vel.Y <= fabs(start->vel.X) * WL_LOW_MAX_TAN;
     s->lean = start->lean;
     s->lean_side = LEAN_NONE;
     s->locked_bottom = start->locked_bottom;
@@ -2514,9 +2539,11 @@ static void Sim_Init(SimStart *start, SimState *s)
 // One frame, in the game's order: animation (the state can end), interrupt
 // (press, an aerial or airdodge replaces the state), input timers, physics,
 // ECB, floor test. press is the aerial or TS_ESCAPEAIR pressed this frame,
-// or -1; dodge_x is the airdodge's direction (+1 right, -1 left), always
-// horizontal.
+// or -1; dodge_x is the airdodge's direction (+1 right, -1 left),
+// horizontal unless sim_dodge_y is set (then both are the unit direction's
+// parts).
 static int sim_steps; // simulated frames, to spread the ledge route search over game frames
+static float sim_dodge_y;
 
 static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, float dodge_x, SimStep *out)
 {
@@ -2524,6 +2551,7 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     out->landed = 0;
     out->ceiling = 0;
     out->first_ecb = 0;
+    out->platform = 0;
     out->unlearned = 0;
     out->fastfall_started = 0;
 
@@ -2571,8 +2599,9 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
         if (press == TS_ESCAPEAIR)
         {
             s->vx = dodge_x * common_dodge_force;
-            s->vy = 0;
-            s->dodge_flat = 1;
+            s->vy = sim_dodge_y * common_dodge_force;
+            s->dodge_flat = sim_dodge_y == 0;
+            s->dodge_low = sim_dodge_y != 0;
         }
     }
 
@@ -2669,6 +2698,7 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     float bx = s->x;
     float by = s->y + s->bottom;
     out->landed = Floor_Check(s->prev_x, s->prev_y, bx, by, pass_platforms, start->skip_line);
+    out->platform = out->landed && floor_hit_platform;
     out->ceiling = ceiling && !out->landed; // a touchdown is handled first (ft_800835B0)
     s->prev_x = bx;
     s->prev_y = by;
@@ -2693,7 +2723,7 @@ static int Landing_Kind(FighterData *fp, SimState *s, EcbSample *e, int first_ec
     if (s->ts == TS_ESCAPEAIR)
     {
         *lag = (int)common_waveland_lag;
-        return first_ecb && s->dodge_flat ? LAND_PERFECT_WL : LAND_WAVELAND;
+        return first_ecb && (s->dodge_flat || s->dodge_low) ? LAND_PERFECT_WL : LAND_WAVELAND;
     }
 
     if (!Tracked_IsAerial(s->ts))
@@ -2730,11 +2760,16 @@ static int Landing_Kind(FighterData *fp, SimState *s, EcbSample *e, int first_ec
 // before is the state just before frame k. Its ECB is used right away, or
 // when the lock runs out, and only that first use counts. Returns the
 // frames from k to that touchdown, or -1 for none.
-static int Branch_Press(FighterData *fp, SimStart *start, SimState *before, int press, float dodge_x,
+static int branch_platform; // where Branch_Press landed: a platform
+
+// late: frames its own ECB may already be in use and still count (the
+// late waveland window).
+static int Branch_Press(FighterData *fp, SimStart *start, SimState *before, int press, float dodge_x, int late,
                         int *unlearned, int *lag)
 {
     SimState b = *before;
     SimStep step;
+    int used = 0; // frames its ECB was in use without landing
 
     for (int n = 0; n < LL_AI_MAX_STEPS; n++)
     {
@@ -2752,12 +2787,13 @@ static int Branch_Press(FighterData *fp, SimStart *start, SimState *before, int 
         if (step.landed)
         {
             // touching down on the locked bottom isn't an interrupt
-            if (!step.first_ecb)
+            if (!step.first_ecb && !(late && used > 0))
                 return -1;
             *lag = step.ecb->aerial_lag;
+            branch_platform = step.platform;
             return n;
         }
-        if (!b.ecb_pending)
+        if (!b.ecb_pending && ++used > late)
             return -1; // its ECB is in use and stayed in the air
     }
     return -1;
@@ -2788,7 +2824,7 @@ static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, P
         for (int a = TS_AIRN; a <= TS_AIRLW; a++)
         {
             int unlearned = 0, lag = 0;
-            int n = Branch_Press(fp, start, before, a, 0, &unlearned, &lag);
+            int n = Branch_Press(fp, start, before, a, 0, 0, &unlearned, &lag);
             if (unlearned)
                 p->ai_unlearned |= AERIAL_BIT(a);
             if (n < 0)
@@ -2800,15 +2836,25 @@ static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, P
         }
     }
 
+    // the shallowest airdodge down lands wherever a flat one does, and a
+    // little higher too
+    sim_dodge_y = -WL_LOW_SIN;
     for (int d = 0; d < 2 && (branches & BR_WL); d++)
     {
+        u8 bit = d == 0 ? DODGE_RIGHT : DODGE_LEFT;
+        float dx = d == 0 ? WL_LOW_COS : -WL_LOW_COS;
         int unlearned = 0, lag = 0;
-        int n = Branch_Press(fp, start, before, TS_ESCAPEAIR, d == 0 ? 1.f : -1.f, &unlearned, &lag);
+        int n = Branch_Press(fp, start, before, TS_ESCAPEAIR, dx, 0, &unlearned, &lag);
+        if (n >= 0)
+            p->wl_mask[k] |= bit;
+        else if ((n = Branch_Press(fp, start, before, TS_ESCAPEAIR, dx, 1, &unlearned, &lag)) >= 0)
+            p->wl_late_mask[k] |= bit;
+        if (n >= 0 && !branch_platform)
+            p->wl_ground[k] |= bit;
         if (unlearned)
             p->wl_unlearned = 1;
-        if (n >= 0)
-            p->wl_mask[k] |= d == 0 ? DODGE_RIGHT : DODGE_LEFT;
     }
+    sim_dodge_y = 0;
 }
 
 // Which aerial interrupts are worth showing, and the first window of each
@@ -2817,6 +2863,8 @@ static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, P
 // lag barely sooner than just holding would isn't worth the press, and
 // neither is one that lands while falling. The AI Filter option can show
 // them all.
+static int Cues_WavelandGround(void);
+
 static void Windows_Summarize(FighterData *fp, Prediction *p)
 {
     int normal_lag = (int)fp->attr.normal_landing_lag;
@@ -2855,18 +2903,30 @@ static void Windows_Summarize(FighterData *fp, Prediction *p)
         }
     }
 
-    p->wl_first = 0;
-    p->wl_width = 0;
-    p->wl_dirs = 0;
-    for (int k = 1; k <= last_wl; k++)
+    // the first frame-one window; without one, the first one-frame-late one
+    p->wl_late = 0;
+    for (int late = 0; late < 2; late++)
     {
-        u8 m = p->wl_mask[k];
-        if (m && (p->wl_first == 0 || k == p->wl_first + p->wl_width))
+        p->wl_first = 0;
+        p->wl_width = 0;
+        p->wl_dirs = 0;
+        for (int k = 1; k <= last_wl; k++)
         {
-            if (p->wl_first == 0)
-                p->wl_first = k;
-            p->wl_width++;
-            p->wl_dirs |= m;
+            u8 m = late ? p->wl_late_mask[k] : p->wl_mask[k];
+            if (!Cues_WavelandGround())
+                m &= ~p->wl_ground[k];
+            if (m && (p->wl_first == 0 || k == p->wl_first + p->wl_width))
+            {
+                if (p->wl_first == 0)
+                    p->wl_first = k;
+                p->wl_width++;
+                p->wl_dirs |= m;
+            }
+        }
+        if (p->wl_first)
+        {
+            p->wl_late = late;
+            break;
         }
     }
 }
@@ -2901,6 +2961,8 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
     p->ai_show[0] = 0;
     p->ai_unlearned = 0;
     p->wl_mask[0] = 0;
+    p->wl_late_mask[0] = 0;
+    p->wl_ground[0] = 0;
     p->wl_unlearned = 0;
 
     for (int k = 1; k <= sim_limit; k++)
@@ -2924,6 +2986,8 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
         p->ai_delay[k] = 0;
         p->ai_show[k] = 0;
         p->wl_mask[k] = 0;
+        p->wl_late_mask[k] = 0;
+        p->wl_ground[k] = 0;
         p->num = k;
 
         if (branches && (((branches & BR_LOCK) && before.lock > 0) || Floor_Near(s.x, s.y + s.bottom)))
@@ -3107,6 +3171,7 @@ static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
 static const char *tick_names[] = {"Frame Advance", "Always", "Off"};
 static const char *ai_filter_names[] = {"Useful", "All"};
+static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
 static const char *timer_names[] = {"Above Falcon", "Fixed Strip", "Both", "Off"};
 static const char *stick_names[] = {"Bottom", "Bottom Left", "Bottom Right", "Off"};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
@@ -3394,12 +3459,15 @@ static EventOption Options_Cues[COPT_COUNT] = {
                  "for the aerials that work there."},
     },
     {
-        .kind = OPTKIND_TOGGLE,
+        .kind = OPTKIND_STRING,
         .name = "Waveland Cues",
-        .val = 1,
-        .desc = {"Cyan: a sideways airdodge lands you with full",
-                 "speed (perfect waveland), and the wavedash out",
-                 "of a jump."},
+        .val = 2,
+        .value_num = countof(wl_cue_names),
+        .values = wl_cue_names,
+        .desc = {"Cyan: when an airdodge just below sideways lands",
+                 "at once with full speed (perfect waveland), and",
+                 "the wavedash out of a jump. Platforms leaves out",
+                 "wavelands onto the main floor."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -4142,7 +4210,12 @@ static int Cues_Ai(void)
 
 static int Cues_Waveland(void)
 {
-    return Options_Cues[COPT_WL].val;
+    return Options_Cues[COPT_WL].val != 0;
+}
+
+static int Cues_WavelandGround(void)
+{
+    return Options_Cues[COPT_WL].val == 2;
 }
 
 // Only NILs, aerial interrupts and perfect wavelands are worth practicing
@@ -4337,10 +4410,20 @@ static int Aerial_Pressed(FighterData *fp)
 // 0 for any other angle.
 static int Dodge_Dir(float x, float y)
 {
-    if (y != 0 || fabs(x) < common_dodge_deadzone.X)
+    if (y > 0 || fabs(x) < common_dodge_deadzone.X || -y > fabs(x) * WL_LOW_MAX_TAN)
         return 0;
     return x > 0 ? DODGE_RIGHT : DODGE_LEFT;
 }
+
+// An airdodge's speed, sideways or at most WL_LOW_MAX_TAN below it.
+static int Dodge_Low(Vec2 v)
+{
+    return v.X != 0 && v.Y <= 0 && -v.Y <= fabs(v.X) * WL_LOW_MAX_TAN;
+}
+
+static int dodge_start = -100; // game frame the last airdodge started
+static int dodge_late_ok;      // ... on a late window's frame: landing a frame later is perfect
+static int prev_wl_late;       // last frame's prediction: a late window on its next frame
 
 static int Jump_Or_Fall(int ts)
 {
@@ -4801,9 +4884,12 @@ static void Landing_Resolve(FighterData *fp)
         kind = LAND_NIL;
     else if (sid == ASID_LANDINGFALLSPECIAL)
     {
-        // perfect: a sideways dodge whose own ECB touched down the first
-        // time it was used, now or as the lock ran out
-        int perfect = dodge > 0 || (prev_ts == TS_ESCAPEAIR && prev_lock == 1 && prev_vel.Y == 0 && prev_vel.X != 0);
+        // perfect: a dodge sideways or just below whose own ECB touched down
+        // the first time it was used, now or as the lock ran out; or a
+        // frame later, pressed in a late window (no sooner one was there)
+        int low = prev_ts == TS_ESCAPEAIR && Dodge_Low(prev_vel);
+        int perfect = dodge > 0 || (low && prev_lock == 1) ||
+                      (low && dodge_late_ok && event_vars->game_timer - dodge_start == 1);
         kind = perfect ? LAND_PERFECT_WL : LAND_WAVELAND;
     }
     else if (pressed >= 0)
@@ -7692,6 +7778,8 @@ static int route_pred;        // GALINT predicted on the drop frame, for the log
 static int route_aerial_done; // the route's aerial was pressed
 static int route_ff_done;     // ... and its fastfall started (or was given up on)
 static int route_off;         // a jump or aerial came off its frame: the cues take over from the route's row
+static int route_bonked;      // hit a ceiling on the way
+#define COLL_CEILING 0x6000   // CollData env flags: touching a ceiling (Collide_CeilingMask)
 static int route_any_aerial;  // an aerial was pressed after the drop
 static char route_note[24];   // the first slip that didn't count as a miss, for the result
 static int prev_fastfall;
@@ -8457,14 +8545,16 @@ static void Route_Fail(const char *step, int off, int buzz)
     Drill_Finish(0);
 }
 
-// A step off its frame. When its timing is checked under Sounds, it's a
-// miss (returns 1, the route is dropped); otherwise it's only noted, and
-// the attempt goes on to be judged by how it lands.
+// A step off its frame. When its timing is checked under Sounds, or Assist
+// is drilling the route, it's a miss (returns 1, the route is dropped);
+// otherwise it's only noted, and the attempt goes on to be judged by how it
+// lands. opt -1: a slip no Sounds option checks (a bonk).
 static int Route_Slip(int opt, const char *step, int off)
 {
-    if (Options_Sounds[opt].val)
+    int checked = opt >= 0 && Options_Sounds[opt].val;
+    if (checked || Options_Ledge[LOPT_ASSIST].val)
     {
-        Route_Fail(step, off, 1);
+        Route_Fail(step, off, checked || Options_Sounds[SOPT_LOST].val);
         return 1;
     }
     char note[24], buf[80];
@@ -8594,6 +8684,7 @@ static void Ledge_Think(FighterData *fp, int sid)
                 route_aerial_done = 0;
                 route_ff_done = 0;
                 route_off = 0;
+                route_bonked = 0;
                 route_any_aerial = 0;
                 route_note[0] = 0;
                 route_landed = -1;
@@ -8634,6 +8725,14 @@ static void Ledge_Think(FighterData *fp, int sid)
 
         if (route_landed < 0)
         {
+            // the routes never touch a ceiling: one that does went another way
+            if ((fp->coll_data.envFlags & COLL_CEILING) && !route_bonked)
+            {
+                route_bonked = 1;
+                route_off = 1;
+                if (Route_Slip(-1, "Bonked", LR_PLAIN))
+                    return;
+            }
             int ff = Route_FF(r);
             if (ff_now && route_dj_done)
                 ff_now = 0; // after the jump: the route is past its inputs
@@ -8990,12 +9089,16 @@ static void Assist_Mirror(FighterData *fp, HSD_Pad *pad)
     Stick_Record(x, y);
 }
 
-// Whether the pad now holds the input the route needs.
+// Whether the pad now holds the input the route needs, as the game will
+// read it when it goes on: a fastfall or tap jump only counts while the
+// stick's flick is fresh (the game adds a frame to its timer first), so a
+// slow roll down while frozen is no fastfall, just as at full speed.
 static int Assist_Input(FighterData *fp, HSD_Pad *pad)
 {
     float x = fp->input.lstick.X, y = fp->input.lstick.Y;
     float thresh = Common_Float(0x494);
     float facing = fp->facing_direction;
+    int flick = (u8)fp->input.timer_lstick_tilt_y + 1;
     switch (assist_step)
     {
     case ASSIST_DROP:
@@ -9003,9 +9106,10 @@ static int Assist_Input(FighterData *fp, HSD_Pad *pad)
             return y <= -thresh && fabs(x) < -y;
         return x * facing <= -thresh && y < thresh;
     case ASSIST_FF:
-        return y <= -common_fastfall_stick;
+        return y <= -common_fastfall_stick && flick < common_fastfall_window;
     case ASSIST_JUMP:
-        return (pad->down & (HSD_BUTTON_X | HSD_BUTTON_Y)) || y >= 0.6625f;
+        return (pad->down & (HSD_BUTTON_X | HSD_BUTTON_Y)) ||
+               (y >= Common_Float(0x70) && flick < Common_Int(0x74)); // tap jump
     case ASSIST_AERIAL:
         return (pad->down & HSD_BUTTON_A) || fabs(pad->fsubstickX) >= common_aerial_stick_x ||
                fabs(pad->fsubstickY) >= common_aerial_stick_y;
@@ -9512,6 +9616,11 @@ static void Event_ThinkFrame(GOBJ *event)
         frame_in_state++;
 
     int tracked_air = ts >= 0 && airborne && !disturbed;
+    if (sid == ASID_ESCAPEAIR && prev_state_id != sid)
+    {
+        dodge_start = event_vars->game_timer;
+        dodge_late_ok = prev_wl_late;
+    }
 
     // a wavedash's airdodge works from the first frame after takeoff: in
     // the jumpsquat, count down to it (KneeBend takes off once its frame
@@ -9629,6 +9738,7 @@ static void Event_ThinkFrame(GOBJ *event)
     prev_tracked_air = tracked_air;
     prev_tilt_timer = (u8)fp->input.timer_lstick_tilt_y;
     prev_lock = fp->coll_data.u.ecb_bot_lock_frames;
+    prev_wl_late = live_visible && Cues_Waveland() && pred_live->wl_late && pred_live->wl_first == 1;
     prev_vel = (Vec2){fp->phys.self_vel.X, fp->phys.self_vel.Y};
 
     Drill_Think();

@@ -7565,12 +7565,12 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         float x0, y0, x1, y1;
         Ring_Point(t, -0.08f, s, &x0, &y0);
         Ring_Point(t, RING_BAND + 0.08f, s, &x1, &y1);
-        Hud_Seg(cx + m * x0, cy + y0, cx + m * x1, cy + y1, 0.05f * s, Color_Fill(color_white, 0.55f));
+        Hud_Seg(cx + m * x0, cy + y0, cx + m * x1, cy + y1, 0.07f * s, Color_Fill(color_white, 0.75f));
     }
 
     // the outline
-    GXColor line = Color_Fill(c, 0.45f);
-    float lw = 0.06f * s;
+    GXColor line = Color_Fill(c, 0.75f);
+    float lw = 0.08f * s;
     for (int k = 0; k < RING_SEGS; k++)
     {
         Hud_Seg(ox[k], oy[k], ox[k + 1], oy[k + 1], lw, line);
@@ -7589,6 +7589,32 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
     }
 }
 
+// The dark plate behind the whole ring, so its outlines read over any stage.
+static void Ring_Backing(float cx, float cy, float s)
+{
+    GXColor c = Color_Fill(color_plate, 0.45f);
+    float px = cx + RING_A * s, py = cy;
+    for (int i = 1; i <= 32; i++)
+    {
+        float ang = i * (6.2831853f / 32);
+        float nx = cx + cos(ang) * RING_A * s, ny = cy + sin(ang) * RING_B * s;
+        Hud_Tri(cx, cy, px, py, nx, ny, c);
+        px = nx;
+        py = ny;
+    }
+}
+
+// A round button of the Ring look: a faint fill of its color so it reads
+// even unlit, a firm outline, its glow, and a bigger ring on the frame it
+// goes down.
+static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in, float glow)
+{
+    Hud_Disc(cx, cy, r, Color_Fill(c, glow > 0.22f ? glow : 0.22f));
+    Hud_Ring(cx, cy, r - 0.045f * s, 0.09f * s, Color_Fill(c, 0.85f));
+    if (pad_glow[in] >= 1.f && pad_glow_prev[in] < 1.f)
+        Hud_Ring(cx, cy, r + 0.2f * s, 0.1f * s, Color_Mix(c, color_white, 0.5f));
+}
+
 // Where y crosses the X lobe's inner edge: the top small circle (center
 // (0, r/2)) on the way up, the middle line below it.
 static float YinYang_In(float y, float r)
@@ -7602,16 +7628,14 @@ static float YinYang_In(float y, float r)
 
 // X and Y share a disc, as a yin-yang turned 35 degrees: X the lobe on the
 // right, Y the one on the left, each lit on its own in the jump color.
-static void Ring_YinYang(float cx, float cy, float r, float gx, float gy, int press)
+static void Ring_YinYang(float cx, float cy, float r, float s, float gx, float gy, int press)
 {
     float ca = 0.819152f, sa = 0.573576f; // 35 degrees
 #define YY(px, py) cx + f * ((px) * ca - (py) * sa), cy + f * ((px) * sa + (py) * ca)
     for (int lobe = 0; lobe < 2; lobe++)
     {
         float g = lobe ? gy : gx;
-        if (g <= 0)
-            continue;
-        GXColor c = Color_Fill(color_in_jump, g);
+        GXColor c = Color_Fill(color_in_jump, g > 0.22f ? g : 0.22f);
         float f = lobe ? -1.f : 1.f; // Y is X turned half round
         // the disc's right half less the top small circle's right half
         for (int i = 0; i < 10; i++)
@@ -7634,8 +7658,8 @@ static void Ring_YinYang(float cx, float cy, float r, float gx, float gy, int pr
             Quad_Add(YY(d0, y0), YY(0, y0), YY(0, y1), YY(d1, y1), c);
         }
     }
-    GXColor line = Color_Fill(color_in_jump, 0.5f);
-    Hud_Ring(cx, cy, r - 0.035f, 0.07f, line);
+    GXColor line = Color_Fill(color_in_jump, 0.85f);
+    Hud_Ring(cx, cy, r - 0.045f * s, 0.09f * s, line);
     // the S between the lobes: half of each small circle
     float f = 1.f, h = r / 2;
     float px = 0, py = r;
@@ -7643,7 +7667,7 @@ static void Ring_YinYang(float cx, float cy, float r, float gx, float gy, int pr
     {
         float ang = (90 - 180.f * i / 8) * 0.01745329f; // the top one's right half, top to middle
         float nx = cos(ang) * h, ny = h + sin(ang) * h;
-        Hud_Seg(YY(px, py), YY(nx, ny), 0.06f, line);
+        Hud_Seg(YY(px, py), YY(nx, ny), 0.08f * s, line);
         px = nx;
         py = ny;
     }
@@ -7651,13 +7675,13 @@ static void Ring_YinYang(float cx, float cy, float r, float gx, float gy, int pr
     {
         float ang = (90 + 180.f * i / 8) * 0.01745329f; // the bottom one's left half, middle to bottom
         float nx = cos(ang) * h, ny = -h + sin(ang) * h;
-        Hud_Seg(YY(px, py), YY(nx, ny), 0.06f, line);
+        Hud_Seg(YY(px, py), YY(nx, ny), 0.08f * s, line);
         px = nx;
         py = ny;
     }
 #undef YY
     if (press)
-        Hud_Ring(cx, cy, r + 0.2f, 0.1f, Color_Mix(color_in_jump, color_white, 0.5f));
+        Hud_Ring(cx, cy, r + 0.2f * s, 0.1f * s, Color_Mix(color_in_jump, color_white, 0.5f));
 }
 
 // The Ring look's C-stick around (cx, cy): the four arrows, lit the way the
@@ -7671,21 +7695,20 @@ static void Ring_CStick(HSD_Pad *pad, float cx, float cy, float s)
         float g = d == dir ? 1.f : pad_cdir_glow[d];
         int level = d % 2 == 0; // left and right have more room
         float base = (RING_C_ARROW + (level ? 0.08f : 0)) * s;
-        float len = (level ? 0.3f : 0.24f) * s, half = (level ? 0.24f : 0.2f) * s;
+        float len = (level ? 0.32f : 0.26f) * s, half = (level ? 0.26f : 0.22f) * s;
         float ux = d == 0 ? 1 : d == 2 ? -1 : 0, uy = d == 1 ? 1 : d == 3 ? -1 : 0;
         float b0x = cx + ux * base - uy * half, b0y = cy + uy * base + ux * half;
         float b1x = cx + ux * base + uy * half, b1y = cy + uy * base - ux * half;
         float tx = cx + ux * (base + len), ty = cy + uy * (base + len);
-        if (g > 0)
-            Hud_Tri(b0x, b0y, tx, ty, b1x, b1y, Color_Fill(pink, g));
-        GXColor line = Color_Mix(Color_Fill(pink, 0.45f), pink, g);
-        float lw = 0.06f * s;
+        Hud_Tri(b0x, b0y, tx, ty, b1x, b1y, Color_Fill(pink, g > 0.22f ? g : 0.22f));
+        GXColor line = Color_Mix(Color_Fill(pink, 0.8f), pink, g);
+        float lw = 0.08f * s;
         Hud_Seg(b0x, b0y, tx, ty, lw, line);
         Hud_Seg(tx, ty, b1x, b1y, lw, line);
         Hud_Seg(b1x, b1y, b0x, b0y, lw, line);
     }
     float R = RING_C_R * s;
-    Pad_Gate(cx, cy, R, 0.06f * s, Color_Fill(color_white, 0.45f));
+    Pad_Gate(cx, cy, R, 0.08f * s, Color_Fill(color_white, 0.7f));
     for (int n = PAD_CTRAIL - 1; n >= 1; n--)
     {
         Vec2 *p = &pad_ctrail[(pad_ctrail_pos - n + PAD_CTRAIL) % PAD_CTRAIL];
@@ -7693,7 +7716,7 @@ static void Ring_CStick(HSD_Pad *pad, float cx, float cy, float s)
         float r = (0.04f + 0.05f * (1.f - (float)n / PAD_CTRAIL)) * s;
         Hud_Rect(cx + p->X * R - r, cy + p->Y * R - r, cx + p->X * R + r, cy + p->Y * R + r, Color_Fill(pink, a));
     }
-    float dx = cx + pad->fsubstickX * R, dy = cy + pad->fsubstickY * R, h = 0.11f * s;
+    float dx = cx + pad->fsubstickX * R, dy = cy + pad->fsubstickY * R, h = 0.13f * s;
     Hud_Rect(dx - h, dy - h, dx + h, dy + h, color_white);
 }
 
@@ -7709,6 +7732,7 @@ static void Ring_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
     for (int i = 0; i < PIN_COUNT; i++)
         glow[i] = held[i] ? 1.f : pad_glow[i];
 
+    Ring_Backing(cx, cy, s);
     Ring_Trigger(cx, cy, s, -1, pad->ftriggerLeft, held[PIN_L], pad_flash[PIN_L]);
     Ring_Trigger(cx, cy, s, 1, pad->ftriggerRight, held[PIN_R], pad_flash[PIN_R]);
 
@@ -7716,20 +7740,19 @@ static void Ring_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
     float sx = cx, sy = cy + RING_STICK_Y * s;
     Pad_Stick(fp, pad, sx, sy, RING_STICK_R * s, 0.7f * s);
 #define RING_AT(deg, d) sx + cos((deg) * 0.01745329f) * (d) * s, sy + sin((deg) * 0.01745329f) * (d) * s
-    Pad_Button(RING_AT(158, 2.15f), 0.36f * s, color_btn_b, PIN_B, glow[PIN_B]);
-    Pad_Button(RING_AT(116, 2.12f), 0.5f * s, color_in_aerial, PIN_A, glow[PIN_A]);
+    Ring_Button(RING_AT(158, 2.15f), 0.36f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
+    Ring_Button(RING_AT(116, 2.12f), 0.5f * s, s, color_in_aerial, PIN_A, glow[PIN_A]);
     float yx = sx + cos(64 * 0.01745329f) * 2.1f * s, yy = sy + sin(64 * 0.01745329f) * 2.1f * s;
     int xy_press = (pad_glow[PIN_X] >= 1.f && pad_glow_prev[PIN_X] < 1.f) || (pad_glow[PIN_Y] >= 1.f && pad_glow_prev[PIN_Y] < 1.f);
-    Ring_YinYang(yx, yy, 0.46f * s, glow[PIN_X], glow[PIN_Y], xy_press);
+    Ring_YinYang(yx, yy, 0.46f * s, s, glow[PIN_X], glow[PIN_Y], xy_press);
 
     // Z, a pill along the arc
     float zx = sx + cos(22 * 0.01745329f) * 2.15f * s, zy = sy + sin(22 * 0.01745329f) * 2.15f * s;
     float zr = 112 * 0.01745329f;
-    Hud_PillRing(zx, zy, 0.8f * s, 0.34f * s, zr, 0.07f, Color_Fill(color_btn_z, 0.5f));
-    if (glow[PIN_Z] > 0)
-        Hud_Pill(zx, zy, 0.8f * s - 0.07f, 0.34f * s - 0.07f, zr, Color_Fill(color_btn_z, glow[PIN_Z]));
+    Hud_Pill(zx, zy, 0.8f * s, 0.34f * s, zr, Color_Fill(color_btn_z, glow[PIN_Z] > 0.22f ? glow[PIN_Z] : 0.22f));
+    Hud_PillRing(zx, zy, 0.8f * s, 0.34f * s, zr, 0.09f * s, Color_Fill(color_btn_z, 0.85f));
     if (pad_glow[PIN_Z] >= 1.f && pad_glow_prev[PIN_Z] < 1.f)
-        Hud_PillRing(zx, zy, 0.8f * s + 0.3f, 0.34f * s + 0.3f, zr, 0.1f, Color_Mix(color_btn_z, color_white, 0.5f));
+        Hud_PillRing(zx, zy, 0.8f * s + 0.3f * s, 0.34f * s + 0.3f * s, zr, 0.1f * s, Color_Mix(color_btn_z, color_white, 0.5f));
 #undef RING_AT
 
     Ring_CStick(pad, cx, cy + RING_C_Y * s, s);

@@ -1876,6 +1876,7 @@ typedef struct Prediction
     float facing;
     Vec2 pos[LL_SIM_FRAMES + 1];       // fighter position per frame, [0] = start
     float bottom[LL_SIM_FRAMES + 1];   // ECB bottom per frame
+    float top[LL_SIM_FRAMES + 1];      // ECB top per frame, for the log
     s8 ts[LL_SIM_FRAMES + 1];          // tracked state per frame
     EcbSample land_ecb;                // ECB at touchdown
 
@@ -2894,6 +2895,7 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
     p->pos[0].X = s.x;
     p->pos[0].Y = s.y;
     p->bottom[0] = s.bottom;
+    p->top[0] = s.ecb.top;
     p->ts[0] = s.ts;
     p->ai_mask[0] = 0;
     p->ai_lag_mask[0] = 0;
@@ -2916,6 +2918,7 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
         p->pos[k].X = s.x;
         p->pos[k].Y = s.y;
         p->bottom[k] = s.bottom;
+        p->top[k] = s.ecb.top;
         p->ts[k] = s.ts;
         p->ai_mask[k] = 0;
         p->ai_lag_mask[k] = 0;
@@ -4945,6 +4948,9 @@ static void World_Start(int count, u8 shape, u8 size)
     HSD_StateSetPointSize(size, 5);
     // blended, no depth writes, and the depth test off (on top) or less-equal
     HSD_SetupRenderMode(world_on_top ? 0x68000002 : 0x60000002);
+    // the same depth mode again, straight to GX: something that set it
+    // directly in between would leave the cached state stale
+    GXSetZMode(1, world_on_top ? GX_ALWAYS : GX_LEQUAL, 0);
     if (world_add)
         HSD_StateSetBlendMode(GX_BM_BLEND, GX_BL_ONE, GX_BL_ONE, GX_LO_NOOP);
     GXSetVtxAttrFmt(GX_VTXFMT0, GX_VA_POS, GX_POS_XYZ, GX_F32, 0);
@@ -5482,7 +5488,8 @@ static void Hud_TextAligned(const char *text, float x, float y, float size, GXCo
     {
         Text *t = hud->text_cache[slot];
         t->align = align;
-        t->use_aspect = 0; // fitting to the HUD's 8-unit box squeezes long lines
+        t->use_aspect = 0;       // fitting to the HUD's 8-unit box squeezes long lines
+        t->is_depth_compare = 0; // the stage's depth would hide it where the camera is close
     }
 }
 
@@ -6433,6 +6440,15 @@ static void Log_Camera(FighterData *fp)
     Log(buf);
 
     Prediction *p = live_visible ? pred_live : 0;
+    if (p && p->num > 0)
+    {
+        // the path's first frames: position and ECB top
+        int n = sprintf(buf, "LLPATH %d", event_vars->game_timer);
+        for (int k = 0; k <= p->num && k <= 12; k++)
+            n += sprintf(buf + n, " %.2f,%.2f,%.2f", p->pos[k].X, p->pos[k].Y, p->top[k]);
+        sprintf(buf + n, "%s\n", p->land_frame ? "" : p->uncertain_from <= p->num ? " stop" : " none");
+        Log(buf);
+    }
     if (p && p->land_frame)
     {
         int k = p->land_frame;
@@ -6452,19 +6468,30 @@ static void Markers_Draw(void);
 // growing brighter; on each frame of the window the whole slide flares
 // (brightest on the first and last), and a hit sends a flash rising off
 // it. Only the directions that work light up.
+// A glow standing on the floor from xa to xb, just behind Falcon's middle:
+// a bright line along the surface and light falling off fast above it.
+#define GLOW_Z -1.f
+
 static void Glow_Span(float xa, float xb, float y, float h, GXColor c)
 {
     if (xb - xa < 0.05f || c.a == 0)
         return;
+    GXColor mid = Color_Fill(c, 0.35f);
     GXColor top = {0, 0, 0, 0};
-    World_Start(4, GX_QUADS, 0);
-    GFX_AddVtx(xa, y, 0, c);
-    GFX_AddVtx(xb, y, 0, c);
-    GFX_AddVtx(xb, y + h, 0, top);
-    GFX_AddVtx(xa, y + h, 0, top);
-    World_Start(2, GX_LINES, 36);
-    GFX_AddVtx(xa, y + 0.1f, 0, c);
-    GFX_AddVtx(xb, y + 0.1f, 0, c);
+    float ym = y + h * 0.3f;
+    World_Start(8, GX_QUADS, 0);
+    GFX_AddVtx(xa, y, GLOW_Z, c);
+    GFX_AddVtx(xb, y, GLOW_Z, c);
+    GFX_AddVtx(xb, ym, GLOW_Z, mid);
+    GFX_AddVtx(xa, ym, GLOW_Z, mid);
+    GFX_AddVtx(xa, ym, GLOW_Z, mid);
+    GFX_AddVtx(xb, ym, GLOW_Z, mid);
+    GFX_AddVtx(xb, y + h, GLOW_Z, top);
+    GFX_AddVtx(xa, y + h, GLOW_Z, top);
+    GXColor line = Color_Mix(c, Color_Fill(color_white, c.a / 255.f), 0.3f);
+    World_Start(2, GX_LINES, 42);
+    GFX_AddVtx(xa, y + 0.1f, GLOW_Z, line);
+    GFX_AddVtx(xb, y + 0.1f, GLOW_Z, line);
 }
 
 static void Plat_Glow(FighterData *fp)
@@ -6488,25 +6515,25 @@ static void Plat_Glow(FighterData *fp)
         {
             int k = c->left - 1;
             float p = 1.f - (c->span > 1 ? Clamp01((float)k / (c->span - 1)) : 0);
-            GXColor faint = Color_Fill(base, 0.1f);
-            GXColor lit = Color_Fill(base, 0.2f + 0.35f * p);
-            float h = 2.f + 3.f * p;
+            GXColor faint = Color_Fill(base, 0.12f);
+            GXColor lit = Color_Fill(base, 0.25f + 0.35f * p);
+            float h = 1.2f + 1.3f * p;
             if (ok_l)
             {
-                Glow_Span(L, m, y, 1.2f, faint);
+                Glow_Span(L, m, y, 0.8f, faint);
                 Glow_Span(L, L + (m - L) * p, y, h, lit);
             }
             if (ok_r)
             {
-                Glow_Span(m, R, y, 1.2f, faint);
+                Glow_Span(m, R, y, 0.8f, faint);
                 Glow_Span(R - (R - m) * p, R, y, h, lit);
             }
         }
         else if (pass && c->phase == PH_WINDOW && !c->dim)
         {
             int edge = c->age == 0 || c->age == c->width - 1;
-            GXColor flare = Color_Fill(Color_Mix(base, color_white, edge ? 0.7f : 0.3f), edge ? 0.85f : 0.55f);
-            float h = edge ? 7.f : 5.5f;
+            GXColor flare = Color_Fill(Color_Mix(base, color_white, edge ? 0.6f : 0.25f), edge ? 0.8f : 0.55f);
+            float h = edge ? 3.f : 2.2f;
             if (ok_l)
                 Glow_Span(L, m, y, h, flare);
             if (ok_r)
@@ -6516,12 +6543,12 @@ static void Plat_Glow(FighterData *fp)
         {
             float q = c->age / 16.f;
             GXColor flash = Color_Fill(Color_Mix(base, color_white, 0.6f * (1.f - q)), (c->soft ? 0.5f : 0.9f) * (1.f - q));
-            Glow_Span(L, R, y, 6.f + 8.f * Ease_Out(q), flash);
+            Glow_Span(L, R, y, 2.5f + 3.f * Ease_Out(q), flash);
         }
         else if (!pass && c->phase == PH_FADE && c->age < LL_FADE)
         {
             float q = (float)c->age / LL_FADE;
-            Glow_Span(L, R, y, 2.f * (1.f - q), Color_Fill(Dim_Color(c->dim), 0.4f * (1.f - q)));
+            Glow_Span(L, R, y, 1.2f * (1.f - q), Color_Fill(Dim_Color(c->dim), 0.4f * (1.f - q)));
         }
     }
 }

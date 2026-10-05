@@ -5132,6 +5132,8 @@ static int Cue_FlashAge(Cue *e)
 #define HUD_PY 9.96f  // ... and down
 #define HUD_W 29.4f
 #define HUD_H 24.1f
+#define SAFE_W 27.4f // what stays on screen with any crop: TM-CE's own panels reach about 27.7
+#define SAFE_H 22.f
 #define PX 0.095f // about one pixel of the 640 x 480 picture
 
 static int Hud_FromWorld(float x, float y, float *hx, float *hy)
@@ -5226,7 +5228,11 @@ static void Hud_TextAligned(const char *text, float x, float y, float size, GXCo
     Rect r = {x, y, 0, 2.5f};
     event_vars->HUD_DrawTextEx(text, &r, size, color, (GXColor){0, 0, 0, 0}, 0, 0);
     if (slot < (int)countof(hud->text_cache) && hud->text_cache[slot])
-        hud->text_cache[slot]->align = align;
+    {
+        Text *t = hud->text_cache[slot];
+        t->align = align;
+        t->use_aspect = 0; // fitting to the HUD's 8-unit box squeezes long lines
+    }
 }
 
 static void Hud_Text(const char *text, float x, float y, float size, GXColor color)
@@ -5715,15 +5721,15 @@ static void Meter_Above(FighterData *fp)
         len = 31;
     float w = len * pitch, h = meter_rows * (MT_CH + MT_GAP) + 1.5f;
     float gx = anchor_x - (MT_CW + (wide ? MT_WIDE : 0)) / 2;
-    if (gx > HUD_W - 0.6f - w)
-        gx = HUD_W - 0.6f - w;
-    if (gx < -HUD_W + 0.6f)
-        gx = -HUD_W + 0.6f;
+    if (gx > SAFE_W - w)
+        gx = SAFE_W - w;
+    if (gx < -SAFE_W)
+        gx = -SAFE_W;
     float base = anchor_y;
-    if (base > HUD_H - 0.6f - h)
-        base = HUD_H - 0.6f - h;
-    if (base < -HUD_H + 0.6f)
-        base = -HUD_H + 0.6f;
+    if (base > SAFE_H - h)
+        base = SAFE_H - h;
+    if (base < -SAFE_H)
+        base = -SAFE_H;
     Meter_Draw(gx, base, 1.f, 31, 0);
 }
 
@@ -5731,8 +5737,8 @@ static void Meter_Above(FighterData *fp)
 // in the bottom left corner.
 static void Meter_Fixed(void)
 {
-    float gx = Options_Main[OPT_STICK].val == STICK_LEFT ? 3.6f : -25.4f;
-    Meter_Draw(gx, -22.6f, MT_FIXED, MT_FIXED_MAX, 1);
+    float gx = Options_Main[OPT_STICK].val == STICK_LEFT ? 3.6f : -SAFE_W + 3.2f;
+    Meter_Draw(gx, -SAFE_H + 0.4f, MT_FIXED, MT_FIXED_MAX, 1);
 }
 
 ///////////////////////
@@ -6042,8 +6048,9 @@ static void Stick_Draw(FighterData *fp)
     int place = Options_Main[OPT_STICK].val;
     if (place == STICK_OFF)
         return;
-    float cx = place == STICK_LEFT ? -24.8f : place == STICK_RIGHT ? 24.8f : 0.f;
-    float cy = -20.6f, R = 2.6f;
+    float R = 2.6f;
+    float cx = place == STICK_LEFT ? -SAFE_W + R : place == STICK_RIGHT ? SAFE_W - R : 0.f;
+    float cy = -SAFE_H + R;
 
     // the gate: an octagon with corners at the notches
     float vx[9], vy[9];
@@ -6116,8 +6123,8 @@ static void Panel_Draw(void)
     if (!Options_Main[OPT_PANEL].val)
         return;
     int right = !panel_left;
-    float x = right ? HUD_W - 0.6f : -HUD_W + 0.6f;
-    float y = HUD_H - 3.0f;
+    float x = right ? SAFE_W : -SAFE_W;
+    float y = SAFE_H - 3.0f;
     Panel_Line(x, y, right, text_next, next_kind);
     Panel_Line(x, y - 2.4f, right, text_last, last_kind);
     if (Options_Dev[DOPT_EXACT].val)
@@ -7630,11 +7637,15 @@ static int Route_Same(LedgeRoute *a, LedgeRoute *b)
     return a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->kind == b->kind && a->press == b->press;
 }
 
+static int Route_Galint(LedgeRoute *r, int e, int intang);
+
 // The best routes of the kind chosen in the menu, best first. Routes that
-// only differ in holding toward the stage after the jump count once.
+// only differ in holding toward the stage after the jump count once, and a
+// route that keeps no GALINT even right after the grab isn't one.
 static int Ledge_Top(LedgeEntry *L, LedgeRoute *out, int max)
 {
     int kinds = Options_Ledge[LOPT_KIND].val;
+    int full = (*stc_ftcommon)->cliff_invuln_time;
     int n = 0;
     LedgeRoute pool[LR_SIGS];
     int pool_n = 0;
@@ -7646,6 +7657,8 @@ static int Ledge_Top(LedgeEntry *L, LedgeRoute *out, int max)
         if (kinds == ROUTES_NIL && r->kind != LAND_NIL)
             continue;
         if (kinds == ROUTES_AI && r->kind != LAND_AI)
+            continue;
+        if (Route_Galint(r, -1, full) <= 0)
             continue;
         pool[pool_n++] = *r;
     }
@@ -7854,7 +7867,7 @@ static void Route_Text(LedgeRoute *r, int galint, char *out)
         t += sprintf(t, ", wait %d", r->wait);
     if (r->ff > 0)
         t += sprintf(t, ", FF %d", r->ff);
-    t += sprintf(t, ", jump in%s", r->hold ? " and hold" : ", let go");
+    t += sprintf(t, ", DJ in, %s", r->hold ? "hold" : "let go");
     if (r->kind == LAND_AI)
         t += sprintf(t, ", %s", tracked_state_names[r->aerial]);
     if (galint >= 0)
@@ -7944,7 +7957,7 @@ static void Ledge_Think(FighterData *fp, int sid)
             else if (Routes_On())
             {
                 int kind = Options_Ledge[LOPT_KIND].val;
-                sprintf(text_next, "No %s route from this ledge", kind == ROUTES_BOTH ? "NIL or AI" : route_kind_names[kind]);
+                sprintf(text_next, "No %s route keeps GALINT here", kind == ROUTES_BOTH ? "NIL or AI" : route_kind_names[kind]);
                 next_kind = -1;
             }
         }

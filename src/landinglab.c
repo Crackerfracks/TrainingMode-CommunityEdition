@@ -7283,7 +7283,8 @@ static void Spot_Draw(FighterData *fp)
 #define PAD_STICK_H 5.2f
 #define PAD_STICK_X 3.5f // the stick's center in the full block
 #define PAD_R 2.6f       // the stick gate's radius
-#define PCT_HALF_W 4.8f  // half the percent display's width (a guess)
+#define PCT_HALF_W 6.4f  // half a percent display's width, "%" and stock icon included
+#define PCT_TOP 7.f      // its top above its HUD position
 
 #define PAD_TRAIL 8
 #define PAD_CTRAIL 4
@@ -7422,7 +7423,7 @@ static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
     float rs = ring_sizes[Options_Hud[HOPT_PAD_SIZE].val];
     float w = ring ? 2 * RING_A * rs : buttons ? PAD_W : PAD_STICK_W;
     float h = ring ? 2 * RING_B * rs : buttons ? PAD_H : PAD_STICK_H;
-    float left = SAFE_W - w;
+    float left = SAFE_W - w, bottom = -SAFE_H + 0.4f;
     int place = Options_Hud[HOPT_STICK].val;
     if (place == STICK_LEFT)
         left = -SAFE_W;
@@ -7431,13 +7432,39 @@ static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
         Vec3 *hp = Match_GetPlayerHUDPos(fp->ply);
         if (hp)
         {
-            left = hp->X + PCT_HALF_W;
-            if (left + w > SAFE_W)
-                left = hp->X - PCT_HALF_W - w;
+            // every player's percent, so a CPU's isn't covered either
+            Box pct[4];
+            int n = 0;
+            for (int i = 0; i < 4; i++)
+            {
+                Vec3 *o = Fighter_GetSlotType(i) != 3 ? Match_GetPlayerHUDPos(i) : 0;
+                if (o)
+                    pct[n++] = (Box){o->X - PCT_HALF_W, -SAFE_H - 1.f, o->X + PCT_HALF_W, o->Y + PCT_TOP};
+            }
+            // beside his percent, the side toward the middle first, then
+            // above it; the first spot on screen that covers no percent
+            float side = hp->X > 0.5f ? -1.f : 1.f;
+            float cand[3][2] = {
+                {side > 0 ? hp->X + PCT_HALF_W + 0.2f : hp->X - PCT_HALF_W - 0.2f - w, bottom},
+                {side > 0 ? hp->X - PCT_HALF_W - 0.2f - w : hp->X + PCT_HALF_W + 0.2f, bottom},
+                {hp->X - w / 2, hp->Y + PCT_TOP + 0.3f},
+            };
+            int pick = 2;
+            for (int c = 0; c < 2 && pick == 2; c++)
+            {
+                Box b = {cand[c][0], cand[c][1], cand[c][0] + w, cand[c][1] + h};
+                int clear = b.x0 >= -SAFE_W - 0.01f && b.x1 <= SAFE_W + 0.01f;
+                for (int i = 0; i < n && clear; i++)
+                    clear = !Box_Hit(&b, &pct[i]);
+                if (clear)
+                    pick = c;
+            }
+            left = cand[pick][0];
+            bottom = cand[pick][1];
         }
     }
     *x0 = left;
-    *y0 = -SAFE_H + 0.4f;
+    *y0 = bottom;
     *x1 = left + w;
     *y1 = *y0 + h;
 }
@@ -7537,7 +7564,7 @@ static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R
     // the deadzone cross, where an axis reads as zero
     float rx = pad->fstickX, ry = pad->fstickY;
     float dzx = Common_Float(0x0), dzy = Common_Float(0x4);
-    GXColor band = Color_Fill(color_white, 0.16f);
+    GXColor band = Color_Fill(color_white, 0.3f);
     float len = R * 0.88f;
     Hud_Rect(cx - dzx * R, cy - len, cx + dzx * R, cy + len, band);
     Hud_Rect(cx - len, cy - dzy * R, cx - dzx * R, cy + dzy * R, band);
@@ -8031,7 +8058,8 @@ static void Log_Camera(FighterData *fp)
         last_hud[0] = hx;
         last_hud[1] = hy;
         last_hud[2] = px0;
-        sprintf(buf, "LLHUD ply %d pct %.2f %.2f pad %.2f %.2f %.2f %.2f\n", fp->ply, hx, hy, px0, py0, px1, py1);
+        sprintf(buf, "LLHUD ply %d pct %.2f %.2f pad %.2f %.2f %.2f %.2f dz %.4f %.4f\n", fp->ply, hx, hy, px0, py0, px1, py1,
+                Common_Float(0x0), Common_Float(0x4));
         Log(buf);
     }
 
@@ -8044,6 +8072,24 @@ static void Log_Camera(FighterData *fp)
             n += sprintf(buf + n, " %.2f,%.2f,%.2f", p->pos[k].X, p->pos[k].Y, p->top[k]);
         sprintf(buf + n, "%s\n", p->land_frame ? "" : p->uncertain_from <= p->num ? " stop" : " none");
         Log(buf);
+
+        // on a double jump's first frame, the whole path with the ECB
+        // bottom, to check against the frames that follow
+        static int last_sid = -1;
+        int ts = Tracked_Index(fp->state_id);
+        if (fp->state_id != last_sid && (ts == TS_JUMPAERIALF || ts == TS_JUMPAERIALB))
+        {
+            int last = p->land_frame ? p->land_frame : p->num;
+            for (int k0 = 0; k0 <= last; k0 += 10)
+            {
+                n = sprintf(buf, "LLPATHD %d %d", event_vars->game_timer, k0);
+                for (int k = k0; k < k0 + 10 && k <= last; k++)
+                    n += sprintf(buf + n, " %.3f,%.3f,%.3f", p->pos[k].X, p->pos[k].Y, p->bottom[k]);
+                sprintf(buf + n, "\n");
+                Log(buf);
+            }
+        }
+        last_sid = fp->state_id;
     }
     if (p && p->land_frame)
     {
@@ -9785,6 +9831,21 @@ static void Route_Path(FighterData *fp, int ledge, LedgeRoute *r)
               route_path_bottom, &route_path_num);
     route_path_of = *r;
     route_path_ledge = ledge;
+    if (cue_log)
+    {
+        // where the route's simulation has Falcon, frame by frame from the
+        // drop, to check against a scripted run of it
+        char buf[400];
+        for (int k0 = 0; k0 < route_path_num; k0 += 10)
+        {
+            int n = sprintf(buf, "LLRPATH drop %d wait %d ff %d dj_x %d away %d hold %d %d", r->drop, r->wait, r->ff,
+                            r->dj_x, r->fall_away, r->hold, k0);
+            for (int k = k0; k < k0 + 10 && k < route_path_num; k++)
+                n += sprintf(buf + n, " %.3f,%.3f,%.3f", route_path[k].X, route_path[k].Y, route_path_bottom[k]);
+            sprintf(buf + n, "\n");
+            Log(buf);
+        }
+    }
 }
 
 static void Route_Cell(MeterRow *row, int base, int n, int kind, int glyph)

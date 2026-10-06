@@ -1,143 +1,91 @@
-﻿<p align="center"><img src="Logos/Training-Mode-banner.png"  alt=""  width="300"/></p>
+<p align="center"><img src="Logos/Training-Mode-banner.png"  alt=""  width="300"/></p>
 
-# Training Mode - Community Edition
+# Training Mode CE + Landing Lab
 
-Training Mode - Community Edition is an expanded and updated version of UnclePunch's training modpack for Super Smash Bros. Melee.
+An unofficial build of [Training Mode - Community Edition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition) (TM-CE) v1.4 with one new event: **Landing Lab**, a Captain Falcon trainer that shows NILs, aerial interrupts and wavelands before you land, and teaches the best ledge routes frame by frame.
 
-To download the ISO, click [here](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition/releases/latest).
+Everything else is TM-CE as it is. For the full TM-CE feature list, see the [official README](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition#readme).
 
-Join [the discord](https://discord.gg/2Khb8CVP7A) to discuss changes, new features, or ask for assistance.
+> **Not made or supported by the TM-CE team.** Landing Lab was designed and playtested by Stephen ([Crackerfracks](https://github.com/Crackerfracks)) and its code was written with Claude, an AI coding assistant. TM-CE doesn't accept AI-written code, so please send feedback about this build here, not to the TM-CE Discord or repository.
 
-## Development
-Please read [DEVELOPMENT.md](DEVELOPMENT.md).
+## Install
 
-## Changes From the Original
-- New Training Lab Features:
-    - Recording:
-        - Reworked recording UI. Allows re-saveing existing recordings with different percents or positioning.
-        - Savestates now require holding DPad right, preventing accidental savestates.
-        - Set chances for slots during random playback.
-        - Option to auto-restore state when the CPU performs a counter action.
-        - Takeover HMN or CPU playback at any point.
-        - Press DPad left/right when browsing savestates to quickly change pages.
-        - Savestates can now always be saved. (May cause crashes if you save during special moves).
-        - Option for the CPU to counter on hit or recording end during playback.
-        - Play a recording slot as a counter action.
-        - Resave Positions option will start the recording from a new position, without removing inputs.
-        - Prune Positions option will start the recording from a new position, truncating inputs.
-        - Re-Record mode will allow your to record over a previously recorded slot using playback takeover.
-        - Start Paused option will only start the replay on your first input.
-        - Add random additional percent when loading a state.
-        - Slot Management menu - delete, copy, and edit slots.
-    - CPU Options:
-        - Random custom DI option. The CPU will pick a random option from your custom TDI.
-        - CPU Shield angling options.
-        - Added Wavedash counter actions.
-        - Tech animations can be set invisible after they are distinguishable.
-        - Added usmash OoS and all specials moves as counter actions.
-        - All special moves can be used as counter actions.
-        - Neutral jump action, set as the default.
-        - SDI and ASDI options.
-        - SDI is now set by number of inputs rather than by chance.
-        - SDI and mashing are set to none by default.
-        - Move CPU option.
-        - Choose a port to control the CPU option.
-        - CPU will use random TDI after custom TDI ends.
-        - Option to reverse Custom TDI if on the other side of the player.
-        - Tech lockout option. This prevents the CPU from teching in quick succession.
-        - Tech trap option. This prevents the CPU from teching for a short window after being hit.
-        - Added dash through and dash back counter actions.
-        - Option to force shielded projectiles to always be powershielded.
-    - Other Changes:
-        - Alter set OSDs with the OSD menu in the lab.
-        - Alter character RNG - choose misfire, nana throws, peach pulls and fsmash, and GnW hammer.
-        - Added advanced counter actions - manually choose counter actions for each specific hit.
-        - Added "Freeze CPU" option to freeze a CPU's hitboxes in place.
-        - Set a chance to wait in miss tech.
-        - Added shield health option.
-        - Added new shortcut system, currently only supporting frame advance (Press Y then A in the menu).
-        - Hitboxes are colored by ID and sorted by priority.
-        - Game speed option.
-        - Color overlays.
-        - Lock percents.
-        - Hazard toggle.
-        - Hide stage model.
-        - Item grab range display.
-        - Show input and info displays for both HMN and CPU.
-        - Mirror recordings.
-        - The overlay, taunt, and input display options are saved to the memcard.
-        - R can be used as a frame advance button.
-        - Stage options to control stadium transformations and FOD platform heights.
-        - Custom action state OSDs.
-    - Import Menu Changes:
-        - Fixed glitches when importing using a port other than port 1.
-        - Fixed Sheik/Zelda transformations when loading.
-        - Recordings are now filtered by the selected HMN character.
-        - Cursor can now wrap.
-        - Deleting replays too fast will no longer crash.
-- Ledgedash Event Changes:
-    - Colours have been updated to be colourblind friendly.
-    - The airdodge angle is now consistent with other events.
-    - Invincible grab hitboxes show like other hitboxes.
-    - Added reset delay option.
-    - Camera is now consistent across reset options.
-    - HUD now updates and displays every frame.
-    - Game speed option.
-    - Swap sides on auto reset option.
-    - Option to always maintain full ledge invincibility while on the ledge.
-    - The GALINT frame is now correct if ledgedashing without refreshing.
-    - Will no longer immediately reset on aerial.
-    - Option to show current state as an overlay.
-    - Sopo is used instead of both climbers.
-- New Edgeguard Event:
-    - Replaces Armada Shine event.
-    - Learn the basics of edgeguarding Fox, Falco, Marth, Sheik, and Falcon!
-    - Adjust the options the opponent uses to change the difficulty or practice specific situations.
-    - Choose between preset values or manually adjust hit angle, knockback, and damage.
-- OSD Changes:
-    - Act OoWait OSD will trigger even with intermediate buffered actions such as a frame of walk.
-    - Removed Max OSDs and Recommended OSDs options, replacing with a new OSD Position option.
-    - Wavedash OSD now shows if it was a short hop or full hop.
-    - Removed broken OSDs, rewriting the most important ones.
-    - Added new glide toss, aerial out of double jump, special out of jump, and double jump out of jump OSDs.
-    - Added new lockout timer OSDs.
-    - Added new Fighter-Specific Tech OSDs with:
-        - Spacies: Act OoShine and Shorten Frame.
-        - Peach: Act OoFloat.
-        - Yoshi: Egg Toss angle and strength.
-- Bugfixes/Small Changes:
-    - **Fixed cpu acting too late out of sakurai angle and other non-knockdown hits (such as fox drill).**
-    - Updated to UCF 0.84 (Allows practicing with dashback out of crouch).
-    - All trigger-based functionality can now be performed with analog-only triggers.
-    - Nametags will now show up in C events.
-    - Slow down advanced camera with R.
-    - DIDraw will now show for sheik and after throws.
-    - System inputs in info display will now work for ports other than port 1.
-    - The lab now saves a minor savestate on boot.
-    - Act OoHitstun now works after being hit by falco laser.
-    - The powershield event has been rewritten and given a new laser height option.
-    - Adjustable timing in Amsah tech event.
-    - Jump actions no longer make the CPU self-destruct.
-    - Various OSDs have been fixed.
-    - Lightshield now works in recordings.
-    - Added successful counters to the LCancel and Wavedash events.
-    - Fix CPU DI on back throws and moves that send backwards.
-    - Can now use lightshield L with DPad to adjust percents.
-    - CPUs now DI DK cargo throw.
-    - Samus homing missiles will target the CPU.
-    - Nana will not drop shield when Popo's shield is hit.
-    - Added the polling drift fix.
-    - Deleting replays too fast will no longer crash.
-    - Every character can be used in Amsah Tech training.
-    - Removed the maximum distance in Reversal training.
-    - Added getup attacks and dash attack to Reversal training.
-    - Added option to move to the platform in Reversal training.
-    - Infinite shields now applies to nana.
-- Work in progress:
-    - Reaction Tech Chase Event
-    - Improving the savestate format
-- Developer Features:
-    - Simple and easily reproducible builds on Windows and Linux.
-    - Simple to add new events - no need to touch ASM.
-    - Fast recompilation on Linux using make.
-    - Simplified and performant [tool](https://github.com/AlexanderHarrison/gc_fst) to extract and rebuild ISOs.
+You need your own copy of **Super Smash Bros. Melee NTSC 1.02** as an ISO. Nothing from the game is included; the download is a patch that turns your ISO into this build.
+
+1. Download `TM-CE-LandingLab-<version>.zip` from [Releases](https://github.com/Crackerfracks/TrainingMode-CommunityEdition/releases) and unzip it.
+2. Make the ISO:
+    - **Windows:** drag your Melee ISO onto `DRAG VANILLA MELEE HERE.bat`.
+    - **Linux / macOS:** install xdelta (`sudo apt install xdelta3`, `sudo pacman -S xdelta3` or `brew install xdelta`), then run `./build_linux_and_mac.sh path/to/melee.iso`.
+3. This writes `TM-CE-LandingLab.iso` in the same folder. It never overwrites an official `TM-CE.iso`.
+4. Open it in Dolphin (Slippi's Dolphin works). It uses TM-CE's game ID (GTME01), so Dolphin treats it like TM-CE for settings and saves.
+
+If the patch fails, the ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596259dc155a174`.
+
+## Start Landing Lab
+
+Event Mode → **Character-specific Tech** page → **Landing Lab** (the last event). Pick Captain Falcon and any stage; it was built and tested mostly on Battlefield. Press **Start** for the menu.
+
+## What it shows
+
+As you move, Landing Lab simulates where Falcon's ECB will land if you keep holding the stick, and marks what's possible on the way:
+
+| Color | Means |
+| --- | --- |
+| Green | **NIL**: holding the stick lands you straight into standing, no landing lag |
+| Pink | **Aerial interrupt (AI)**: starting an aerial here lands you on its first frame, rising or falling, onto a platform or a ledge |
+| Cyan | **Perfect waveland or wavedash**: an airdodge just below sideways lands at once with full speed |
+| Periwinkle | **GALINT**: ledge intangibility you still have once you can act on stage |
+
+- **Paths**: the landing path (ECB bottom), a dotted body path, and markers where each input is due (white stick, yellow jump, pink aerial with the C-stick directions that work, cyan airdodge).
+- **Timer**: frame cells slide into a gate next to Falcon; press when a cell reaches it. Solid cells are presses, hollow ones are touchdowns, the white gate means press now, slate means missed.
+- **Spot timers**: brackets close in on the landing spot for an AI or NIL; for a waveland, ticks run in from the ends of the slide.
+- **Controller**: your real stick, the band where Melee reads an axis as zero, a trail of recent frames, and the fastfall line, which lights when a flick would fastfall. It moves to stay clear of every player's percent.
+
+## Ledge Practice
+
+While Falcon hangs on a ledge, Landing Lab lists the routes to the stage that keep the most GALINT: drop, wait, fastfall, double jump, then a NIL or an AI.
+
+- **Route Kind**: NIL, AI or Both. **Route**: Best, Second or Third.
+- **Assist**: quicktime practice. The game freezes on each input of the route and waits for you, then plays on at full speed. Shorten **Assist Wait** as the timing sinks in.
+- **Reset**, **Reset Delay**, **Starting Position** and **Keep Ledge Invincibility** work like TM-CE's ledgedash event.
+
+## Controls
+
+| Input | Does |
+| --- | --- |
+| Start | Open the menu |
+| D-pad right (hold) | Save Falcon's position |
+| D-pad left | Load the saved position |
+| D-pad down | Frame Advance on/off |
+| Advance button (L by default, set in Speed) | Step one frame during Frame Advance; hold to step slowly |
+
+## Menu
+
+| Menu | What's in it |
+| --- | --- |
+| Cues | Which landings get cues (NIL, AI, waveland), the AI filter (Useful or All), body flash, platform glow |
+| Paths | Landing and body paths, input markers and their size, frame dots, slide-off line, jump preview |
+| HUD | Timer, spot timers, controller display and its look and size, info panel |
+| Sounds | Chime on a hit, and which slips buzz |
+| Ledge Practice | Routes, Assist, resets, camera |
+| Speed | Game speed and Frame Advance |
+| Developer | Accuracy count, collision view, debug log, test scripts |
+
+## Known limits
+
+- Captain Falcon only.
+- Tested in Dolphin. Not tested on console.
+- Paths drawn gray rely on ECB frames the event hasn't seen yet; it learns them as you play.
+- Once, stray drawings showed up over the version text in the bottom-right corner after toggling options on the ledge, until a restart. If you see it, a photo and what you pressed just before would help a lot.
+
+## Feedback
+
+Open an issue on [this repository](https://github.com/Crackerfracks/TrainingMode-CommunityEdition/issues) or tell Stephen directly. The most useful reports say the stage, what Falcon did, and the frame you pressed on (count frames in Frame Advance).
+
+## Building from source
+
+See [DEVELOPMENT.md](DEVELOPMENT.md). `./build.sh path/to/melee.iso release` builds the ISO and the release zip. Landing Lab's code is in `src/landinglab.c`.
+
+## Credits
+
+TM-CE by its contributors, maintained by Alex Harrison, built on UnclePunch's original Training Mode. Landing Lab by Stephen (Crackerfracks), written with Claude.

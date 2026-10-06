@@ -4544,8 +4544,8 @@ static char text_predict[32] = "-";
 static char text_ai[32] = "-";
 static char text_last[48] = "-";
 static char text_next[64] = "-"; // the panel's first line: what's coming up
-static char text_steps[64];
-static char text_frame[32];       // in Frame Advance: the state on screen and its frame       // ... and a ledge route's inputs under it
+static char text_steps[64];       // ... and a ledge route's inputs under it
+static char text_frame[32]; // in Frame Advance: the state on screen and its frame
 static int next_kind = -1;       // the cue (CUE_*) whose color the panel's lines start with, -1 none
 static int last_kind = -1;
 static char text_exact[32] = "-";
@@ -8024,7 +8024,7 @@ static void Panel_Draw(void)
 // exact mapping), and what the timers and the prediction hold. Logged from
 // the draw so the camera is the one this frame is rendered with.
 static int script_cur; // defined with the scripts below
-static int capture_clean; // hide everything the event draws (D-pad up while frame advance is on)
+static int capture_clean; // hide everything the event draws (D-pad up in Frame Advance, with the Debug Log on)
 
 static void Log_Camera(FighterData *fp)
 {
@@ -10073,9 +10073,24 @@ static void Markers_Flush(int side)
             m->cx = lim;
         if (m->cx < -lim)
             m->cx = -lim;
+        // stacked down out of each other's way, or up once that would
+        // leave the screen, and kept on it
+        float low = -SAFE_H + h / 2, high = SAFE_H - h / 2;
+        int dir = -1;
         m->cy = m->py;
-        for (int tries = 0, j; tries < MK_MAX && (j = Marker_Hit(i, h, gap)) >= 0; tries++)
-            m->cy = mk[j].cy - h - gap;
+        for (int tries = 0, j; tries < 2 * MK_MAX && (j = Marker_Hit(i, h, gap)) >= 0; tries++)
+        {
+            m->cy = mk[j].cy + dir * (h + gap);
+            if (dir < 0 && m->cy < low)
+            {
+                dir = 1;
+                m->cy = m->py;
+            }
+        }
+        if (m->cy < low)
+            m->cy = low;
+        if (m->cy > high)
+            m->cy = high;
     }
     for (int i = 0; i < mk_num; i++)
     {
@@ -11542,8 +11557,13 @@ void Event_Update(void)
     int down = pad->down;
     if (down & HSD_BUTTON_DPAD_DOWN)
         Options_Game[GOPT_FRAME_ADV].val ^= 1;
-    if ((down & HSD_BUTTON_DPAD_UP) && Options_Game[GOPT_FRAME_ADV].val)
-        capture_clean ^= 1; // a clean frame for mockups, same frame as the one with cues
+    // a clean frame for mockups, the same frame as the one with cues. Only
+    // for the Developer's captures, and never left on past Frame Advance:
+    // pressed by chance, everything the event draws would stay hidden.
+    if ((down & HSD_BUTTON_DPAD_UP) && Options_Game[GOPT_FRAME_ADV].val && (Options_Dev[DOPT_LOG].val || script_cur >= 0))
+        capture_clean ^= 1;
+    if (!Options_Game[GOPT_FRAME_ADV].val)
+        capture_clean = 0;
     if ((down & HSD_BUTTON_DPAD_LEFT) && Options_Dev[DOPT_SCRIPT].val)
     {
         script_cur = -1;

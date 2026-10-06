@@ -4304,7 +4304,7 @@ static EventOption Options_Game[GOPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Frame Advance",
         .desc = {"Freeze the game and step one frame per press of",
-                 "the Advance Button, or hold it to keep going.",
+                 "the Advance Button, or hold it to step slowly.",
                  "D-pad down turns this on and off at any time."},
     },
     {
@@ -4515,6 +4515,18 @@ typedef struct Cue
 static Cue cue_live[CUE_NUM]; // counting down or in the window
 static Cue cue_end[CUE_NUM];  // the last one's ending
 static int squat_wd;          // in the jumpsquat: frames until a wavedash's airdodge
+static int wd_late;           // that airdodge came a frame after takeoff
+static int cue_log;           // write the timers' presses and endings to the log
+static const char *cue_names[CUE_NUM] = {"AI", "WL", "NIL"};
+
+static void Cue_Log(int kind, const char *what, int a, int b)
+{
+    if (!cue_log)
+        return;
+    char buf[80];
+    sprintf(buf, "LLCUE %d %s %s %d %d\n", event_vars->game_timer, cue_names[kind], what, a, b);
+    OSReport("%s", buf);
+}
 static int galint_now;        // ledge intangibility left once Falcon has let go of the ledge
 
 // last frame's next windows, to tell when one was skipped or missed
@@ -4532,7 +4544,7 @@ static char text_predict[32] = "-";
 static char text_ai[32] = "-";
 static char text_last[48] = "-";
 static char text_next[64] = "-"; // the panel's first line: what's coming up
-static char text_steps[48];       // ... and a ledge route's inputs under it
+static char text_steps[64];       // ... and a ledge route's inputs under it
 static int next_kind = -1;       // the cue (CUE_*) whose color the panel's lines start with, -1 none
 static int last_kind = -1;
 static char text_exact[32] = "-";
@@ -5084,7 +5096,7 @@ static void Window_Feedback(FighterData *fp, int ts)
     }
     else if (Jump_Or_Fall(prev_ts) && ts == TS_ESCAPEAIR)
     {
-        int timed = prev_wl_first && prev_wl_first <= LL_COUNT_FRAMES;
+        int timed = prev_wl_first && prev_wl_first <= LL_COUNT_FRAMES && !cue_live[CUE_WL].held;
         miss = timed && !(prev_wl_now & Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y));
         if (miss)
             Cue_Missed(CUE_WL);
@@ -5215,6 +5227,7 @@ static void Cue_Finish(int kind, int phase, int dim)
     Cue *c = &cue_live[kind];
     if (!c->phase)
         return;
+    Cue_Log(kind, "end", phase, dim);
     Cue *e = &cue_end[kind];
     *e = *c;
     e->phase = phase;
@@ -5276,6 +5289,7 @@ static void Cue_Pressed(int kind)
     Cue *c = &cue_live[kind];
     if (!c->phase || c->dim)
         return;
+    Cue_Log(kind, "press", c->phase == PH_WINDOW ? c->age : -c->left, c->wd);
     if (c->phase != PH_WINDOW)
         Cue_Open(c);
     c->held = 1;
@@ -5300,6 +5314,7 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
 {
     Cue *c = &cue_live[kind];
     Cue *e = &cue_end[kind];
+    Cue_Log(kind, "hit", lag, soft);
     if (c->phase)
         *e = *c;
     else
@@ -5324,17 +5339,18 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
 // other one still running fades out quickly, or as a miss if it was due.
 static void Cue_Landed(FighterData *fp, int kind, int landing_air)
 {
+    // a wavedash timed out of the jumpsquat counts as perfect
+    Cue *wl = &cue_live[CUE_WL];
+    int wd_timed = wl->phase == PH_WINDOW && wl->wd && !wl->dim;
+
+    // an airdodge that lands with no waveland timer behind it is only a landing
     int hit = -1;
     if (kind == LAND_NIL && Cues_Nil())
         hit = CUE_NIL;
     else if (kind == LAND_AI && !landing_air && Cues_Ai())
         hit = CUE_AI;
-    else if ((kind == LAND_PERFECT_WL || kind == LAND_WAVELAND) && Cues_Waveland())
+    else if ((kind == LAND_PERFECT_WL || (kind == LAND_WAVELAND && wl->phase)) && Cues_Waveland())
         hit = CUE_WL;
-
-    // a wavedash timed out of the jumpsquat counts as perfect
-    Cue *wl = &cue_live[CUE_WL];
-    int wd_timed = wl->phase == PH_WINDOW && wl->wd && !wl->dim;
 
     for (int i = 0; i < CUE_NUM; i++)
     {
@@ -5347,7 +5363,7 @@ static void Cue_Landed(FighterData *fp, int kind, int landing_air)
     if (hit == CUE_WL)
     {
         float v = fp->phys.self_vel_ground.X != 0 ? fp->phys.self_vel_ground.X : prev_vel.X;
-        int perfect = kind == LAND_PERFECT_WL || wd_timed;
+        int perfect = kind == LAND_PERFECT_WL || (wd_timed && !wd_late);
         Cue_Hit(fp, CUE_WL, (int)common_waveland_lag, !perfect, v >= 0 ? DODGE_RIGHT : DODGE_LEFT);
     }
     else if (hit >= 0)
@@ -8262,10 +8278,11 @@ static void Hud_GX(GOBJ *gobj, int pass)
 
 // The game's debug pause, as the lab uses it: while Frame Advance is on the
 // game stays paused, and each press of the advance button runs one frame
-// (holding it runs frames at full speed after half a second). The pause and
+// (held for half a second, it steps 10 times a second). The pause and
 // step checks run every frame, paused or not; the scene resets them when the
 // event ends.
-#define LL_ADVANCE_HOLD 30
+#define LL_ADVANCE_HOLD 30   // frames held before it repeats
+#define LL_ADVANCE_REPEAT 6  // then one step every this many frames
 
 static int Advance_Port(void)
 {
@@ -8294,13 +8311,14 @@ static int Advance_CheckStep(void)
         assist_advance = 0;
         return 1;
     }
-    if (Pause_CheckStatus(1) == 2 || !(pad->held & button))
+    // with Frame Advance off the button is the game's (L airdodges)
+    if (Pause_CheckStatus(1) == 2 || !(Options_Game[GOPT_FRAME_ADV].val || assist_frozen) || !(pad->held & button))
     {
         timer = 0;
         return 0;
     }
     timer++;
-    if (timer != 1 && timer <= LL_ADVANCE_HOLD)
+    if (timer != 1 && (timer < LL_ADVANCE_HOLD || (timer - LL_ADVANCE_HOLD) % LL_ADVANCE_REPEAT))
         return 0;
 
     // the game doesn't see the advance button
@@ -9245,7 +9263,7 @@ void Event_ChangeScript(GOBJ *menu, int value)
 #define LR_WAIT 8           // most frames let go before the fastfall or jump
 #define LR_FF 8             // most frames held down before the jump
 #define LR_DJ_X 3           // sticks tried on the double jump
-#define LR_CANDIDATES (2 * 2 * (LR_WAIT + 1) * (LR_FF + 1) * LR_DJ_X)
+#define LR_CANDIDATES (2 * 2 * 2 * (LR_WAIT + 1) * (LR_FF + 1) * LR_DJ_X)
 #define LR_SIGS 16          // kind x drop x fastfall x hold
 #define LR_SIM 45           // frames simulated after the jump
 #define LR_BUDGET 1500      // simulated frames per game frame, on the ground or ledge
@@ -9282,6 +9300,7 @@ typedef struct LedgeRoute
     u8 ff;      // frames holding down after that; the fastfall starts on the first
     u8 hold;    // after the jump: 1 = keep holding toward the stage
     u8 dj_x;    // the stick on the jump: LR_DJ_IN, LR_DJ_DIAG or LR_DJ_UP
+    u8 fall_away; // before the jump: drift away from the stage (down-away to fastfall)
     u8 aerial;  // AI: the aerial (TS_AIR*)
     u8 press_w; // AI: frames the aerial's window lasts
     s16 dj;     // frame of the double jump; the drop is frame 0
@@ -9465,11 +9484,13 @@ static int Aerial_Pick(u8 mask)
 }
 
 // One route: the drop, wait frames let go, ff frames held down, the double
-// jump (stick in, down-in or let go), then holding toward the stage or not. Fills nil when it
+// jump (stick in, down-in or let go), then holding toward the stage or not.
+// With fall_away the stick drifts away from the stage until the jump (down-
+// away for the fastfall), for room under the stage's lip. Fills nil when it
 // lands with no lag and ai with the first aerial interrupt that has no
 // aerial lag; either comes back not valid. With path, also records where
 // Falcon goes, frame by frame from the drop to the touchdown.
-static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff, int hold, int dj_x,
+static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff, int hold, int dj_x, int fall_away,
                       LedgeRoute *nil, LedgeRoute *ai, Vec2 *path, float *bottom, int *num)
 {
     SimStart st;
@@ -9499,7 +9520,12 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
                 sy = -1.f;
         }
         else if (f > wait)
-            sy = -1.f;
+        {
+            sy = fall_away ? -0.7f : -1.f;
+            sx = fall_away ? -0.7f * L->facing : 0;
+        }
+        else if (fall_away)
+            sx = -L->facing;
         st.stick_x = sx;
         st.stick_y = sy;
         // the stick's timer counts frames since it was pulled down
@@ -9559,6 +9585,7 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
     base.ff = ff;
     base.hold = hold;
     base.dj_x = dj_x;
+    base.fall_away = fall_away;
     base.dj = dj;
     base.press = -1;
     base.ff_at = ff_at;
@@ -9611,6 +9638,8 @@ static int Route_Better(LedgeRoute *a, LedgeRoute *b)
         return a->ff == 0;
     if (a->wait + a->ff != b->wait + b->ff)
         return a->wait + a->ff < b->wait + b->ff;
+    if (a->fall_away != b->fall_away)
+        return !a->fall_away;
     return a->dj_x < b->dj_x;
 }
 
@@ -9648,11 +9677,12 @@ static void Ledge_Solve(FighterData *fp, int budget)
     while (L->next < LR_CANDIDATES && sim_steps - start < budget)
     {
         int c = L->next++;
-        int drop = c % 2, hold = (c / 2) % 2;
-        int wait = (c / 4) % (LR_WAIT + 1), ff = (c / (4 * (LR_WAIT + 1))) % (LR_FF + 1);
-        int dj_x = c / (4 * (LR_WAIT + 1) * (LR_FF + 1));
+        int drop = c % 2, hold = (c / 2) % 2, fall_away = (c / 4) % 2;
+        c /= 8;
+        int wait = c % (LR_WAIT + 1), ff = (c / (LR_WAIT + 1)) % (LR_FF + 1);
+        int dj_x = c / ((LR_WAIT + 1) * (LR_FF + 1));
         LedgeRoute nil, ai;
-        Ledge_Try(fp, L, drop, wait, ff, hold, dj_x, &nil, &ai, 0, 0, 0);
+        Ledge_Try(fp, L, drop, wait, ff, hold, dj_x, fall_away, &nil, &ai, 0, 0, 0);
         Ledge_Keep(L, &nil);
         Ledge_Keep(L, &ai);
     }
@@ -9662,8 +9692,7 @@ static void Ledge_Solve(FighterData *fp, int budget)
 
 static int Route_Same(LedgeRoute *a, LedgeRoute *b)
 {
-    return a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->dj_x == b->dj_x && a->kind == b->kind &&
-           a->press == b->press;
+    return a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->kind == b->kind && a->press == b->press;
 }
 
 static int Route_Galint(LedgeRoute *r, int e, int intang);
@@ -9748,12 +9777,12 @@ static void Route_Path(FighterData *fp, int ledge, LedgeRoute *r)
 {
     LedgeRoute *o = &route_path_of;
     if (route_path_ledge == ledge && o->drop == r->drop && o->wait == r->wait && o->ff == r->ff && o->hold == r->hold &&
-        o->dj_x == r->dj_x && o->kind == r->kind)
+        o->dj_x == r->dj_x && o->fall_away == r->fall_away && o->kind == r->kind)
         return;
     LedgeRoute nil, ai;
     Floor_BuildCache();
-    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, r->dj_x, &nil, &ai, route_path, route_path_bottom,
-              &route_path_num);
+    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, r->dj_x, r->fall_away, &nil, &ai, route_path,
+              route_path_bottom, &route_path_num);
     route_path_of = *r;
     route_path_ledge = ledge;
 }
@@ -9796,10 +9825,11 @@ static void Row_Route(MeterRow *row, LedgeRoute *r, int e, int facing, int galin
     int away = facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
     int ff = r->ff > 0 ? Route_FF(r) : -1;
     int act = Route_ActCell(r);
+    int ff_glyph = !r->fall_away ? GLYPH_DOWN : facing > 0 ? GLYPH_DOWN_LEFT : GLYPH_DOWN_RIGHT;
     Route_Cell(row, base, 0, CELL_PRESS, r->drop == DROP_AWAY ? away : GLYPH_DOWN);
     for (int n = 1; n < r->land; n++)
         Route_Cell(row, base, n, n == ff || n == r->dj ? CELL_PRESS : CELL_AIR,
-                   n == ff ? GLYPH_DOWN : n == r->dj ? GLYPH_JUMP : 0);
+                   n == ff ? ff_glyph : n == r->dj ? GLYPH_JUMP : 0);
     Route_Cell(row, base, r->land, CELL_LAND, 0);
     for (int n = r->land + 1; n < act; n++)
         Route_Cell(row, base, n, CELL_LAG, 0);
@@ -10078,10 +10108,12 @@ static void Markers_Draw(void)
         int from = route_active ? route_e + 1 : 0;
         int away = facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
         int in = facing > 0 ? GLYPH_RIGHT : GLYPH_LEFT;
+        int down_away = facing > 0 ? GLYPH_DOWN_LEFT : GLYPH_DOWN_RIGHT;
         if (from <= 0)
-            Route_Marker(0, r->drop == DROP_AWAY ? away : GLYPH_DOWN, color_white, 0, color_white);
+            Route_Marker(0, r->drop == DROP_AWAY ? away : GLYPH_DOWN, color_white,
+                         r->fall_away && r->drop != DROP_AWAY ? away : 0, color_white);
         if (r->ff > 0 && Route_FF(r) >= from)
-            Route_Marker(Route_FF(r), GLYPH_DOWN, color_white, 0, color_white);
+            Route_Marker(Route_FF(r), r->fall_away ? down_away : GLYPH_DOWN, color_white, 0, color_white);
         if (r->dj >= from)
         {
             int dj_glyph = r->dj_x == LR_DJ_IN     ? in
@@ -10129,6 +10161,8 @@ static void Route_Text(LedgeRoute *r, int galint)
 
     t = text_steps;
     t += sprintf(t, "%s", r->drop == DROP_AWAY ? "away" : "down");
+    if (r->fall_away)
+        t += sprintf(t, ", drift away");
     if (r->wait > 0)
         t += sprintf(t, ", wait %d", r->wait);
     if (r->ff > 0)
@@ -10198,9 +10232,9 @@ static const char *Route_Why(const char *what)
 static void Route_Log(const char *what, LedgeEntry *L, LedgeRoute *r, int galint)
 {
     char buf[200];
-    sprintf(buf, "LLROUTE %s ledge %.4f %.4f facing %d kind %s drop %s wait %d ff %d hold %d dj %d dj_x %d ff_at %d press %d w %d aerial %d land %d act %d galint %d\n",
+    sprintf(buf, "LLROUTE %s ledge %.4f %.4f facing %d kind %s drop %s wait %d ff %d hold %d dj %d dj_x %d away %d ff_at %d press %d w %d aerial %d land %d act %d galint %d\n",
             what, L->x, L->y, L->facing, r->kind == LAND_AI ? "AI" : "NIL", r->drop == DROP_AWAY ? "away" : "down", r->wait,
-            r->ff, r->hold, r->dj, r->dj_x, r->ff_at, r->press, r->press_w, r->aerial, r->land, r->act, galint);
+            r->ff, r->hold, r->dj, r->dj_x, r->fall_away, r->ff_at, r->press, r->press_w, r->aerial, r->land, r->act, galint);
     Log(buf);
 }
 
@@ -11211,6 +11245,7 @@ static void Event_ThinkFrame(GOBJ *event)
 
     ai_show_all = Options_Cues[COPT_AI_FILTER].val == 1;
     int logging = Options_Dev[DOPT_LOG].val || script_cur >= 0;
+    cue_log = logging;
 
     int sid = fp->state_id;
     int ts = Tracked_Index(sid);
@@ -11239,9 +11274,11 @@ static void Event_ThinkFrame(GOBJ *event)
         dodge_late_ok = prev_wl_late;
     }
 
-    // a wavedash's airdodge works from the first frame after takeoff: in
-    // the jumpsquat, count down to it (KneeBend takes off once its frame
-    // reaches the startup time), and on the takeoff frame it's next
+    // a wavedash's airdodge works on the takeoff frame itself (KneeBend goes
+    // straight into the airdodge): in the jumpsquat, count down to it
+    // (KneeBend takes off once its frame reaches the startup time). Its
+    // window is the frame before, as for any press; on the takeoff frame a
+    // jump with no airdodge yet is a frame late
     squat_wd = 0;
     if (Cues_Waveland() && !disturbed)
     {
@@ -11251,7 +11288,7 @@ static void Event_ThinkFrame(GOBJ *event)
             int until = (int)left;
             if (until < left)
                 until++;
-            squat_wd = (until < 1 ? 1 : until) + 1;
+            squat_wd = until < 1 ? 1 : until;
         }
         else if (airborne && prev_state_id == ASID_KNEEBEND)
             squat_wd = 1;
@@ -11263,7 +11300,21 @@ static void Event_ThinkFrame(GOBJ *event)
     next_kind = -1;
 
     Cues_Begin();
-    if (prev_tracked_air && !tracked_air)
+
+    // an airdodge on the takeoff frame or the one after is the wavedash,
+    // whatever the jump's prediction made of it
+    Cue *wdc = &cue_live[CUE_WL];
+    if (wdc->wd && wdc->phase == PH_WINDOW && !wdc->held && !wdc->dim && prev_state_id != sid &&
+        (sid == ASID_ESCAPEAIR || sid == ASID_LANDINGFALLSPECIAL))
+    {
+        wd_late = prev_state_id != ASID_KNEEBEND;
+        Cue_Pressed(CUE_WL);
+    }
+    // landing on the takeoff frame shows no air frame at all
+    int wd_landed = prev_state_id == ASID_KNEEBEND && sid == ASID_LANDINGFALLSPECIAL;
+    if (wd_landed)
+        seg_valid = 0;
+    if ((prev_tracked_air || wd_landed) && !tracked_air)
         Landing_Resolve(fp);
     else
         Ghost_Update(sid);
@@ -11332,8 +11383,13 @@ static void Event_ThinkFrame(GOBJ *event)
     if (!tracked_air)
         Window_Forget();
 
+    // nothing can be pressed from an airdodge or a helpless fall: a muted
+    // waveland timer stops now, not at the touchdown
+    if ((ts == TS_ESCAPEAIR || Tracked_IsHelpless(ts)) && cue_live[CUE_WL].dim)
+        Cue_Finish(CUE_WL, PH_CUT, cue_live[CUE_WL].dim);
+
     if (squat_wd)
-        Cue_Set(CUE_WL, squat_wd, 1, DODGE_RIGHT | DODGE_LEFT, 1, fp->phys.pos.X, fp->phys.pos.Y + 1.f);
+        Cue_Set(CUE_WL, squat_wd, 2, DODGE_RIGHT | DODGE_LEFT, 1, fp->phys.pos.X, fp->phys.pos.Y + 1.f);
     Cues_End();
 
     Ledge_Think(fp, sid);

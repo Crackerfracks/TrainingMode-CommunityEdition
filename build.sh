@@ -143,7 +143,7 @@ ${gc_fst} fs TM-CE.iso \
     insert codes.gct build/codes.gct \
     insert Start.dol build/Start.dol \
     insert opening.bnr opening.bnr
-${gc_fst} set-header TM-CE.iso "GTME01" "Training Mode Community Edition"
+${gc_fst} set-header TM-CE.iso "GTME01" "TM-CE + Landing Lab"
 
 echo "built TM-CE.iso"
 

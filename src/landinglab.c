@@ -1531,6 +1531,8 @@ static void Floor_BuildCache(void)
 
 // mpCheckFloor: does the ECB bottom moving from a to b touch down on a floor?
 static int floor_hit_platform; // the floor Floor_Check last found is a platform
+static int floor_hit_id;       // ... its line
+static float floor_hit_x;      // ... and where the bottom crossed it
 
 static int Floor_Check(float ax, float ay, float bx, float by, int pass_platforms, int skip_line)
 {
@@ -1548,6 +1550,11 @@ static int Floor_Check(float ax, float ay, float bx, float by, int pass_platform
         if (hit)
         {
             floor_hit_platform = f->is_platform;
+            floor_hit_id = f->id;
+            double lx = f->x1 - f->x0, ly = f->y1 - f->y0;
+            double sa = lx * (ay - f->y0) - ly * (ax - f->x0);
+            double sb = lx * (by - f->y0) - ly * (bx - f->x0);
+            floor_hit_x = sa != sb ? ax + (bx - ax) * sa / (sa - sb) : bx;
             return 1;
         }
     }
@@ -1692,6 +1699,20 @@ static int Lines_Connected(int start, int target)
             break;
     }
     return 0;
+}
+
+// Is x past the end of floor id, on the unit the game adds to it where it
+// meets a wall or nothing (mpLib_8004ED5C), rather than on the floor or the
+// next one?
+static int Floor_PastEnd(int id, float x)
+{
+    Vec2 *v0 = Line_V0(id), *v1 = Line_V1(id);
+    int rightward = v0->X < v1->X;
+    float lo = rightward ? v0->X : v1->X, hi = rightward ? v1->X : v0->X;
+    if (x >= lo && x <= hi)
+        return 0;
+    int end = (x < lo) == rightward ? Wall_Prev(id) : Wall_Next(id);
+    return end == -1 || !(Line_Kind(end) & LINEFLAG_FLOOR);
 }
 
 // The top and bottom of the run of walls through id (mpRightWallGetTop,
@@ -3175,6 +3196,13 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     float bx = s->x;
     float by = s->y + s->bottom;
     out->landed = Floor_Check(s->prev_x, s->prev_y, bx, by, pass_platforms, start->skip_line);
+    // An aerial's own ECB, used for the first time, that only meets the
+    // floor on the unit the game adds past its end doesn't touch down in
+    // game, though the decomp reads as if it would. Seen on Battlefield's
+    // left ledge: nair pressed a frame before the real AI window, rising
+    // past the corner, landed there in the sim only (twice, on two routes).
+    if (out->landed && out->first_ecb && Tracked_IsAerial(s->ts) && Floor_PastEnd(floor_hit_id, floor_hit_x))
+        out->landed = 0;
     out->platform = out->landed && floor_hit_platform;
     out->ceiling = ceiling && !out->landed; // a touchdown is handled first (ft_800835B0)
     s->prev_x = bx;
@@ -3395,7 +3423,44 @@ static void Windows_Summarize(FighterData *fp, Prediction *p)
                 m = 0;
         }
         p->ai_show[k] = m;
+    }
 
+    // Useful: when the aerials' windows differ, the first window keeps to
+    // the frames of the aerial that works on most of them (nair first on a
+    // tie), so the timer doesn't open on a frame only another aerial has
+    // (off Battlefield's left ledge, dair can land a frame before nair)
+    if (!ai_show_all)
+    {
+        int a = 1;
+        while (a <= last_ai && !p->ai_show[a])
+            a++;
+        int b = a;
+        while (b < last_ai && p->ai_show[b + 1])
+            b++;
+        if (a <= last_ai)
+        {
+            static const u8 order[5] = {TS_AIRN, TS_AIRF, TS_AIRB, TS_AIRLW, TS_AIRHI};
+            u8 main = 0;
+            int most = 0;
+            for (int i = 0; i < 5; i++)
+            {
+                u8 bit = AERIAL_BIT(order[i]);
+                int n = 0;
+                for (int k = a; k <= b; k++)
+                    n += (p->ai_show[k] & bit) != 0;
+                if (n > most)
+                    most = n, main = bit;
+            }
+            while (!(p->ai_show[a] & main))
+                p->ai_show[a++] = 0;
+            while (!(p->ai_show[b] & main))
+                p->ai_show[b--] = 0;
+        }
+    }
+
+    for (int k = 1; k <= last_ai; k++)
+    {
+        u8 m = p->ai_show[k];
         if (m && (p->ai_first == 0 || k == p->ai_first + p->ai_width))
         {
             if (p->ai_first == 0)

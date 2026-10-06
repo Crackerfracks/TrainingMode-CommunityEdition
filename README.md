@@ -4,6 +4,8 @@
 
 An unofficial build of [Training Mode - Community Edition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition) (TM-CE) v1.4 with one new event: **Landing Lab**, a Captain Falcon trainer that shows NILs, aerial interrupts and wavelands before you land, and teaches the best ledge routes frame by frame.
 
+<p align="center"><img src="docs/media/hero-ai.gif" width="480" alt="Falcon jumps toward a Battlefield platform; a pink path marks the aerial interrupt and the timer counts down to the nair"></p>
+
 Everything else is TM-CE as it is. For the full TM-CE feature list, see the [official README](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition#readme).
 
 > **Not made or supported by the TM-CE team.** Landing Lab was designed and playtested by Stephen ([Crackerfracks](https://github.com/Crackerfracks)) and its code was written with Claude, an AI coding assistant. TM-CE doesn't accept AI-written code, so please send feedback about this build here, not to the TM-CE Discord or repository.
@@ -41,6 +43,17 @@ As you move, Landing Lab simulates where Falcon's ECB will land if you keep hold
 - **Spot timers**: brackets close in on the landing spot for an AI or NIL; for a waveland, ticks run in from the ends of the slide.
 - **Controller**: your real stick, the band where Melee reads an axis as zero, a trail of recent frames, and the fastfall line, which lights when a flick would fastfall. It moves to stay clear of every player's percent.
 
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/nil.gif" alt="A green path and closing brackets mark a NIL onto a platform"><br><b>NIL</b></td>
+<td width="50%" valign="top"><img src="docs/media/waveland.gif" alt="A cyan cue, glowing platform and converging ticks for a perfect waveland"><br><b>Perfect waveland</b></td>
+</tr>
+<tr>
+<td valign="top"><img src="docs/media/wavedash.gif" alt="The wavedash timer counting down to the airdodge out of jumpsquat"><br><b>Wavedash timer</b></td>
+<td valign="top"><img src="docs/media/controller.gif" alt="The Ring controller display with stick trail, fastfall line and buttons"><br><b>Controller display</b></td>
+</tr>
+</table>
+
 ## Ledge Practice
 
 While Falcon hangs on a ledge, Landing Lab lists the routes to the stage that keep the most GALINT: drop, wait, fastfall, double jump, then a NIL or an AI.
@@ -48,6 +61,13 @@ While Falcon hangs on a ledge, Landing Lab lists the routes to the stage that ke
 - **Route Kind**: NIL, AI or Both. **Route**: Best, Second or Third.
 - **Assist**: quicktime practice. The game freezes on each input of the route and waits for you, then plays on at full speed. Shorten **Assist Wait** as the timing sinks in.
 - **Reset**, **Reset Delay**, **Starting Position** and **Keep Ledge Invincibility** work like TM-CE's ledgedash event.
+
+<table>
+<tr>
+<td width="50%" valign="top"><img src="docs/media/ledge-route.gif" alt="Falcon on the Battlefield ledge with the route line and input chips, then the route into a nair aerial interrupt"><br><b>A ledge route into a nair AI</b></td>
+<td width="50%" valign="top"><img src="docs/media/assist.gif" alt="Assist freezing the game on a route input until it's pressed"><br><b>Assist waiting on an input</b></td>
+</tr>
+</table>
 
 ## Controls
 
@@ -58,6 +78,8 @@ While Falcon hangs on a ledge, Landing Lab lists the routes to the stage that ke
 | D-pad left | Load the saved position |
 | D-pad down | Frame Advance on/off |
 | Advance button (L by default, set in Speed) | Step one frame during Frame Advance; hold to step slowly |
+
+<p align="center"><img src="docs/media/frame-advance.gif" width="480" alt="Frame Advance stepping through a jump with frame dots and input markers"></p>
 
 ## Menu
 
@@ -76,11 +98,12 @@ While Falcon hangs on a ledge, Landing Lab lists the routes to the stage that ke
 - Captain Falcon only.
 - Tested in Dolphin. Not tested on console.
 - Paths drawn gray rely on ECB frames the event hasn't seen yet; it learns them as you play.
+- Some NILs out of a double jump show up one frame early.
 - Once, stray drawings showed up over the version text in the bottom-right corner after toggling options on the ledge, until a restart. If you see it, a photo and what you pressed just before would help a lot.
 
 ## Feedback
 
-Open an issue on [this repository](https://github.com/Crackerfracks/TrainingMode-CommunityEdition/issues) or tell Stephen directly. The most useful reports say the stage, what Falcon did, and the frame you pressed on (count frames in Frame Advance).
+Found a cue that lied to you, or know a better ledge route? Open an issue on [this repository](https://github.com/Crackerfracks/TrainingMode-CommunityEdition/issues) or message Stephen. If you can, include the stage and the frame you pressed on; Frame Advance makes that easy to count.
 
 ## Building from source
 

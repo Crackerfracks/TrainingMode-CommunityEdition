@@ -4544,7 +4544,8 @@ static char text_predict[32] = "-";
 static char text_ai[32] = "-";
 static char text_last[48] = "-";
 static char text_next[64] = "-"; // the panel's first line: what's coming up
-static char text_steps[64];       // ... and a ledge route's inputs under it
+static char text_steps[64];
+static char text_frame[32];       // in Frame Advance: the state on screen and its frame       // ... and a ledge route's inputs under it
 static int next_kind = -1;       // the cue (CUE_*) whose color the panel's lines start with, -1 none
 static int last_kind = -1;
 static char text_exact[32] = "-";
@@ -6818,7 +6819,8 @@ static int Pin_Clear(FighterData *fp, float gx, float base, float w, float h)
     if (Options_Hud[HOPT_PANEL].val)
     {
         // the info panel's lines in its top corner
-        Box panel = {panel_left ? -SAFE_W : SAFE_W - 22.f, SAFE_H - 8.f, panel_left ? -SAFE_W + 22.f : SAFE_W, SAFE_H};
+        float low = SAFE_H - (Options_Game[GOPT_FRAME_ADV].val ? 10.5f : 8.f); // the frame line under it
+        Box panel = {panel_left ? -SAFE_W : SAFE_W - 22.f, low, panel_left ? -SAFE_W + 22.f : SAFE_W, SAFE_H};
         if (Box_Hit(&m, &panel))
             return 0;
     }
@@ -7906,8 +7908,8 @@ static void Ring_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
     Ring_Kidney(cx - kx, ky, 1.0f * s, 67, 115, 0.6f * s, s, color_btn_xy, PIN_Y, glow[PIN_Y]);
     Ring_Kidney(cx - kx, ky, 1.0f * s, 155, 203, 0.6f * s, s, color_btn_xy, PIN_X, glow[PIN_X]);
     Ring_Kidney(cx + kx, ky, 1.0f * s, 14, 76, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
-    Ring_Button(cx - 2.3f * s, cy - 1.5f * s, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
-    Ring_Button(cx + 2.3f * s, cy - 1.5f * s, 0.42f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
+    Ring_Button(cx + 2.3f * s, cy - 1.5f * s, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
+    Ring_Button(cx - 2.3f * s, cy - 1.5f * s, 0.42f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
 
     Ring_CStick(pad, cx, cy + RING_C_Y * s, s);
     pad_soft = 0;
@@ -8003,7 +8005,14 @@ static void Panel_Draw(void)
     }
     Panel_Line(x, y - 2.4f, right, text_last, last_kind);
     if (Options_Dev[DOPT_EXACT].val)
-        Panel_Line(x, y - 4.8f, right, text_exact, -1);
+    {
+        y -= 2.4f;
+        Panel_Line(x, y - 2.4f, right, text_exact, -1);
+    }
+    // stepping frame by frame: which frame of which state is on screen, so
+    // windows can be counted (a press now comes out on the next one)
+    if (Options_Game[GOPT_FRAME_ADV].val && text_frame[0])
+        Panel_Line(x, y - 4.8f, right, text_frame, -2);
 }
 
 ///////////////////////
@@ -11327,6 +11336,15 @@ static void Event_ThinkFrame(GOBJ *event)
     }
     else if (!fp->flags.hitlag)
         frame_in_state++;
+    {
+        const char *name = ts >= 0                     ? tracked_state_names[ts]
+                           : sid == ASID_KNEEBEND      ? "Jumpsquat"
+                           : sid == ASID_CLIFFWAIT     ? "Ledge"
+                           : sid == ASID_LANDING       ? "Landing"
+                           : sid == ASID_WAIT          ? "Standing"
+                                                       : "State";
+        sprintf(text_frame, "%s frame %d", name, frame_in_state + 1);
+    }
 
     int tracked_air = ts >= 0 && airborne && !disturbed;
     if (sid == ASID_ESCAPEAIR && prev_state_id != sid)

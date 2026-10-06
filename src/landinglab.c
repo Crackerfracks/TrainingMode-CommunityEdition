@@ -4084,12 +4084,13 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Frame Dots",
+        .val = 1,
         .value_num = countof(tick_names),
         .values = tick_names,
         .desc = {"A small ring on the paths at every frame: closer",
-                 "rings mean slower movement. Shown during Frame",
-                 "Advance (always on ledge routes), always, or",
-                 "never."},
+                 "rings mean slower movement. Shown only during",
+                 "Frame Advance (always on ledge routes), always,",
+                 "or never."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -5655,7 +5656,7 @@ static void Draw_Dashed(Vec2 *pos, float *bottom, int from, int to, GXColor colo
 // Frame Dots: a small ring on the path at every frame; their spacing shows
 // the speed. Only during Frame Advance unless set to always, so the paths
 // stay light at full speed.
-#define LL_DOT_R 0.55f
+#define LL_DOT_R 0.42f
 
 static int Ticks_On(void)
 {
@@ -5693,7 +5694,7 @@ static void Draw_Line(Prediction *p, int from, int to, GXColor color, u8 size, i
     else
         Draw_Path(p->pos, p->bottom, from, to, color, size);
     if (Ticks_On())
-        Draw_Ticks(p->pos, p->bottom, from, to, color, 12);
+        Draw_Ticks(p->pos, p->bottom, from, to, color, 9);
 }
 
 // The fighter's position raised by a fixed amount: a smooth arc through his
@@ -5701,7 +5702,7 @@ static void Draw_Line(Prediction *p, int from, int to, GXColor color, u8 size, i
 // every frame.
 #define LL_DOT 0.4f
 
-static void Draw_BodyPath(Prediction *p, int from, int last)
+static void Draw_BodyPath(Prediction *p, int from, int last, GXColor c)
 {
     int count = last - from + 1;
     if (count < 2)
@@ -5711,10 +5712,10 @@ static void Draw_BodyPath(Prediction *p, int from, int last)
     for (int i = from; i <= last; i++)
     {
         float x = p->pos[i].X, y = p->pos[i].Y + body_offset;
-        GFX_AddVtx(x - LL_DOT, y - LL_DOT, 0, color_body);
-        GFX_AddVtx(x + LL_DOT, y - LL_DOT, 0, color_body);
-        GFX_AddVtx(x + LL_DOT, y + LL_DOT, 0, color_body);
-        GFX_AddVtx(x - LL_DOT, y + LL_DOT, 0, color_body);
+        GFX_AddVtx(x - LL_DOT, y - LL_DOT, 0, c);
+        GFX_AddVtx(x + LL_DOT, y - LL_DOT, 0, c);
+        GFX_AddVtx(x + LL_DOT, y + LL_DOT, 0, c);
+        GFX_AddVtx(x - LL_DOT, y + LL_DOT, 0, c);
     }
 }
 
@@ -5780,6 +5781,8 @@ static void Compass_Queue(float x, float y, u8 mask, float facing, GXColor color
 
 // Windows after the next one of their kind: the same color at 40%
 // (premultiplied).
+static GXColor Color_Fill(GXColor c, float a);
+
 static GXColor Color_Dim(GXColor c)
 {
     c.r = c.r * 2 / 5;
@@ -5864,11 +5867,27 @@ static void Draw_Prediction(Prediction *p, int body, int style)
 
     int line = Options_Paths[POPT_PATH].val;
 
+    // an aerial interrupt still ahead: past its window the path only shows
+    // where Falcon goes if he skips it (usually on up through the platform
+    // it lands on), so it's grayed until then
+    int split = last;
+    if (Cues_Ai() && p->ai_first && p->ai_first < p->uncertain_from && p->ai_first + p->ai_width - 1 < last)
+        split = p->ai_first + p->ai_width - 1;
+    GXColor skipped = Color_Fill(color_neutral, 0.45f);
+
     if (body && Options_Paths[POPT_BODY].val)
-        Draw_BodyPath(p, 0, last);
+    {
+        Draw_BodyPath(p, 0, split, color_body);
+        if (split < last)
+            Draw_BodyPath(p, split + 1, last, Color_Fill(color_body, 0.35f));
+    }
 
     if (line && highlight)
-        Draw_Line(p, from, last, land_kind_colors[p->land_kind], 24, style);
+    {
+        Draw_Line(p, from, split, land_kind_colors[p->land_kind], 24, style);
+        if (split < last)
+            Draw_Line(p, split, last, skipped, 12, style);
+    }
     else if (line)
     {
         int known = p->uncertain_from - 1;
@@ -6275,6 +6294,8 @@ enum glyph_kind
     GLYPH_AERIAL, // an aerial
     GLYPH_DODGE,  // airdodge
     GLYPH_UP,     // stick (or C-stick) up
+    GLYPH_DOWN_LEFT,
+    GLYPH_DOWN_RIGHT,
 };
 
 typedef struct MeterRow
@@ -6485,6 +6506,15 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
         case GLYPH_UP:
             Hud_Tri(x + r, y - r * 0.7f, x - r, y - r * 0.7f, x, y + r, col);
             break;
+        case GLYPH_DOWN_LEFT:
+        case GLYPH_DOWN_RIGHT:
+        {
+            // the down arrow turned 45 degrees
+            float ux = (glyph == GLYPH_DOWN_RIGHT ? 0.707f : -0.707f), uy = -0.707f;
+            float bx = x - ux * r * 0.7f, by = y - uy * r * 0.7f;
+            Hud_Tri(bx + uy * r, by - ux * r, bx - uy * r, by + ux * r, x + ux * r, y + uy * r, col);
+            break;
+        }
         case GLYPH_JUMP:
             // a button with an up arrow cut into it
             Hud_Disc(x, y, r, col);
@@ -8002,8 +8032,17 @@ static void Log_Camera(FighterData *fp)
     if (p && p->land_frame)
     {
         int k = p->land_frame;
-        sprintf(buf, "LLPRED %d land %d kind %d at %.3f %.3f lag %d ai %d w%d wl %d w%d\n", event_vars->game_timer, k,
-                p->land_kind, p->pos[k].X, p->pos[k].Y + p->bottom[k], p->lag, p->ai_first, p->ai_width, p->wl_first, p->wl_width);
+        // the first aerial interrupt before any filter, and its touchdown
+        int raw = 0;
+        for (int j = 1; j < k && !raw; j++)
+        {
+            if (p->ai_mask[j] & ~p->ai_lag_mask[j])
+                raw = j;
+        }
+        sprintf(buf, "LLPRED %d land %d kind %d at %.3f %.3f lag %d ai %d w%d wl %d w%d raw %d t%d m%x\n",
+                event_vars->game_timer, k, p->land_kind, p->pos[k].X, p->pos[k].Y + p->bottom[k], p->lag, p->ai_first,
+                p->ai_width, p->wl_first, p->wl_width, raw, raw ? raw + p->ai_delay[raw] : 0,
+                raw ? p->ai_mask[raw] & ~p->ai_lag_mask[raw] : 0);
         Log(buf);
     }
 }
@@ -9205,11 +9244,23 @@ void Event_ChangeScript(GOBJ *menu, int value)
 #define LR_LEDGES 8         // ledges remembered
 #define LR_WAIT 8           // most frames let go before the fastfall or jump
 #define LR_FF 8             // most frames held down before the jump
-#define LR_CANDIDATES (2 * 2 * (LR_WAIT + 1) * (LR_FF + 1))
+#define LR_DJ_X 3           // sticks tried on the double jump
+#define LR_CANDIDATES (2 * 2 * (LR_WAIT + 1) * (LR_FF + 1) * LR_DJ_X)
 #define LR_SIGS 16          // kind x drop x fastfall x hold
 #define LR_SIM 45           // frames simulated after the jump
 #define LR_BUDGET 1500      // simulated frames per game frame, on the ground or ledge
 #define LR_BUDGET_AIR 400   // ... and while the live prediction runs too
+
+// The stick on the double jump: all the way in, 45 degrees down and in (a
+// partial drift that clears the underside of stages like Battlefield's when
+// a full one would bonk it), or let go.
+enum lr_dj_x
+{
+    LR_DJ_IN,
+    LR_DJ_DIAG,
+    LR_DJ_UP,
+};
+static const float lr_dj_stick[LR_DJ_X] = {1.f, 0.7f, 0.f};
 #define LR_PATH 72          // frames of the shown route's path
 #define LR_HANG_X 2.4527f   // where Falcon hangs from a ledge: out from it
 #define LR_HANG_Y 23.0962f  // ... and down
@@ -9230,6 +9281,7 @@ typedef struct LedgeRoute
     u8 wait;    // frames after the drop with the stick let go
     u8 ff;      // frames holding down after that; the fastfall starts on the first
     u8 hold;    // after the jump: 1 = keep holding toward the stage
+    u8 dj_x;    // the stick on the jump: LR_DJ_IN, LR_DJ_DIAG or LR_DJ_UP
     u8 aerial;  // AI: the aerial (TS_AIR*)
     u8 press_w; // AI: frames the aerial's window lasts
     s16 dj;     // frame of the double jump; the drop is frame 0
@@ -9413,11 +9465,11 @@ static int Aerial_Pick(u8 mask)
 }
 
 // One route: the drop, wait frames let go, ff frames held down, the double
-// jump toward the stage, then holding toward it or not. Fills nil when it
+// jump (stick in, down-in or let go), then holding toward the stage or not. Fills nil when it
 // lands with no lag and ai with the first aerial interrupt that has no
 // aerial lag; either comes back not valid. With path, also records where
 // Falcon goes, frame by frame from the drop to the touchdown.
-static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff, int hold,
+static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff, int hold, int dj_x,
                       LedgeRoute *nil, LedgeRoute *ai, Vec2 *path, float *bottom, int *num)
 {
     SimStart st;
@@ -9468,8 +9520,8 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
     if (ff > 0 && ff_at < 0)
         return; // held down without a fastfall: the same as waiting
 
-    st.stick_x = L->facing;
-    st.stick_y = 0;
+    st.stick_x = L->facing * lr_dj_stick[dj_x];
+    st.stick_y = dj_x == LR_DJ_DIAG ? -0.7f : 0;
     Sim_DoubleJump(fp, &st, &s, &step);
     if (path && n < LR_PATH)
     {
@@ -9480,6 +9532,7 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
         return;
 
     st.stick_x = hold ? L->facing : 0;
+    st.stick_y = 0;
     SimStart ps;
     Sim_ToStart(&s, &st, &ps);
     sim_limit = LR_SIM;
@@ -9505,6 +9558,7 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
     base.wait = wait;
     base.ff = ff;
     base.hold = hold;
+    base.dj_x = dj_x;
     base.dj = dj;
     base.press = -1;
     base.ff_at = ff_at;
@@ -9555,7 +9609,9 @@ static int Route_Better(LedgeRoute *a, LedgeRoute *b)
         return a->press_w > b->press_w;
     if ((a->ff > 0) != (b->ff > 0))
         return a->ff == 0;
-    return a->wait + a->ff < b->wait + b->ff;
+    if (a->wait + a->ff != b->wait + b->ff)
+        return a->wait + a->ff < b->wait + b->ff;
+    return a->dj_x < b->dj_x;
 }
 
 static int Route_Sig(LedgeRoute *r)
@@ -9594,8 +9650,9 @@ static void Ledge_Solve(FighterData *fp, int budget)
         int c = L->next++;
         int drop = c % 2, hold = (c / 2) % 2;
         int wait = (c / 4) % (LR_WAIT + 1), ff = (c / (4 * (LR_WAIT + 1))) % (LR_FF + 1);
+        int dj_x = c / (4 * (LR_WAIT + 1) * (LR_FF + 1));
         LedgeRoute nil, ai;
-        Ledge_Try(fp, L, drop, wait, ff, hold, &nil, &ai, 0, 0, 0);
+        Ledge_Try(fp, L, drop, wait, ff, hold, dj_x, &nil, &ai, 0, 0, 0);
         Ledge_Keep(L, &nil);
         Ledge_Keep(L, &ai);
     }
@@ -9605,7 +9662,8 @@ static void Ledge_Solve(FighterData *fp, int budget)
 
 static int Route_Same(LedgeRoute *a, LedgeRoute *b)
 {
-    return a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->kind == b->kind && a->press == b->press;
+    return a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->dj_x == b->dj_x && a->kind == b->kind &&
+           a->press == b->press;
 }
 
 static int Route_Galint(LedgeRoute *r, int e, int intang);
@@ -9690,11 +9748,12 @@ static void Route_Path(FighterData *fp, int ledge, LedgeRoute *r)
 {
     LedgeRoute *o = &route_path_of;
     if (route_path_ledge == ledge && o->drop == r->drop && o->wait == r->wait && o->ff == r->ff && o->hold == r->hold &&
-        o->kind == r->kind)
+        o->dj_x == r->dj_x && o->kind == r->kind)
         return;
     LedgeRoute nil, ai;
     Floor_BuildCache();
-    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, &nil, &ai, route_path, route_path_bottom, &route_path_num);
+    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, r->dj_x, &nil, &ai, route_path, route_path_bottom,
+              &route_path_num);
     route_path_of = *r;
     route_path_ledge = ledge;
 }
@@ -9834,7 +9893,7 @@ static void Draw_RoutePath(void)
     Draw_Path(route_path, route_path_bottom, 0, route_path_num - 1, Color_Fill(color_plate, 0.75f), 42);
     Draw_Path(route_path, route_path_bottom, 0, route_path_num - 1, c, 24);
     if (Options_Paths[POPT_TICKS].val != 2)
-        Draw_Ticks(route_path, route_path_bottom, 0, route_path_num - 1, c, 12);
+        Draw_Ticks(route_path, route_path_bottom, 0, route_path_num - 1, c, 9);
 }
 
 // The inputs along the paths, where each is due: a chip beside the line
@@ -10024,7 +10083,12 @@ static void Markers_Draw(void)
         if (r->ff > 0 && Route_FF(r) >= from)
             Route_Marker(Route_FF(r), GLYPH_DOWN, color_white, 0, color_white);
         if (r->dj >= from)
-            Route_Marker(r->dj, GLYPH_JUMP, color_in_jump, in, color_white);
+        {
+            int dj_glyph = r->dj_x == LR_DJ_IN     ? in
+                           : r->dj_x == LR_DJ_DIAG ? (facing > 0 ? GLYPH_DOWN_RIGHT : GLYPH_DOWN_LEFT)
+                                                   : 0;
+            Route_Marker(r->dj, GLYPH_JUMP, color_in_jump, dj_glyph, color_white);
+        }
         if (r->kind == LAND_AI && r->press >= from)
             Route_Marker(r->press, GLYPH_AERIAL, color_in_aerial, Aerial_Glyph(r->aerial, facing), color_in_aerial);
         // beside the line on the stage's side, clear of Falcon hanging
@@ -10069,7 +10133,8 @@ static void Route_Text(LedgeRoute *r, int galint)
         t += sprintf(t, ", wait %d", r->wait);
     if (r->ff > 0)
         t += sprintf(t, ", FF %d", r->ff);
-    sprintf(t, ", DJ in%s", r->hold ? ", hold" : "");
+    static const char *dj[LR_DJ_X] = {"DJ in", "DJ down-in", "DJ"};
+    sprintf(t, ", %s%s", dj[r->dj_x], r->hold ? ", hold in" : "");
 }
 
 // The route was lost, or a step whose timing buzzes went wrong: say which
@@ -10133,9 +10198,9 @@ static const char *Route_Why(const char *what)
 static void Route_Log(const char *what, LedgeEntry *L, LedgeRoute *r, int galint)
 {
     char buf[200];
-    sprintf(buf, "LLROUTE %s ledge %.4f %.4f facing %d kind %s drop %s wait %d ff %d hold %d dj %d ff_at %d press %d w %d aerial %d land %d act %d galint %d\n",
+    sprintf(buf, "LLROUTE %s ledge %.4f %.4f facing %d kind %s drop %s wait %d ff %d hold %d dj %d dj_x %d ff_at %d press %d w %d aerial %d land %d act %d galint %d\n",
             what, L->x, L->y, L->facing, r->kind == LAND_AI ? "AI" : "NIL", r->drop == DROP_AWAY ? "away" : "down", r->wait,
-            r->ff, r->hold, r->dj, r->ff_at, r->press, r->press_w, r->aerial, r->land, r->act, galint);
+            r->ff, r->hold, r->dj, r->dj_x, r->ff_at, r->press, r->press_w, r->aerial, r->land, r->act, galint);
     Log(buf);
 }
 

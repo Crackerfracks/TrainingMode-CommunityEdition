@@ -5964,7 +5964,9 @@ static const GXColor color_in_jump = {255, 220, 40, 255};
 #define color_in_aerial land_kind_colors[LAND_AI]
 #define color_in_dodge land_kind_colors[LAND_PERFECT_WL]
 
-// A color at a fraction of its strength (colors are premultiplied).
+// A color at a fraction of its strength (colors are premultiplied). The
+// HUD blends by source alpha (HSD_SetupPEMode: SRCALPHA, INVSRCALPHA), so
+// it shows at about a * a over what's behind it; it was all tuned that way.
 static GXColor Color_Fill(GXColor c, float a)
 {
     if (a < 0)
@@ -5974,6 +5976,18 @@ static GXColor Color_Fill(GXColor c, float a)
     c.r = c.r * a;
     c.g = c.g * a;
     c.b = c.b * a;
+    c.a = 255 * a;
+    return c;
+}
+
+// The whole color laid over what's behind it at a, for a faint mark that
+// still has to read over the dark plates.
+static GXColor Color_Over(GXColor c, float a)
+{
+    if (a < 0)
+        a = 0;
+    if (a > 1)
+        a = 1;
     c.a = 255 * a;
     return c;
 }
@@ -7566,7 +7580,7 @@ static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R
     // the deadzone cross, where an axis reads as zero
     float rx = pad->fstickX, ry = pad->fstickY;
     float dzx = Common_Float(0x0), dzy = Common_Float(0x4);
-    GXColor band = Color_Fill(color_white, 0.3f);
+    GXColor band = Color_Over(color_white, 0.25f);
     float len = R * 0.88f;
     Hud_Rect(cx - dzx * R, cy - len, cx + dzx * R, cy + len, band);
     Hud_Rect(cx - len, cy - dzy * R, cx - dzx * R, cy + dzy * R, band);
@@ -7580,7 +7594,7 @@ static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R
         int ts = Tracked_Index(fp->state_id);
         int can = fp->phys.self_vel.Y < 0 && !fp->flags.is_fastfall && ts != TS_ESCAPEAIR && !Tracked_IsUpB(ts);
         int ff = can && fp->input.lstick.Y <= -common_fastfall_stick && (u8)fp->input.timer_lstick_tilt_y < common_fastfall_window;
-        GXColor c = ff ? color_white : Color_Fill(color_white, fp->flags.is_fastfall ? 0.6f : 0.35f);
+        GXColor c = ff ? color_white : Color_Over(color_white, fp->flags.is_fastfall ? 0.6f : 0.35f);
         float fy = cy - common_fastfall_stick * R;
         float fw = R * 0.62f;
         Hud_Rect(cx - fw, fy - 0.05f * k, cx + fw, fy + 0.05f * k, c);

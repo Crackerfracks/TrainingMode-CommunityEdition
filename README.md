@@ -4,7 +4,7 @@
 
 An unofficial build of [Training Mode - Community Edition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition) (TM-CE) v1.4 with one new event: **Landing Lab**, a Captain Falcon trainer that shows NILs, aerial interrupts and wavelands before you land, and teaches the best ledge routes frame by frame.
 
-<p align="center"><img src="docs/media/hero-ai.gif" width="640" alt="Falcon jumps toward a Battlefield platform; a pink path marks the aerial interrupt and the timer counts down to the nair"></p>
+<p align="center"><img src="docs/media/hero-ai.gif" width="480" alt="Falcon jumps toward a Battlefield platform; a pink path marks the aerial interrupt and the timer counts down to the nair"></p>
 
 Everything else is TM-CE as it is. For the full TM-CE feature list, see the [official README](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition#readme).
 

@@ -1,4 +1,4 @@
-<p align="center"><img src="../docs/media/hero-ai.gif" width="640" alt="Falcon jumps toward a Battlefield platform; a pink path marks the aerial interrupt and the timer counts down to the nair"></p>
+<p align="center"><img src="../docs/media/hero-ai.gif" width="480" alt="Falcon jumps toward a Battlefield platform; a pink path marks the aerial interrupt and the timer counts down to the nair"></p>
 
 **Landing Lab** is a new Captain Falcon event for Training Mode - Community Edition. It predicts your landing every frame using Melee's own collision rules, and shows you what's coming before you touch down: NILs in green, aerial interrupts in pink, perfect wavelands in cyan, and the exact frame to press for each.
 

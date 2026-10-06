@@ -1,4 +1,4 @@
-<p align="center"><img src="../docs/media/hero-ai.gif" width="480" alt="Falcon jumps toward a Battlefield platform; a pink path marks the aerial interrupt and the timer counts down to the nair"></p>
+<p align="center"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/hero-ai.gif" width="480" alt="Falcon jumps toward a Battlefield platform; a pink path marks the aerial interrupt and the timer counts down to the nair"></p>
 
 **Landing Lab** is a new Captain Falcon event for Training Mode - Community Edition. It predicts your landing every frame using Melee's own collision rules, and shows you what's coming before you touch down: NILs in green, aerial interrupts in pink, perfect wavelands in cyan, and the exact frame to press for each.
 
@@ -16,12 +16,12 @@ The rest of TM-CE v1.4 is untouched.
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="../docs/media/nil.gif" alt="A green path and closing brackets mark a NIL onto a platform"><br><b>NILs.</b> Green means holding the stick lands you straight into standing with no landing lag. Brackets close in on the spot as the touchdown gets near.</td>
-<td width="50%" valign="top"><img src="../docs/media/waveland.gif" alt="A cyan cue, glowing platform and converging ticks for a perfect waveland"><br><b>Wavelands.</b> Cyan marks the frames where an airdodge lands at once with full speed. The platform lights up along the slide, and ticks close in on where you'll stop.</td>
+<td width="50%" valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/nil.gif" alt="A green path and closing brackets mark a NIL onto a platform"><br><b>NILs.</b> Green means holding the stick lands you straight into standing with no landing lag. Brackets close in on the spot as the touchdown gets near.</td>
+<td width="50%" valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/waveland.gif" alt="A cyan cue, glowing platform and converging ticks for a perfect waveland"><br><b>Wavelands.</b> Cyan marks the frames where an airdodge lands at once with full speed. The platform lights up along the slide, and ticks close in on where you'll stop.</td>
 </tr>
 <tr>
-<td valign="top"><img src="../docs/media/wavedash.gif" alt="The wavedash timer counting down to the airdodge out of jumpsquat"><br><b>Wavedash timer.</b> Frame cells slide into a gate next to Falcon, so you can see the airdodge frame coming and whether you hit it.</td>
-<td valign="top"><img src="../docs/media/controller.gif" alt="The Ring controller display with stick trail, fastfall line and buttons"><br><b>Controller display.</b> Your real stick inside its gate, the band where Melee reads zero, a trail of recent frames, and a fastfall line that lights when a flick would fastfall. It moves to stay clear of every percent.</td>
+<td valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/wavedash.gif" alt="The wavedash timer counting down to the airdodge out of jumpsquat"><br><b>Wavedash timer.</b> Frame cells slide into a gate next to Falcon, so you can see the airdodge frame coming and whether you hit it.</td>
+<td valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/controller.gif" alt="The Ring controller display with stick trail, fastfall line and buttons"><br><b>Controller display.</b> Your real stick inside its gate, the band where Melee reads zero, a trail of recent frames, and a fastfall line that lights when a flick would fastfall. It moves to stay clear of every percent.</td>
 </tr>
 </table>
 
@@ -29,8 +29,8 @@ The rest of TM-CE v1.4 is untouched.
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="../docs/media/ledge-route.gif" alt="Falcon on the Battlefield ledge with the route line and input chips, then the route into a nair aerial interrupt"><br><b>Routes.</b> Hang on a ledge and Landing Lab lists the fastest ways back to stage, ranked by the ledge intangibility (GALINT) you keep: drop, fastfall, double jump, then a NIL or an AI. Each input sits on the path where it's due.</td>
-<td width="50%" valign="top"><img src="../docs/media/assist.gif" alt="Assist freezing the game on a route input until it's pressed"><br><b>Assist.</b> Quicktime practice for any route. The game freezes on each input until you hit it, then plays on at full speed. Turn the wait down as the timing sinks in.</td>
+<td width="50%" valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/ledge-route.gif" alt="Falcon on the Battlefield ledge with the route line and input chips, then the route into a nair aerial interrupt"><br><b>Routes.</b> Hang on a ledge and Landing Lab lists the fastest ways back to stage, ranked by the ledge intangibility (GALINT) you keep: drop, fastfall, double jump, then a NIL or an AI. Each input sits on the path where it's due.</td>
+<td width="50%" valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/assist.gif" alt="Assist freezing the game on a route input until it's pressed"><br><b>Assist.</b> Quicktime practice for any route. The game freezes on each input until you hit it, then plays on at full speed. Turn the wait down as the timing sinks in.</td>
 </tr>
 </table>
 
@@ -38,8 +38,8 @@ The rest of TM-CE v1.4 is untouched.
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="../docs/media/frame-advance.gif" alt="Frame Advance stepping through a jump with frame dots and input markers"><br><b>Frame Advance.</b> D-pad down freezes the game, and L steps one frame (hold it to step slowly). Frame dots show your speed and every marker sits on the frame it's due.</td>
-<td width="50%" valign="top"><img src="../docs/media/menu.png" alt="The Landing Lab menu"><br><b>Your call what's on screen.</b> Every cue, path and HUD piece has its own toggle, so you can strip it down to just the thing you're drilling.</td>
+<td width="50%" valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/frame-advance.gif" alt="Frame Advance stepping through a jump with frame dots and input markers"><br><b>Frame Advance.</b> D-pad down freezes the game, and L steps one frame (hold it to step slowly). Frame dots show your speed and every marker sits on the frame it's due.</td>
+<td width="50%" valign="top"><img src="https://raw.githubusercontent.com/Crackerfracks/TrainingMode-CommunityEdition/master/docs/media/menu.png" alt="The Landing Lab menu"><br><b>Your call what's on screen.</b> Every cue, path and HUD piece has its own toggle, so you can strip it down to just the thing you're drilling.</td>
 </tr>
 </table>
 

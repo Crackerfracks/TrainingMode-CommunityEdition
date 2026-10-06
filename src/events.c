@@ -280,6 +280,41 @@ EventDesc LaserLand = {
     .matchData = &LaserLand_MatchData,
 };
 
+// Landing Lab: predicts NILs and aerial interrupts
+static EventMatchData LandingLab_MatchData = {
+    .timer = MATCH_TIMER_HIDE,
+    .matchType = MATCH_MATCHTYPE_TIME,
+    .hideGo = true,
+    .hideReady = true,
+    .isCreateHUD = true,
+    .timerRunOnPause = false,
+    .isCheckForZRetry = false,
+    .isShowScore = false,
+    .isRunStockLogic = false,
+    .isDisableHit = false,
+    .useKOCounter = false,
+    .timerSeconds = 0,
+};
+EventDesc LandingLab = {
+    .eventName = "Landing Lab\n",
+    .eventDescription = "See where Falcon lands if you keep holding:\nNIL, aerial interrupt or landing lag.",
+    .eventFile = "landinglab",
+    .jumpTableIndex = -1,
+    .CSSType = SLCHRKIND_EVENT,
+    .allowed_characters = {
+        .hmn = CSSID_CAPTAIN_FALCON,
+        .cpu = -1,
+    },
+    .playerKind = -1,
+    .cpuKind = -1,
+    .stage = -1,
+    .disable_hazards = true,
+    .force_sopo = false,
+    .scoreType = SCORETYPE_KO,
+    .callbackPriority = 15, // after the fighters' collision (priority 6) this frame
+    .matchData = &LandingLab_MatchData,
+};
+
 
 // Combo Training
 EventDesc Combo = {
@@ -747,6 +782,7 @@ static EventDesc *CharacterSpecific_Events[] = {
     &EscapeSheik,
     &EscapeDThrowKnee,
     &FloatCancel,
+    &LandingLab,
 };
 static EventPage CharacterSpecific_Page = {
     .name = "Character-specific Tech",
@@ -783,9 +819,11 @@ EventVars stc_event_vars = {
     .HUD_DrawRects = HUD_DrawRects,
     .HUD_DrawTris = HUD_DrawTris,
     .HUD_DrawText = HUD_DrawText,
+    .HUD_DrawTextEx = HUD_DrawTextEx,
     .HUD_DrawActionLogBar = HUD_DrawActionLogBar,
     .HUD_DrawActionLogKey = HUD_DrawActionLogKey,
     .HUD_DrawInfoPanel = HUD_DrawInfoPanel,
+    .HUD_DrawInfoPanelAt = HUD_DrawInfoPanelAt,
 };
 
 static GOBJ *stc_msgmgr;
@@ -998,12 +1036,17 @@ static const Rect info_item_label_rect = { 0.8f, 2.5f, 8.6f, 2.5f };
 static const Rect info_item_info_rect = { 0.0f, 0.0f, 9.6f, 2.5f };
 
 void HUD_DrawInfoPanel(const char **label, const char **info, int count) {
+    HUD_DrawInfoPanelAt(label, info, count, 18.f);
+}
+
+// x is the panel's left edge: 18 puts it on the right of the screen,
+// -26.7 mirrors it on the left.
+void HUD_DrawInfoPanelAt(const char **label, const char **info, int count, float x) {
     HUDCamData *cam_data = stc_event_vars.hudcam_gobj->userdata;
     if (cam_data->hide) return;
     COBJ *prev_camera = COBJ_GetCurrent();
     CObj_SetCurrent(stc_event_vars.hudcam_gobj->hsd_object);
 
-    float x = 18.f;
     float y = 9.f;
     GXColor grey = { 130, 130, 130, 180 };
     GXColor black = { 0, 0, 0, 180 };

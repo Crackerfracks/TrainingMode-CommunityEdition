@@ -6,8 +6,8 @@
 #include "savestate.h"
 #include <stdint.h>
 
-#define TM_VERSSHORT "TM-CE v1.4 d1"
-#define TM_VERSLONG "TM Community Edition v1.4 d1"
+#define TM_VERSSHORT "TM-CE LL 0.6.5"
+#define TM_VERSLONG "TM-CE v1.4 + Landing Lab 0.6.5"
 #define EVENT_DATASIZE 512
 #define TM_FUNC -(50 * 4)
 
@@ -222,6 +222,7 @@ void HUD_DrawTextEx(
 Rect HUD_DrawActionLogBar(u8 *action_log, GXColor *color_lookup, int log_count);
 void HUD_DrawActionLogKey(char **action_names, GXColor *action_colors, int action_count);
 void HUD_DrawInfoPanel(const char **label, const char **info, int count);
+void HUD_DrawInfoPanelAt(const char **label, const char **info, int count, float x);
 
 typedef struct RNGControl
 {
@@ -280,6 +281,7 @@ typedef struct EventVars
     Rect (*HUD_DrawActionLogBar)(u8 *action_log, GXColor *color_lookup, int log_count);
     void (*HUD_DrawActionLogKey)(char **action_names, GXColor *action_colors, int action_count);
     void (*HUD_DrawInfoPanel)(const char **label, const char **info, int count);
+    void (*HUD_DrawInfoPanelAt)(const char **label, const char **info, int count, float x);
 } EventVars;
 #define event_vars_ptr_loc ((EventVars**)0x803d7054)
 #define event_vars (*event_vars_ptr_loc)

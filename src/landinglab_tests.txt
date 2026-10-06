@@ -1,0 +1,134 @@
+# Landing Lab test scripts, read from TM/llscript.txt on the disc.
+# The step format is in the "Test scripts" part of src/landinglab.c.
+#
+# Written for Captain Falcon on Battlefield: the floor runs from x -68.4 to
+# 68.4 at y 0, the side platforms from x 20 to 57.6 (and -20 to -57.6) at
+# y 27.2, and the top platform from x -18.8 to 18.8 at y 54.4.
+#
+# Every landing writes a "LandingLab landing" line that says whether it was
+# predicted, so these check themselves. The offset sweeps measure how wide
+# the real windows are: the press that still lands is inside the window.
+
+# Perfect wavelands: full hop straight up through the right platform, then
+# a sideways airdodge into it.
+script FH WL right plat
+start 38 0 right
+5 X
+wl 0 L s:1,0
+land 120
+shot landed
+
+script FH WL right plat -1
+start 38 0 right
+5 X
+wl -1 L s:1,0
+land 120
+
+script FH WL right plat +1
+start 38 0 right
+5 X
+wl 1 L s:1,0
+land 120
+
+script FH WL right plat +2
+start 38 0 right
+5 X
+wl 2 L s:1,0
+land 120
+
+script FH WL right plat +3
+start 38 0 right
+5 X
+wl 3 L s:1,0
+land 120
+
+# Full hop drifting onto the right platform from the middle, waveland on
+# the way down.
+script FH drift WL right plat
+start 0 0 right
+5 X s:0.6,0
+20 s:0.6,0
+wl 0 L s:1,0
+land 120
+
+# Double jump at the top of a full hop, onto the top platform.
+script DJ WL top plat
+start 0 0 right
+5 X
+20
+1 X
+wl 0 L s:-1,0
+land 120
+
+script DJ WL top plat +1
+start 0 0 right
+5 X
+20
+1 X
+wl 1 L s:-1,0
+land 120
+
+script DJ WL top plat +2
+start 0 0 right
+5 X
+20
+1 X
+wl 2 L s:-1,0
+land 120
+
+# Aerial interrupts with nair (A, stick neutral) and fair (C-stick).
+script FH nair AI right plat
+start 38 0 right
+5 X
+ai 0 A
+land 120
+shot landed
+
+script FH nair AI right plat -1
+start 38 0 right
+5 X
+ai -1 A
+land 120
+
+script FH nair AI right plat +1
+start 38 0 right
+5 X
+ai 1 A
+land 120
+
+script FH nair AI right plat +2
+start 38 0 right
+5 X
+ai 2 A
+land 120
+
+script DJ fair AI top plat
+start 0 0 right
+5 X
+20
+1 X
+ai 0 c:1,0
+land 120
+
+# Short hop on the floor: the AI at the end of the hop.
+script SH nair AI floor
+start 0 0 right
+2 X
+ai 0 A
+land 60
+
+# In the air from the start: dropping onto the left platform.
+script Air fall fair AI left plat
+air -38 45 right 0 0 1 0
+ai 0 c:1,0
+land 120
+
+script Air fall WL left plat
+air -38 45 right 0 0 1 0
+wl 0 L s:1,0
+land 120
+
+script Air fastfall left plat
+air -38 45 right 0 0 1 0
+4
+land 120 s:0,-1

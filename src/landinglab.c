@@ -15822,6 +15822,17 @@ void Event_Update(void)
         toast_timer--;
     Rumble_Update(Fighter_GetGObj(0)->userdata,
                   Pause_CheckStatus(1) == 2 || Options_Game[GOPT_FRAME_ADV].val || assist_frozen);
+    // while a script runs, a line in the log every 5 seconds, frozen or not:
+    // whoever watches the log tells a hang (no lines) from a shot waiting
+    static int script_beat;
+    if (script_cur >= 0 && ++script_beat >= 300)
+    {
+        script_beat = 0;
+        char buf[80];
+        sprintf(buf, "LLBEAT %d %s\n", event_vars->game_timer,
+                Options_Game[GOPT_FRAME_ADV].val ? "frozen, waiting for D-pad down" : "running");
+        Log(buf);
+    }
     if (Pause_CheckStatus(1) == 2)
         return;
     Assist_Update();

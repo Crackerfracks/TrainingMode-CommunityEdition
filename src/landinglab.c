@@ -3806,6 +3806,7 @@ static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f /
 static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
 static const char *tick_names[] = {"Frame Advance", "Always", "Off"};
+static const char *intensity_names[] = {"1 Faint", "2 Soft", "3 Standard", "4 Bold", "5 Boldest"};
 static const char *mark_size_names[] = {"Small", "Medium", "Large"};
 static const float mark_sizes[] = {0.9f, 1.25f, 1.6f};
 static const char *ai_filter_names[] = {"Useful", "All"};
@@ -4103,15 +4104,24 @@ static EventOption Options_Controls[] = {
         .name = "Quick: Cues and Paths",
         .desc = {"Hold L or R (a light press past 60% counts)",
                  "and press the D-pad. Up and down go round the",
-                 "cue sets, left and right round the landing and",
-                 "body paths. Best between attempts."},
+                 "cue sets, left and right round the paths, with",
+                 "and without frame dots. Best between attempts."},
     },
     {
         .kind = OPTKIND_INFO,
-        .name = "Quick: Pad and Presets",
+        .name = "Quick: Pad and Intensity",
         .desc = {"Hold Z and press the D-pad. Up and down go",
                  "round the controller looks and sizes, left and",
-                 "right load the next preset (Presets menu)."},
+                 "right make the cues, paths and timers fainter",
+                 "or bolder."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Quick: Presets and Hide",
+        .desc = {"Hold Z and L or R, and press the D-pad. Left",
+                 "and right load the previous or next preset; up",
+                 "or down hides everything Landing Lab draws, or",
+                 "brings it back."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -4223,6 +4233,7 @@ enum options_cues
     COPT_AI_AERIAL,
     COPT_FLASH,
     COPT_GLOW,
+    COPT_INTENSITY,
 
     COPT_COUNT
 };
@@ -4286,6 +4297,17 @@ static EventOption Options_Cues[COPT_COUNT] = {
         .desc = {"Light up the floor a waveland or wavedash slides",
                  "along: it fills in toward the landing spot as the",
                  "window nears and flashes on each of its frames."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Intensity",
+        .val = 2,
+        .value_num = countof(intensity_names),
+        .values = intensity_names,
+        .desc = {"How strongly the cues, paths and timers show,",
+                 "from faint to bold. Standard is the usual look.",
+                 "The controller and the panel stay as they are.",
+                 "Quick toggle: hold Z, D-pad left or right."},
     },
 };
 
@@ -5194,6 +5216,7 @@ void Event_PresetSave(GOBJ *menu)
     if (which >= PS_SAVED)
     {
         SFX_PlayCommon(3); // built in
+        OSReport("LLPRESET save refused: %s is built in\n", preset_names[which]);
         return;
     }
     Preset_Capture(&preset_file->slot[which]);
@@ -5327,9 +5350,12 @@ static void Card_Error(s32 r)
 // At start, waiting: the file's presets into preset_file, if it's there.
 static void Card_Load(void)
 {
-    void *raw = calloc(CARD_SIZE + 32);
-    card_buf = (u8 *)(((u32)raw + 31) & ~31);
-    Memcard_InitWorkArea();
+    if (!card_buf)
+    {
+        void *raw = calloc(CARD_SIZE + 32);
+        card_buf = (u8 *)(((u32)raw + 31) & ~31);
+        Memcard_InitWorkArea();
+    }
     int ok = 0;
     s32 mem, sec;
     s32 r = CARDProbeEx(CARD_SLOT, &mem, &sec);
@@ -6847,6 +6873,42 @@ static const GXColor color_ecb = {255, 230, 0, 255};
 static int world_on_top;
 static int world_add; // glows: added to what's behind, so a faint one never darkens it
 
+// Intensity: the cues, paths and timers are drawn fainter or bolder than
+// the standard look (level 3); the controller and the panel never change.
+// Fainter takes color and opacity down together. Bolder makes a shape more
+// opaque, and brighter as far as its strongest channel allows, so no color
+// shifts toward white and a hit can't be mistaken for a miss.
+static const float vis_levels[] = {0.55f, 0.78f, 1.f, 1.3f, 1.65f};
+static float vis_k = 1.f; // for what's being drawn now
+
+static GXColor Vis(GXColor c)
+{
+    if (vis_k == 1.f)
+        return c;
+    float ka = vis_k, kc = vis_k;
+    if (vis_k > 1.f)
+    {
+        int m = c.r > c.g ? c.r : c.g;
+        if (c.b > m)
+            m = c.b;
+        if (c.a * ka > 255.f)
+            ka = c.a ? 255.f / c.a : 1.f;
+        kc = ka;
+        if (m * kc > 255.f)
+            kc = m ? 255.f / m : 1.f;
+    }
+    c.r = c.r * kc;
+    c.g = c.g * kc;
+    c.b = c.b * kc;
+    c.a = c.a * ka;
+    return c;
+}
+
+static void World_Vtx(f32 x, f32 y, f32 z, GXColor c)
+{
+    GFX_AddVtx(x, y, z, Vis(c));
+}
+
 static void World_Start(int count, u8 shape, u8 size)
 {
     Mtx mtx;
@@ -6896,7 +6958,7 @@ static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color,
 
     World_Start(count, GX_LINESTRIP, size);
     for (int i = from; i <= to; i++)
-        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
+        World_Vtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
 }
 
 // The paths look different from each other: the landing path is solid, the
@@ -6914,8 +6976,8 @@ static void Draw_Dashed(Vec2 *pos, float *bottom, int from, int to, GXColor colo
     World_Start(dashes * 2, GX_LINES, size);
     for (int i = from; i + 1 <= to; i += 2)
     {
-        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
-        GFX_AddVtx(pos[i + 1].X, pos[i + 1].Y + bottom[i + 1], 0, Path_Flow(color, i + 1, from, to));
+        World_Vtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
+        World_Vtx(pos[i + 1].X, pos[i + 1].Y + bottom[i + 1], 0, Path_Flow(color, i + 1, from, to));
     }
 }
 
@@ -6942,14 +7004,14 @@ static void Draw_Ticks(Vec2 *pos, float *bottom, int from, int to, GXColor color
         float x = pos[i].X;
         float y = pos[i].Y + bottom[i];
         float r = LL_DOT_R;
-        GFX_AddVtx(x, y - r, 0, color);
-        GFX_AddVtx(x + r, y, 0, color);
-        GFX_AddVtx(x + r, y, 0, color);
-        GFX_AddVtx(x, y + r, 0, color);
-        GFX_AddVtx(x, y + r, 0, color);
-        GFX_AddVtx(x - r, y, 0, color);
-        GFX_AddVtx(x - r, y, 0, color);
-        GFX_AddVtx(x, y - r, 0, color);
+        World_Vtx(x, y - r, 0, color);
+        World_Vtx(x + r, y, 0, color);
+        World_Vtx(x + r, y, 0, color);
+        World_Vtx(x, y + r, 0, color);
+        World_Vtx(x, y + r, 0, color);
+        World_Vtx(x - r, y, 0, color);
+        World_Vtx(x - r, y, 0, color);
+        World_Vtx(x, y - r, 0, color);
     }
 }
 
@@ -6978,10 +7040,10 @@ static void Draw_BodyPath(Prediction *p, int from, int last, GXColor c)
     for (int i = from; i <= last; i++)
     {
         float x = p->pos[i].X, y = p->pos[i].Y + body_offset;
-        GFX_AddVtx(x - LL_DOT, y - LL_DOT, 0, c);
-        GFX_AddVtx(x + LL_DOT, y - LL_DOT, 0, c);
-        GFX_AddVtx(x + LL_DOT, y + LL_DOT, 0, c);
-        GFX_AddVtx(x - LL_DOT, y + LL_DOT, 0, c);
+        World_Vtx(x - LL_DOT, y - LL_DOT, 0, c);
+        World_Vtx(x + LL_DOT, y - LL_DOT, 0, c);
+        World_Vtx(x + LL_DOT, y + LL_DOT, 0, c);
+        World_Vtx(x - LL_DOT, y + LL_DOT, 0, c);
     }
 }
 
@@ -6992,10 +7054,10 @@ static void Draw_Ecb(Vec2 pos, float bottom, EcbSample *s, float facing, GXColor
         // shape unknown: a small cross at the touchdown point
         float y = pos.Y + bottom;
         World_Start(4, GX_LINES, 24);
-        GFX_AddVtx(pos.X - 1.5f, y - 1.5f, 0, color);
-        GFX_AddVtx(pos.X + 1.5f, y + 1.5f, 0, color);
-        GFX_AddVtx(pos.X - 1.5f, y + 1.5f, 0, color);
-        GFX_AddVtx(pos.X + 1.5f, y - 1.5f, 0, color);
+        World_Vtx(pos.X - 1.5f, y - 1.5f, 0, color);
+        World_Vtx(pos.X + 1.5f, y + 1.5f, 0, color);
+        World_Vtx(pos.X - 1.5f, y + 1.5f, 0, color);
+        World_Vtx(pos.X + 1.5f, y - 1.5f, 0, color);
         return;
     }
 
@@ -7003,11 +7065,11 @@ static void Draw_Ecb(Vec2 pos, float bottom, EcbSample *s, float facing, GXColor
     float left_x = facing > 0 ? s->back : -s->front;
 
     World_Start(5, GX_LINESTRIP, 24);
-    GFX_AddVtx(pos.X, pos.Y + s->top, 0, color);
-    GFX_AddVtx(pos.X + right_x, pos.Y + s->side_y, 0, color);
-    GFX_AddVtx(pos.X, pos.Y + bottom, 0, color);
-    GFX_AddVtx(pos.X + left_x, pos.Y + s->side_y, 0, color);
-    GFX_AddVtx(pos.X, pos.Y + s->top, 0, color);
+    World_Vtx(pos.X, pos.Y + s->top, 0, color);
+    World_Vtx(pos.X + right_x, pos.Y + s->side_y, 0, color);
+    World_Vtx(pos.X, pos.Y + bottom, 0, color);
+    World_Vtx(pos.X + left_x, pos.Y + s->side_y, 0, color);
+    World_Vtx(pos.X, pos.Y + s->top, 0, color);
 }
 
 // Falcon's ECB right now, for the collision view (his model is hidden).
@@ -7018,11 +7080,11 @@ static void Draw_CurrentEcb(FighterData *fp)
     float y = fp->phys.pos.Y;
 
     World_Start(5, GX_LINESTRIP, 24);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_right.X, y + cd->ecbCurrCorrect_right.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_bot.X, y + cd->ecbCurrCorrect_bot.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_left.X, y + cd->ecbCurrCorrect_left.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_right.X, y + cd->ecbCurrCorrect_right.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_bot.X, y + cd->ecbCurrCorrect_bot.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_left.X, y + cd->ecbCurrCorrect_left.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
 }
 
 // The aerial pickers (Compass_Draw), queued here while the stage is drawn
@@ -7065,11 +7127,11 @@ static void Draw_Bar(Prediction *p, int k, int e, GXColor color, u8 size)
     int before = k - 1;
     int after = e < p->num ? e + 1 : e;
     World_Start(e - k + 3, GX_LINESTRIP, size);
-    GFX_AddVtx((p->pos[before].X + p->pos[k].X) / 2,
+    World_Vtx((p->pos[before].X + p->pos[k].X) / 2,
                (p->pos[before].Y + p->bottom[before] + p->pos[k].Y + p->bottom[k]) / 2, 0, color);
     for (int i = k; i <= e; i++)
-        GFX_AddVtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
-    GFX_AddVtx((p->pos[e].X + p->pos[after].X) / 2,
+        World_Vtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
+    World_Vtx((p->pos[e].X + p->pos[after].X) / 2,
                (p->pos[e].Y + p->bottom[e] + p->pos[after].Y + p->bottom[after]) / 2, 0, color);
 }
 
@@ -7179,8 +7241,8 @@ static void Draw_Prediction(Prediction *p, int body, int style)
         int k = p->fastfall_frame;
         float y = p->pos[k].Y + p->bottom[k];
         World_Start(2, GX_LINES, 24);
-        GFX_AddVtx(p->pos[k].X - 2.f, y, 0, color_actual);
-        GFX_AddVtx(p->pos[k].X + 2.f, y, 0, color_actual);
+        World_Vtx(p->pos[k].X - 2.f, y, 0, color_actual);
+        World_Vtx(p->pos[k].X + 2.f, y, 0, color_actual);
     }
 }
 
@@ -7342,8 +7404,8 @@ static void Quad_Add2(float x0, float y0, float x1, float y1, float x2, float y2
     q->v[1] = (Vec2){x1, y1};
     q->v[2] = (Vec2){x2, y2};
     q->v[3] = (Vec2){x3, y3};
-    q->c = c;
-    q->c2 = c2;
+    q->c = Vis(c);
+    q->c2 = Vis(c2);
 }
 
 static void Quad_Add(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3, GXColor c)
@@ -10903,7 +10965,9 @@ static void Ring_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
     // Y left of X and a little above it, the same bean mirrored
     Ring_Kidney(cx - tx - 0.55f * s, ty + 0.1f * s, 180, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_Y, glow[PIN_Y]);
     Ring_Kidney(cx - tx + 0.55f * s, ty - 0.1f * s, 0, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_X, glow[PIN_X]);
-    Ring_Kidney(cx + tx, ty, 45, 0.9f * s, 65, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
+    // Z a little higher than the pair's middle: its bean hangs down at the
+    // ends, so this lines its top and bottom up with theirs
+    Ring_Kidney(cx + tx, ty + 0.15f * s, 45, 0.9f * s, 65, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
     Ring_Button(cx + lx, ly, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
     Ring_Button(cx - lx, ly, 0.5f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
 
@@ -10990,6 +11054,7 @@ static void Panel_Line(float x, float y, int right, const char *text, int kind)
 // (even with the panel off).
 static char toast_text[40];
 static int toast_timer;
+static u8 hide_all; // everything the event draws hidden but the toast (L or R, Z and D-pad up or down)
 #define TOAST_FRAMES 90
 
 static void Toast(const char *t)
@@ -11009,7 +11074,7 @@ static void Panel_Draw(void)
         Panel_Line(x, y, right, toast_text, -2);
         y -= 2.4f;
     }
-    if (!Options_Hud[HOPT_PANEL].val)
+    if (!Options_Hud[HOPT_PANEL].val || hide_all)
         return;
     Panel_Line(x, y, right, text_next, next_kind);
     if (text_steps[0])
@@ -11155,18 +11220,18 @@ static void Glow_Span(float xa, float xb, float y, float h, GXColor c)
     GXColor top = {0, 0, 0, 0};
     float ym = y + h * 0.3f;
     World_Start(8, GX_QUADS, 0);
-    GFX_AddVtx(xa, y, GLOW_Z, c);
-    GFX_AddVtx(xb, y, GLOW_Z, c);
-    GFX_AddVtx(xb, ym, GLOW_Z, mid);
-    GFX_AddVtx(xa, ym, GLOW_Z, mid);
-    GFX_AddVtx(xa, ym, GLOW_Z, mid);
-    GFX_AddVtx(xb, ym, GLOW_Z, mid);
-    GFX_AddVtx(xb, y + h, GLOW_Z, top);
-    GFX_AddVtx(xa, y + h, GLOW_Z, top);
+    World_Vtx(xa, y, GLOW_Z, c);
+    World_Vtx(xb, y, GLOW_Z, c);
+    World_Vtx(xb, ym, GLOW_Z, mid);
+    World_Vtx(xa, ym, GLOW_Z, mid);
+    World_Vtx(xa, ym, GLOW_Z, mid);
+    World_Vtx(xb, ym, GLOW_Z, mid);
+    World_Vtx(xb, y + h, GLOW_Z, top);
+    World_Vtx(xa, y + h, GLOW_Z, top);
     GXColor line = Color_Mix(c, Color_Fill(color_white, c.a / 255.f), 0.3f);
     World_Start(2, GX_LINES, 42);
-    GFX_AddVtx(xa, y + 0.1f, GLOW_Z, line);
-    GFX_AddVtx(xb, y + 0.1f, GLOW_Z, line);
+    World_Vtx(xa, y + 0.1f, GLOW_Z, line);
+    World_Vtx(xb, y + 0.1f, GLOW_Z, line);
 }
 
 // How the glow ends: a hit bursts white-cyan and rises off the floor, a
@@ -11266,11 +11331,13 @@ static void World_GX(GOBJ *gobj, int pass)
     compass_num = 0;
     if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
         Log_Camera(fp);
-    if (capture_clean)
+    if (capture_clean || hide_all)
         return;
     world_on_top = 1;
+    vis_k = 1.f;
     if (Options_Dev[DOPT_COLL].val)
         Draw_CurrentEcb(fp);
+    vis_k = vis_levels[Options_Cues[COPT_INTENSITY].val];
     // a ledge route stays on top all the way down
     world_on_top = route_active;
 
@@ -11302,6 +11369,7 @@ static void World_GX(GOBJ *gobj, int pass)
     // along the floor, where the depth test can't tell the line from it
     Draw_SlideOff();
     world_on_top = 0;
+    vis_k = 1.f;
 }
 
 static void Hud_GX(GOBJ *gobj, int pass)
@@ -11316,6 +11384,14 @@ static void Hud_GX(GOBJ *gobj, int pass)
     COBJ *prev = COBJ_GetCurrent();
     CObj_SetCurrent(event_vars->hudcam_gobj->hsd_object);
     quad_num = 0;
+    if (hide_all)
+    {
+        Panel_Draw(); // the toast that says so
+        Quad_Flush();
+        CObj_SetCurrent(prev);
+        return;
+    }
+    vis_k = vis_levels[Options_Cues[COPT_INTENSITY].val];
 
     Meter_Build();
     Spot_Draw(fp);
@@ -11334,6 +11410,7 @@ static void Hud_GX(GOBJ *gobj, int pass)
     Wd_Draw(fp);
     Markers_Draw();
     Compass_Draw();
+    vis_k = 1.f;
     Pad_Draw(fp);
     Panel_Draw();
     if (quad_num > quad_peak)
@@ -11444,6 +11521,17 @@ static int Advance_CheckStep(void)
 //   mark [label]               only write a line to the log
 //   autorun                    (anywhere) play All, or the only script, as
 //                              soon as the event starts
+// Steps that do what the menu would, so a test needs no menuing:
+//   set <Menu>/<Option> = <v>  an option's value, its place in the list
+//                              (Menu: Cues, Timers, Paths, HUD, Sounds, Ledge,
+//                              Camera, Speed or Dev)
+//   get <Menu>/<Option>        write an option's value to the log
+//   closemenu                  what closing the pause menu does
+//   preset load|save|start <name>  the Presets menu's actions on that preset
+//   card flush                 finish writing the memory card, waiting
+//   card restart               as if the event started over: every option
+//                              back to its default, then the card read again
+//   chord lr|z|lrz up|down|left|right  a quick toggle
 // Inputs: A B X Y Z L R (L and R fully pressed), s:x,y (stick), c:x,y
 // (C-stick), lt:v (light press, no click), with x, y, v from -1 to 1. A
 // stick value is round(80 v), pulled back onto the rim if it's past it.
@@ -11464,6 +11552,17 @@ enum script_op_kind
     SOP_LAND,
     SOP_SHOT,
     SOP_MARK,
+    SOP_CMD, // count: which (SCMD_*), label: the rest of the line
+};
+
+enum script_cmd
+{
+    SCMD_SET,
+    SCMD_CLOSEMENU,
+    SCMD_PRESET,
+    SCMD_CARD,
+    SCMD_CHORD,
+    SCMD_GET,
 };
 
 typedef struct ScriptInput
@@ -11733,6 +11832,13 @@ static void Script_Parse(void)
         else if (Script_Is(w, "shot") || Script_Is(w, "mark"))
         {
             op->kind = w[0] == 's' ? SOP_SHOT : SOP_MARK;
+            op->label = Script_Trim(rest);
+        }
+        else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
+                 Script_Is(w, "card") || Script_Is(w, "chord"))
+        {
+            op->kind = SOP_CMD;
+            op->count = w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
@@ -12082,6 +12188,159 @@ static void Script_Next(void)
     script_left = op ? op->count : 0;
 }
 
+static void Chord(int lr, int z, int down);
+
+// An option by "Menu/Option name", or 0.
+static EventOption *Script_FindOption(char *spec)
+{
+    char menu[24];
+    int n = 0;
+    while (spec[n] && spec[n] != '/' && n < (int)sizeof(menu) - 1)
+    {
+        menu[n] = spec[n];
+        n++;
+    }
+    if (spec[n] != '/')
+        return 0;
+    menu[n] = 0;
+    char *name = spec + n + 1;
+    if (Script_Is(menu, "Dev"))
+    {
+        for (int i = 0; i < DOPT_COUNT; i++)
+            if (Script_Is(Options_Dev[i].name, name))
+                return &Options_Dev[i];
+        return 0;
+    }
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        if (Script_Is(preset_menus[m].tag, menu))
+            for (int i = 0; i < preset_menus[m].num; i++)
+                if (Script_Is(preset_menus[m].opts[i].name, name))
+                    return &preset_menus[m].opts[i];
+    return 0;
+}
+
+static int Script_Preset(const char *name)
+{
+    for (int i = 0; i < PS_COUNT; i++)
+        if (Script_Is(preset_names[i], name))
+            return i;
+    return -1;
+}
+
+// A step that does what the menu would. The line is copied first: the
+// script can run again.
+static void Script_Cmd(ScriptOp *op)
+{
+    char line[96], buf[160];
+    int len = strlen(op->label);
+    if (len > (int)sizeof(line) - 1)
+        len = sizeof(line) - 1;
+    memcpy(line, op->label, len);
+    line[len] = 0;
+    char *rest = line;
+    int ok = 1;
+    switch (op->count)
+    {
+    case SCMD_SET:
+    {
+        char *eq = line;
+        while (*eq && *eq != '=')
+            eq++;
+        ok = *eq == '=';
+        if (!ok)
+            break;
+        *eq = 0;
+        char *v = Script_Trim(eq + 1);
+        EventOption *o = Script_FindOption(Script_Trim(line));
+        int val = (int)Script_Number(&v);
+        ok = o != 0 && *v == 0 && Preset_Fits(o, val);
+        if (!ok)
+            break;
+        int cam = o == &Options_Camera[CAMOPT_MODE] && o->val != val;
+        int start = o == &Options_Ledge[LOPT_START] && o->val != val;
+        o->val = val;
+        if (cam)
+            preset_cam_pending = 1;
+        if (start)
+            Event_ChangeLedgeStart(0, val);
+        Event_ChangeRoutes(0, 0);
+        sprintf(buf, "LLSET %s = %d\n", line, val);
+        Log(buf);
+        return;
+    }
+    case SCMD_GET:
+    {
+        EventOption *o = Script_FindOption(Script_Trim(line));
+        ok = o != 0;
+        if (!ok)
+            break;
+        if (o->kind == OPTKIND_STRING && o->val >= 0 && o->val < o->value_num)
+            sprintf(buf, "LLGET %s = %d (%s)\n", line, o->val, o->values[o->val]);
+        else
+            sprintf(buf, "LLGET %s = %d\n", line, o->val);
+        Log(buf);
+        return;
+    }
+    case SCMD_CLOSEMENU:
+        Presets_KeepUser();
+        return;
+    case SCMD_PRESET:
+    {
+        char *what = Script_Word(&rest);
+        int which = Script_Preset(Script_Trim(rest));
+        ok = what && which >= 0;
+        if (!ok)
+            break;
+        if (Script_Is(what, "load") || Script_Is(what, "save"))
+        {
+            Options_Presets[PROPT_PICK].val = which;
+            if (what[0] == 'l')
+                Event_PresetLoad(0);
+            else
+                Event_PresetSave(0);
+        }
+        else if (Script_Is(what, "start"))
+        {
+            Options_Presets[PROPT_START].val = which;
+            Event_ChangePresetStart(0, which);
+        }
+        else
+            ok = 0;
+        break;
+    }
+    case SCMD_CARD:
+        if (Script_Is(rest, "flush"))
+            Card_Flush();
+        else if (Script_Is(rest, "restart"))
+        {
+            Card_Flush();
+            Preset_Apply(&preset_builtin[PS_DEFAULTS - PS_SAVED]);
+            Card_Load();
+        }
+        else
+            ok = 0;
+        break;
+    case SCMD_CHORD:
+    {
+        char *mods = Script_Word(&rest), *dir = Script_Word(&rest);
+        ok = mods && dir;
+        if (!ok)
+            break;
+        int lr = mods[0] == 'l', z = mods[0] == 'z' || mods[2] == 'z';
+        int down = Script_Is(dir, "up") ? HSD_BUTTON_DPAD_UP : Script_Is(dir, "down") ? HSD_BUTTON_DPAD_DOWN : Script_Is(dir, "left") ? HSD_BUTTON_DPAD_LEFT : Script_Is(dir, "right") ? HSD_BUTTON_DPAD_RIGHT : 0;
+        ok = down != 0 && (lr || z);
+        if (ok)
+            Chord(lr, z, down);
+        break;
+    }
+    }
+    if (!ok)
+    {
+        sprintf(buf, "LLSCRIPT can't do this step: %s\n", op->label);
+        Log(buf);
+    }
+}
+
 // Steps that take no frame. Before a frame (pre) a start or air places
 // Falcon; after one, a shot or mark goes right after the inputs before it,
 // and a start or air waits for the next frame. Returns 0 once the script is over.
@@ -12137,6 +12396,8 @@ static int Script_Instant(GOBJ *ft, int pre)
             sprintf(buf, "LLMARK %s %s at %d\n", scripts[script_cur].name, op->label, event_vars->game_timer);
             Log(buf);
         }
+        else if (op->kind == SOP_CMD)
+            Script_Cmd(op);
         else
             return 1;
         Script_Next();
@@ -14365,6 +14626,9 @@ static void Body_Flash(FighterData *fp, int sid)
     }
     if (flash_age < 100)
         flash_age++;
+    a *= hide_all ? 0 : vis_levels[Options_Cues[COPT_INTENSITY].val];
+    if (a > 0.9f)
+        a = 0.9f;
 
     if (a > 0)
     {
@@ -14878,7 +15142,11 @@ static const CueSet cue_sets[] = {
     {1, 1, 1, "All cues"},
     {0, 0, 0, "Cues off"},
 };
-static const char *path_set_names[] = {"Paths off", "Landing path", "Body path", "Landing and body paths"};
+// the paths in the order the toggle steps through them: body, landing, then
+// both, first with the frame dots only in Frame Advance, then always
+static const char *path_set_names[] = {"Paths off", "Body path", "Landing path", "Body and landing paths",
+                                       "Body path with dots", "Landing path with dots", "Both paths with dots"};
+static const u8 path_sets[][3] = {{0, 0, 0}, {0, 1, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 1}, {1, 0, 1}, {1, 1, 1}}; // landing, body, dots
 static const char *pad_set_names[] = {"Controller off", "Ring, small", "Ring, medium", "Ring, large",
                                       "Classic, small", "Classic, medium", "Classic, large"};
 static int chord_pad_place; // where the controller goes when it comes back on
@@ -14888,14 +15156,36 @@ static int Chord_Step(int i, int n, int dir)
     return i < 0 ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
 }
 
-static void Chord(int lr, int down)
+static void Chord(int lr, int z, int down)
 {
     int dir = down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_RIGHT) ? 1 : down & (HSD_BUTTON_DPAD_DOWN | HSD_BUTTON_DPAD_LEFT) ? -1 : 0;
     if (!dir)
         return;
     int vert = (down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN)) != 0;
     char buf[40];
-    if (lr && vert)
+    if (lr && z && vert)
+    {
+        // everything the event draws, hidden or back
+        hide_all ^= 1;
+        Toast(hide_all ? "Landing Lab hidden" : "Landing Lab shown");
+    }
+    else if (lr && z)
+    {
+        // the next preset that has settings in it
+        int cur = Options_Presets[PROPT_PICK].val;
+        for (int n = 0; n < PS_COUNT; n++)
+        {
+            cur = Chord_Step(cur, PS_COUNT, dir);
+            if (Preset_Slot(cur)->used)
+                break;
+        }
+        Options_Presets[PROPT_PICK].val = cur;
+        Preset_Apply(Preset_Slot(cur));
+        Preset_Describe(cur);
+        sprintf(buf, "Preset: %s", preset_names[cur]);
+        Toast(buf);
+    }
+    else if (lr && vert)
     {
         // the cue set
         int wl = Options_Cues[COPT_WL].val, cur = -1;
@@ -14910,11 +15200,17 @@ static void Chord(int lr, int down)
     }
     else if (lr)
     {
-        // the landing and body paths
-        int cur = Options_Paths[POPT_PATH].val + 2 * Options_Paths[POPT_BODY].val;
-        int next = Chord_Step(cur, 4, dir);
-        Options_Paths[POPT_PATH].val = next & 1;
-        Options_Paths[POPT_BODY].val = next >> 1;
+        // the landing and body paths, and the frame dots on them
+        int dots = Options_Paths[POPT_TICKS].val == 1, cur = -1;
+        for (int i = 0; i < (int)countof(path_sets); i++)
+            if (path_sets[i][0] == Options_Paths[POPT_PATH].val && path_sets[i][1] == Options_Paths[POPT_BODY].val &&
+                (path_sets[i][2] == dots || i == 0))
+                cur = i;
+        int next = Chord_Step(cur, countof(path_sets), dir);
+        Options_Paths[POPT_PATH].val = path_sets[next][0];
+        Options_Paths[POPT_BODY].val = path_sets[next][1];
+        if (next != 0)
+            Options_Paths[POPT_TICKS].val = path_sets[next][2] ? 1 : 0;
         Toast(path_set_names[next]);
     }
     else if (vert)
@@ -14937,18 +15233,10 @@ static void Chord(int lr, int down)
     }
     else
     {
-        // the next preset that has settings in it
-        int cur = Options_Presets[PROPT_PICK].val;
-        for (int n = 0; n < PS_COUNT; n++)
-        {
-            cur = Chord_Step(cur, PS_COUNT, dir);
-            if (Preset_Slot(cur)->used)
-                break;
-        }
-        Options_Presets[PROPT_PICK].val = cur;
-        Preset_Apply(Preset_Slot(cur));
-        Preset_Describe(cur);
-        sprintf(buf, "Preset: %s", preset_names[cur]);
+        // how strongly everything shows
+        EventOption *o = &Options_Cues[COPT_INTENSITY];
+        o->val = o->val + dir < 0 ? 0 : o->val + dir >= o->value_num ? o->value_num - 1 : o->val + dir;
+        sprintf(buf, "Intensity %s", intensity_names[o->val]);
         Toast(buf);
     }
     SFX_PlayCommon(2);
@@ -14979,7 +15267,7 @@ void Event_Update(void)
     int z = (pad->held & HSD_TRIGGER_Z) != 0;
     if (lr || z)
     {
-        Chord(lr, down);
+        Chord(lr, z, down);
         save_hold = 0;
         return;
     }

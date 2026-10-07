@@ -1,0 +1,76 @@
+# Landing Lab presets, memory card and quick toggles, with no menuing:
+# build with LLSCRIPT=src/landinglab_presets_test.txt and start the event.
+# The script runs by itself. Check the log for LLCARD, LLPRESET, LLGET and
+# LLTOAST lines; each mark says what should come before the next one.
+autorun
+script Presets and card
+start 0 0 right
+mark 1 start: LLCARD and LLPRESET start lines came at init
+get Cues/NIL Cues
+get Paths/Frame Dots
+get Cues/Intensity
+
+# User Custom is kept when the menu closes, and written to the card
+set Cues/NIL Cues = 1
+closemenu
+card flush
+mark 2 expect LLCARD Saved
+set Cues/NIL Cues = 0
+card restart
+mark 3 expect LLPRESET start User Custom (applied), card file read, and NIL Cues = 1 next
+get Cues/NIL Cues
+
+# a built-in preset, saved as Preset 1, which then loads at start
+preset load Minimal
+closemenu
+get Paths/Frame Dots
+preset save Preset 1
+preset start Preset 1
+card flush
+preset load Everything
+closemenu
+card flush
+card restart
+mark 4 expect LLPRESET start Preset 1 (applied), Frame Dots = 2 (Off) next
+get Paths/Frame Dots
+get Cues/NIL Cues
+preset save Everything
+mark 5 expect LLPRESET save refused
+
+# quick toggles
+chord lr up
+chord lr up
+chord lr down
+chord lr right
+chord lr right
+chord lr right
+chord lr right
+chord lr right
+chord lr right
+chord lr right
+chord lr left
+chord z right
+chord z right
+chord z right
+chord z left
+chord z left
+chord z left
+chord z left
+chord z up
+chord z up
+chord z down
+chord lrz right
+chord lrz left
+chord lrz up
+60
+mark 6 hidden for a second: no world or HUD drawing but the toast
+chord lrz down
+30
+mark 7 shown again
+
+# back to the defaults loading at start, on the card too
+preset start User Custom
+preset load Defaults
+closemenu
+card flush
+mark 8 done

@@ -5184,6 +5184,7 @@ void Event_PresetLoad(GOBJ *menu)
         return;
     }
     Preset_Apply(s);
+    OSReport("LLPRESET load %s\n", preset_names[which]);
     SFX_PlayCommon(1);
 }
 
@@ -5197,6 +5198,7 @@ void Event_PresetSave(GOBJ *menu)
     }
     Preset_Capture(&preset_file->slot[which]);
     preset_dirty = 1;
+    OSReport("LLPRESET save %s, %d settings\n", preset_names[which], preset_file->slot[which].num);
     Preset_Describe(which);
     SFX_PlayCommon(1);
 }
@@ -5234,6 +5236,7 @@ static void Presets_Loaded(int ok)
     int start = preset_file->start < PS_COUNT ? preset_file->start : PS_USER;
     Options_Presets[PROPT_START].val = start;
     Preset_Apply(Preset_Slot(start));
+    OSReport("LLPRESET start %s (%s), card file %s\n", preset_names[start], Preset_Slot(start)->used ? "applied" : "empty", ok ? "read" : "not read");
     Preset_Describe(Options_Presets[PROPT_PICK].val);
 }
 
@@ -5291,6 +5294,7 @@ static void Card_Say(const char *a, const char *b, const char *c)
     strcpy(preset_card_desc[0], a);
     strcpy(preset_card_desc[1], b);
     strcpy(preset_card_desc[2], c);
+    OSReport("LLCARD %s %s %s\n", a, b, c);
 }
 
 static u32 Card_Sum(const void *data, int n)
@@ -10992,6 +10996,7 @@ static void Toast(const char *t)
 {
     strcpy(toast_text, t);
     toast_timer = TOAST_FRAMES;
+    OSReport("LLTOAST %s\n", t);
 }
 
 static void Panel_Draw(void)

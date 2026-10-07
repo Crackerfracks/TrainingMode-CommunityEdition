@@ -11548,6 +11548,8 @@ typedef struct LedgeEntry
     int next;    // the next candidate to simulate
     int version; // finished searches, so what was built from the routes knows they changed
     RouteList list; // the last finished search's routes; it keeps showing while the next one runs
+    u8 has_pick;      // a route was chosen on this ledge ...
+    LedgeRoute pick;  // ... this one, found again when the list is rebuilt
 } LedgeEntry;
 
 static LedgeEntry *ledges; // [LR_LEDGES], allocated in Event_Init
@@ -12064,6 +12066,26 @@ static void Route_MenuText(void);
 // Route Kind chose, for the Route option to browse. Rebuilt when the ledge,
 // its search or either option changes, and then the Route number is held to
 // the routes there are.
+// The same inputs (and aerial) as r: the route found again after a new
+// search or in another order. Its frames may have moved by one, so an exact
+// match wins over the first one with the same inputs. -1 none.
+static int Route_Find(LedgeRoute *list, int n, LedgeRoute *r)
+{
+    int near = -1;
+    for (int i = 0; i < n; i++)
+    {
+        LedgeRoute *a = &list[i];
+        if (a->kind != r->kind || a->drop != r->drop || a->wait != r->wait || a->ff != r->ff || a->hold != r->hold ||
+            a->dj_x != r->dj_x || a->fall_away != r->fall_away || (r->kind == LAND_AI && a->aerial != r->aerial))
+            continue;
+        if (a->dj == r->dj && a->press == r->press)
+            return i;
+        if (near < 0)
+            near = i;
+    }
+    return near;
+}
+
 static void Routes_Update(int ledge)
 {
     int kinds = Options_Ledge[LOPT_KIND].val;
@@ -12095,15 +12117,31 @@ static void Routes_Update(int ledge)
         }
         route_list_num = n;
 
-        // the Route number is 1 to the routes found
+        // the Route number is 1 to the routes found. The route chosen on
+        // this ledge stays chosen when the list is put in another order or
+        // searched again; a ledge with none chosen keeps the number.
         EventOption *o = &Options_Ledge[LOPT_PICK];
         o->value_num = n > 0 ? n : 1;
+        int found = L->has_pick ? Route_Find(route_list, n, &L->pick) : -1;
+        if (found >= 0)
+            o->val = found + 1;
         if (o->val > o->value_num)
             o->val = o->value_num;
         if (o->val < 1)
             o->val = 1;
     }
     Route_MenuText();
+}
+
+// Remember the route the Route option shows as the one chosen on its ledge.
+static void Route_RememberPick(void)
+{
+    int pick = Options_Ledge[LOPT_PICK].val - 1;
+    if (route_list_ledge < 0 || pick < 0 || pick >= route_list_num)
+        return;
+    LedgeEntry *L = &ledges[route_list_ledge];
+    L->pick = route_list[pick];
+    L->has_pick = 1;
 }
 
 // The routes the rows show: the chosen route, then the ones after it in
@@ -12627,6 +12665,7 @@ static void Route_MenuText(void)
 void Event_ChangeRoutes(GOBJ *menu, int value)
 {
     Routes_Update(route_browse);
+    Route_RememberPick();
     if (hang_ledge >= 0 && ledges[hang_ledge].have)
         Routes_Show(); // the rows follow the choice as soon as the game goes on
     Route_MenuText();
@@ -13985,6 +14024,7 @@ void Event_Update(void)
         // hanging: the next route in the list, back to the first after the last
         EventOption *o = &Options_Ledge[LOPT_PICK];
         o->val = o->val >= route_list_num ? 1 : o->val + 1;
+        Route_RememberPick();
         Route_MenuText();
         SFX_PlayCommon(2);
     }

@@ -8108,7 +8108,7 @@ static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R
         float fy = cy - common_fastfall_stick * R;
         float fw = R * 0.62f;
         Hud_Rect(cx - fw, fy - 0.05f * k, cx + fw, fy + 0.05f * k, c);
-        Glyph_Draw(GLYPH_DOWN, cx + fw + 0.3f * k, fy, 0.2f * k, c);
+        Glyph_Draw(GLYPH_FF, cx + fw + 0.3f * k, fy, 0.2f * k, c);
     }
 
     // trail, oldest first
@@ -10687,7 +10687,7 @@ static void Row_Route(MeterRow *row, LedgeRoute *r, int e, int facing, int galin
     int away = facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
     int ff = r->ff > 0 ? Route_FF(r) : -1;
     int act = Route_ActCell(r);
-    int ff_glyph = !r->fall_away ? GLYPH_DOWN : facing > 0 ? GLYPH_DOWN_LEFT : GLYPH_DOWN_RIGHT;
+    int ff_glyph = !r->fall_away ? GLYPH_FF : facing > 0 ? GLYPH_FF_DOWN_LEFT : GLYPH_FF_DOWN_RIGHT;
     Route_Cell(row, base, 0, CELL_PRESS, r->drop == DROP_AWAY ? away : GLYPH_DOWN);
     for (int n = 1; n < r->land; n++)
         Route_Cell(row, base, n, n == ff || n == r->dj ? CELL_PRESS : CELL_AIR,
@@ -10996,12 +10996,12 @@ static void Markers_Draw(void)
         int from = route_active ? route_e + 1 : 0;
         int away = facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
         int in = facing > 0 ? GLYPH_RIGHT : GLYPH_LEFT;
-        int down_away = facing > 0 ? GLYPH_DOWN_LEFT : GLYPH_DOWN_RIGHT;
+        int ff_away = facing > 0 ? GLYPH_FF_DOWN_LEFT : GLYPH_FF_DOWN_RIGHT;
         if (from <= 0)
             Route_Marker(0, r->drop == DROP_AWAY ? away : GLYPH_DOWN, color_white,
                          r->fall_away && r->drop != DROP_AWAY ? away : 0, color_white);
         if (r->ff > 0 && Route_FF(r) >= from)
-            Route_Marker(Route_FF(r), r->fall_away ? down_away : GLYPH_DOWN, color_white, 0, color_white);
+            Route_Marker(Route_FF(r), r->fall_away ? ff_away : GLYPH_FF, color_white, 0, color_white);
         if (r->dj >= from)
         {
             int dj_glyph = r->dj_x == LR_DJ_IN     ? in

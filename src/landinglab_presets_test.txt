@@ -74,3 +74,36 @@ preset load Defaults
 closemenu
 card flush
 mark 8 done
+
+# Intensity: the same frame, rising toward the right platform with the
+# landing path on, at each level from Faint to Boldest
+script Intensity sheet
+set Paths/Landing Path = 1
+set Cues/Intensity = 0
+start 38 0 right
+5 X
+14
+shot intensity 1 Faint
+set Cues/Intensity = 1
+start 38 0 right
+5 X
+14
+shot intensity 2 Soft
+set Cues/Intensity = 2
+start 38 0 right
+5 X
+14
+shot intensity 3 Standard
+set Cues/Intensity = 3
+start 38 0 right
+5 X
+14
+shot intensity 4 Bold
+set Cues/Intensity = 4
+start 38 0 right
+5 X
+14
+shot intensity 5 Boldest
+set Cues/Intensity = 2
+set Paths/Landing Path = 0
+mark 9 sheet done

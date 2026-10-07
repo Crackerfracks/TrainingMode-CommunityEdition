@@ -25,29 +25,34 @@ set HUD/Controller Look = 0
 set HUD/Controller Size = 1
 mark done
 
-# Camera views: save the camera as it is, hold it while Falcon runs off,
-# then bring it back after the card is read again
+# Camera views: save the camera as it is, hold it while Falcon runs a few
+# steps (staying on stage), then bring it back after the card is read again.
+# Each "view show" logs where the camera is and whether that's view 1.
 script Camera views
 start 0 0 right
 30
 view save 1
-mark view 1 saved: expect an LLVIEW saved line
-40 s:1,0
-shot view held: the camera stayed put while Falcon ran right
+mark view 1 saved: expect an LLVIEW saved line with real numbers
+15 s:1,0
+view show 1
+shot view held: the camera stayed put while Falcon ran right (show: matches)
 set Camera/Camera Mode = 0
 set Camera/View = 0
-40 s:-1,0
-shot normal camera again: following Falcon
+30 s:-1,0
+view show 1
+shot normal camera again: following Falcon (show: differs)
 view load 1
 5
-shot view 1 back: the same framing as the first view shot
+view show 1
+shot view 1 back: the same framing as the first view shot (show: matches)
 closemenu
 card flush
 set Camera/Camera Mode = 0
 set Camera/View = 0
 card restart
 10
-shot after the card is read again: view 1 framing once more
+view show 1
+shot after the card is read again: view 1 framing once more (show: matches)
 set Camera/Camera Mode = 0
 set Camera/View = 0
 closemenu

@@ -5041,7 +5041,6 @@ static u8 preset_dirty;            // preset_file changed since it was last writ
 static u8 preset_was_paused;
 static u8 preset_cam_pending; // a preset changed the camera mode
 static u8 view_pending;       // ... or its view
-static u8 view_hold;          // frames left putting the camera at the view
 
 static int Preset_Kept(EventOption *o)
 {
@@ -5479,9 +5478,16 @@ static void Card_Load(void)
                 r = CARDRead(&card_fi, card_buf, CARD_READ_LEN, 0);
                 CARDClose(&card_fi);
                 CardImage *img = (CardImage *)card_buf;
-                if (r == CARD_RESULT_READY && img->size == sizeof(PresetFile) && img->sum == Card_Sum(&img->file, sizeof(PresetFile)))
+                // a version 1 file is this one without the views: its
+                // presets are kept
+                u32 size = img->size;
+                if (r == CARD_RESULT_READY && size >= __builtin_offsetof(PresetFile, view) && size <= sizeof(PresetFile) &&
+                    img->sum == Card_Sum(&img->file, size))
                 {
-                    memcpy(preset_file, &img->file, sizeof(PresetFile));
+                    memset(preset_file, 0, sizeof(PresetFile));
+                    memcpy(preset_file, &img->file, size);
+                    if (preset_file->version == 1)
+                        preset_file->version = PRESET_VERSION;
                     ok = 1;
                     Card_Say("Kept in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
                 }
@@ -5705,23 +5711,24 @@ static void Presets_KeepUser(void)
 }
 
 // Camera views: where the camera's eye is, what it looks at, and its field
-// of view. A view is held in Advanced mode, which leaves the camera where
-// it's put; it's put there for a couple of frames, since switching modes
-// moves it first.
-static void View_Hold(void)
+// of view. A view is held in Advanced mode, the game's develop camera, which
+// puts the camera each frame where its own state says (decomp
+// CameraDebugMode at 0x80453004); a view is written there.
+typedef struct DevCam
 {
-    int v = Options_Camera[CAMOPT_VIEW].val;
-    if (!view_hold || v <= 0 || !preset_file->view[v - 1].used)
-    {
-        view_hold = 0;
-        return;
-    }
-    view_hold--;
-    CamView *w = &preset_file->view[v - 1];
-    COBJ *cobj = Match_GetCObj();
-    CObj_SetEyePosition(cobj, &w->eye);
-    CObj_SetInterest(cobj, &w->interest);
-    cobj->projection_param.perspective.fov = w->fov;
+    int last_mode, ply_slot;
+    Vec3 follow_int_offset, follow_eye_offset, follow_eye_pos, follow_int_pos;
+    float follow_fov;
+    Vec3 free_int_pos, free_eye_pos;
+    float free_fov;
+} DevCam;
+#define dev_cam ((DevCam *)0x80453004)
+
+// The match camera's COBJ: Match_GetCObj gives its GOBJ, despite the name
+static COBJ *View_CObj(void)
+{
+    GOBJ *g = (GOBJ *)Match_GetCObj();
+    return g ? g->hsd_object : 0;
 }
 
 static void View_Apply(int v)
@@ -5730,8 +5737,10 @@ static void View_Apply(int v)
         return;
     Options_Camera[CAMOPT_MODE].val = CAM_ADVANCED;
     Event_ChangeCamera(0, CAM_ADVANCED);
-    view_hold = 3;
-    View_Hold();
+    CamView *w = &preset_file->view[v - 1];
+    dev_cam->free_eye_pos = w->eye;
+    dev_cam->free_int_pos = w->interest;
+    dev_cam->free_fov = w->fov;
 }
 
 void Event_ChangeView(GOBJ *menu, int value)
@@ -5753,7 +5762,9 @@ void Event_SaveView(GOBJ *menu)
         return;
     }
     CamView *w = &preset_file->view[v - 1];
-    COBJ *cobj = Match_GetCObj();
+    COBJ *cobj = View_CObj();
+    if (!cobj)
+        return;
     COBJ_GetEyePosition(cobj, &w->eye);
     COBJ_GetInterest(cobj, &w->interest);
     w->fov = cobj->projection_param.perspective.fov;
@@ -5783,7 +5794,6 @@ static void Presets_Update(void)
         view_pending = 0;
         View_Apply(Options_Camera[CAMOPT_VIEW].val);
     }
-    View_Hold();
     Card_Update();
 }
 
@@ -10560,6 +10570,13 @@ static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
             bottom = cand[pick][1];
         }
     }
+    // TM-CE's version text sits in the bottom right corner (TM_CreateWatermark:
+    // right edge at x 615, top at y 446 of the 640 x 480 picture); a display
+    // over it goes up above it
+    Box wm = {(470 - 320) * PX, -SAFE_H - 1.f, (620 - 320) * PX, -(443 - 240) * PX};
+    Box b = {left, bottom, left + w, bottom + h};
+    if (Box_Hit(&b, &wm))
+        bottom = wm.y1;
     *x0 = left;
     *y0 = bottom;
     *x1 = left + w;
@@ -11156,7 +11173,9 @@ static void Ring_Kidney(float mx, float my, float dir, float rho, float span, fl
     Kidney_Points(mx, my, dir, rho, span, w, px, py, ends);
     Kidney_Fill(px, py, ends, Ring_Lit(c, glow));
     Hud_Line(px, py, KIDNEY_POINTS, 1, 0.07f * s, PX, Ring_Edge(c));
-    Ring_Letter(in, mx, my, 0.85f * w);
+    // Z's bean runs diagonally under its letter, so the letter's corners
+    // reach the edges sooner
+    Ring_Letter(in, mx, my, (in == PIN_Z ? 0.64f : 0.85f) * w);
 }
 
 // The Ring look's C-stick around (cx, cy): the four arrows, lit the way the
@@ -11218,9 +11237,9 @@ static void Ring_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
     // Y left of X and a little above it, the same bean mirrored
     Ring_Kidney(cx - tx - 0.55f * s, ty + 0.1f * s, 180, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_Y, glow[PIN_Y]);
     Ring_Kidney(cx - tx + 0.55f * s, ty - 0.1f * s, 0, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_X, glow[PIN_X]);
-    // Z a little higher than the pair's middle: its bean hangs down at the
-    // ends, so this lines its top and bottom up with theirs
-    Ring_Kidney(cx + tx, ty + 0.15f * s, 45, 0.9f * s, 65, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
+    // Z well above the pair's middle: its bean hangs down to the right, so
+    // its weight lines up with theirs only when its top is a little above Y's
+    Ring_Kidney(cx + tx, ty + 0.4f * s, 45, 0.9f * s, 65, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
     Ring_Button(cx + lx, ly, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
     Ring_Button(cx - lx, ly, 0.5f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
 
@@ -12033,7 +12052,8 @@ static int Advance_CheckStep(void)
 //   card restart               as if the event started over: every option
 //                              back to its default, then the card read again
 //   chord lr|z|lrz up|down|left|right  a quick toggle
-//   view save|load <1-4>       Camera > Save View, or picking that View
+//   view save|load|show <1-4>  Camera > Save View, picking that View, or
+//                              logging where the camera is against it
 // Inputs: A B X Y Z L R (L and R fully pressed), s:x,y (stick), c:x,y
 // (C-stick), lt:v (light press, no click), with x, y, v from -1 to 1. A
 // stick value is round(80 v), pulled back onto the rim if it's past it.
@@ -12794,18 +12814,29 @@ static void Script_Cmd(ScriptOp *op)
         ok = what && v >= 1 && v <= CAM_VIEWS;
         if (!ok)
             break;
+        if (Script_Is(what, "show"))
+        {
+            // where the camera is now, to compare with view v as saved
+            COBJ *cobj = View_CObj();
+            CamView *w = &preset_file->view[v - 1];
+            Vec3 eye = {0}, at = {0};
+            if (cobj)
+            {
+                COBJ_GetEyePosition(cobj, &eye);
+                COBJ_GetInterest(cobj, &at);
+            }
+            sprintf(buf, "LLVIEW show: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f; view %d %s\n", eye.X, eye.Y, eye.Z,
+                    at.X, at.Y, at.Z, cobj ? cobj->projection_param.perspective.fov : 0.f, v,
+                    !w->used ? "unsaved"
+                    : fabs(eye.X - w->eye.X) + fabs(eye.Y - w->eye.Y) + fabs(eye.Z - w->eye.Z) < 0.5f ? "matches" : "differs");
+            Log(buf);
+            break;
+        }
         Options_Camera[CAMOPT_VIEW].val = v;
         if (Script_Is(what, "save"))
             Event_SaveView(0);
         else if (Script_Is(what, "load"))
-        {
             Event_ChangeView(0, v);
-            COBJ *cobj = Match_GetCObj();
-            Vec3 eye;
-            COBJ_GetEyePosition(cobj, &eye);
-            sprintf(buf, "LLVIEW load %d: eye now %.1f %.1f %.1f\n", v, eye.X, eye.Y, eye.Z);
-            Log(buf);
-        }
         else
             ok = 0;
         break;

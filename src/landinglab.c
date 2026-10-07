@@ -3851,7 +3851,6 @@ enum options_ledge
     LOPT_RESET,
     LOPT_DELAY,
     LOPT_INV,
-    LOPT_CAM,
 
     LOPT_COUNT
 };
@@ -3869,6 +3868,7 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Route Kind",
+        .val = ROUTES_AI,
         .value_num = countof(route_kind_names),
         .values = route_kind_names,
         .desc = {"NIL: land on the stage with no landing lag.",
@@ -3935,6 +3935,23 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .desc = {"Keep the full intangibility while hanging, so",
                  "the routes don't shrink while you get ready."},
     },
+};
+
+static EventMenu Menu_Ledge = {
+    .name = "Ledge Practice",
+    .option_num = countof(Options_Ledge),
+    .options = Options_Ledge,
+};
+
+// The Training Lab's camera modes. Presets come with saved settings.
+enum options_camera
+{
+    CAMOPT_MODE,
+
+    CAMOPT_COUNT
+};
+
+static EventOption Options_Camera[CAMOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Camera Mode",
@@ -3947,10 +3964,50 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
     },
 };
 
-static EventMenu Menu_Ledge = {
-    .name = "Ledge Practice",
-    .option_num = countof(Options_Ledge),
-    .options = Options_Ledge,
+static EventMenu Menu_Camera = {
+    .name = "Camera",
+    .option_num = countof(Options_Camera),
+    .options = Options_Camera,
+};
+
+// Every button the event uses outside the menu.
+static EventOption Options_Controls[] = {
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Menu",
+        .desc = {"Start opens this menu."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Save Position",
+        .desc = {"Hold D-pad right to save where Falcon is."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Load Position",
+        .desc = {"D-pad left puts Falcon back where you saved.",
+                 "When Reset starts from the ledge, it starts a",
+                 "new attempt instead, and with a test script",
+                 "chosen it plays the script again."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Frame Advance",
+        .desc = {"D-pad down freezes the game, or lets it run."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Step a Frame",
+        .desc = {"While frozen, the Advance button steps one",
+                 "frame; hold it to step slowly. It's Z unless",
+                 "you change it in Speed."},
+    },
+};
+
+static EventMenu Menu_Controls = {
+    .name = "Controls",
+    .option_num = countof(Options_Controls),
+    .options = Options_Controls,
 };
 
 // Things only needed to test the event or report a wrong prediction.
@@ -4031,6 +4088,7 @@ enum options_cues
     COPT_NIL,
     COPT_AI,
     COPT_WL,
+    COPT_SPOT,
     COPT_AI_FILTER,
     COPT_FLASH,
     COPT_GLOW,
@@ -4042,7 +4100,6 @@ static EventOption Options_Cues[COPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "NIL Cues",
-        .val = 1,
         .desc = {"Green: holding the stick lands you with no",
                  "landing lag (NIL)."},
     },
@@ -4066,6 +4123,14 @@ static EventOption Options_Cues[COPT_COUNT] = {
                  "wavelands onto the main floor."},
     },
     {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Spot Timers",
+        .val = 1,
+        .desc = {"Count down at the landing spot too: brackets",
+                 "close in for an AI or NIL; for a waveland, ticks",
+                 "run in from the ends of the slide to the middle."},
+    },
+    {
         .kind = OPTKIND_STRING,
         .name = "AI Filter",
         .value_num = countof(ai_filter_names),
@@ -4085,7 +4150,6 @@ static EventOption Options_Cues[COPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Platform Glow",
-        .val = 1,
         .desc = {"Light up the floor a waveland or wavedash slides",
                  "along: it fills in toward the landing spot as the",
                  "window nears and flashes on each of its frames."},
@@ -4103,6 +4167,7 @@ enum options_paths
 {
     POPT_PATH,
     POPT_BODY,
+    POPT_ROUTE,
     POPT_INPUTS,
     POPT_MARK_SIZE,
     POPT_TICKS,
@@ -4116,7 +4181,6 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Landing Path",
-        .val = 1,
         .desc = {"Draw where Falcon's ECB bottom goes if you keep",
                  "holding the stick and press nothing, in the",
                  "landing's color when its cue is on."},
@@ -4124,9 +4188,16 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Body Path",
-        .val = 1,
         .desc = {"Also draw a dotted line through Falcon's body,",
                  "which is easier to follow than the ECB bottom."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Ledge Route",
+        .val = 1,
+        .desc = {"While Falcon hangs on a ledge and on the way",
+                 "back, draw the chosen route's path. Shown with",
+                 "Show Routes or Assist on in Ledge Practice."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -4160,7 +4231,6 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Slide-off Line",
-        .val = 1,
         .desc = {"When a waveland or wavedash would slide off the",
                  "edge, draw where Falcon goes: full stick that way",
                  "until it starts, then your real stick."},
@@ -4188,11 +4258,11 @@ enum options_hud
 {
     HOPT_TIMER,
     HOPT_WIDE,
-    HOPT_SPOT,
     HOPT_STICK,
     HOPT_LOOK,
     HOPT_PAD_SIZE,
     HOPT_BUTTONS,
+    HOPT_SHIELD_DROP,
     HOPT_PANEL,
     HOPT_PANEL_SIDE,
 
@@ -4203,6 +4273,7 @@ static EventOption Options_Hud[HOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Timer",
+        .val = TIMER_FIXED,
         .value_num = countof(timer_names),
         .values = timer_names,
         .desc = {"Count down to each input frame by frame: cells",
@@ -4213,16 +4284,9 @@ static EventOption Options_Hud[HOPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Wide Cells",
+        .val = 1,
         .desc = {"Make each frame cell of the timer a little",
                  "wider."},
-    },
-    {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Spot Timers",
-        .val = 1,
-        .desc = {"Count down at the landing spot too: brackets",
-                 "close in for an AI or NIL; for a waveland, ticks",
-                 "run in from the ends of the slide to the middle."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -4260,6 +4324,14 @@ static EventOption Options_Hud[HOPT_COUNT] = {
     },
     {
         .kind = OPTKIND_TOGGLE,
+        .name = "Shield Drop Zone",
+        .val = 1,
+        .desc = {"Shade the stick angles that drop through a",
+                 "platform out of shield, in the stick's gate.",
+                 "Shown while Falcon is on a platform."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
         .name = "Info Panel",
         .val = 1,
         .desc = {"Two lines in a top corner: what's coming up,",
@@ -4288,6 +4360,8 @@ enum options_sounds
 {
     SOPT_CHIME,
     SOPT_WINDOW,
+    SOPT_SKIP,
+    SOPT_ROUTE_CHIME,
     SOPT_LOST,
     SOPT_FF,
     SOPT_JUMP,
@@ -4302,14 +4376,28 @@ static EventOption Options_Sounds[SOPT_COUNT] = {
         .name = "Chime on a Hit",
         .val = 1,
         .desc = {"Chime when you land a NIL, an AI or a perfect",
-                 "waveland."},
+                 "waveland, for the cues that are on."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Buzz: Missed Window",
         .val = 1,
-        .desc = {"Buzz when an AI or waveland window passes",
-                 "without the press, or the press misses it."},
+        .desc = {"Buzz when you press for an AI or waveland",
+                 "window and miss it, early or late."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Buzz: Skipped Window",
+        .desc = {"Buzz when an AI or waveland window passes with",
+                 "no press at all. Off, you can watch windows go",
+                 "by to get a feel for the timing."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Chime: Ledge Route",
+        .val = 1,
+        .desc = {"Chime when a ledge route lands with GALINT left,",
+                 "instead of the cue chime."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -4375,6 +4463,7 @@ static EventOption Options_Game[GOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Advance Button",
+        .val = 1,
         .value_num = countof(adv_button_names),
         .values = adv_button_names,
         .desc = {"The button that steps a frame while Frame",
@@ -4395,6 +4484,7 @@ enum options_main
     OPT_HUD,
     OPT_SOUNDS,
     OPT_LEDGE,
+    OPT_CAMERA,
     OPT_GAME,
     OPT_DEV,
     OPT_CONTROLS,
@@ -4409,22 +4499,24 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_MENU,
         .name = "Cues",
         .menu = &Menu_Cues,
-        .desc = {"Which landings get cues (NIL, AI, waveland), the",
-                 "AI filter, Body Flash and Platform Glow."},
+        .desc = {"Which landings get cues (NIL, AI, waveland), spot",
+                 "timers, the AI filter, Body Flash and Platform",
+                 "Glow."},
     },
     {
         .kind = OPTKIND_MENU,
         .name = "Paths",
         .menu = &Menu_Paths,
-        .desc = {"The landing and body paths, input markers, frame",
-                 "dots, the slide-off line and jump previews."},
+        .desc = {"The landing, body and ledge route paths, input",
+                 "markers, frame dots, the slide-off line and jump",
+                 "previews."},
     },
     {
         .kind = OPTKIND_MENU,
         .name = "HUD",
         .menu = &Menu_Hud,
-        .desc = {"The timer, spot timers, controller display",
-                 "and the info panel."},
+        .desc = {"The timer, the controller display and the info",
+                 "panel."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -4437,8 +4529,14 @@ static EventOption Options_Main[OPT_COUNT] = {
         .name = "Ledge Practice",
         .menu = &Menu_Ledge,
         .desc = {"Routes from the ledge with the most GALINT,",
-                 "quicktime Assist, and reset and camera options",
-                 "like the ledgedash training."},
+                 "quicktime Assist, and reset options like the",
+                 "ledgedash training."},
+    },
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Camera",
+        .menu = &Menu_Camera,
+        .desc = {"The Training Lab's camera modes."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -4454,11 +4552,10 @@ static EventOption Options_Main[OPT_COUNT] = {
                  "test scripts."},
     },
     {
-        .kind = OPTKIND_INFO,
+        .kind = OPTKIND_MENU,
         .name = "Controls",
-        .desc = {"D-pad right (hold): save Falcon's position.",
-                 "D-pad left: load it (or replay the script, when",
-                 "one is chosen). D-pad down: frame advance on/off."},
+        .menu = &Menu_Controls,
+        .desc = {"Every button Landing Lab uses outside the menu."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -5144,13 +5241,14 @@ static void Press_CheckMissed(FighterData *fp, int ts)
 
 static void Cue_Missed(int kind);
 static void Cue_Pressed(int kind);
+static int route_active; // following a ledge route after letting go
 
 // Buzz when a window passes without its press, or an aerial or airdodge
 // comes while the countdown runs but doesn't touch down. Called on tracked
 // air frames, after pred_live is updated.
 static void Window_Feedback(FighterData *fp, int ts)
 {
-    int miss = 0;
+    int miss = 0, skip = 0;
     if (Jump_Or_Fall(prev_ts) && Tracked_IsAerial(ts))
     {
         int timed = prev_ai_first && prev_ai_first <= LL_COUNT_FRAMES;
@@ -5175,9 +5273,9 @@ static void Window_Feedback(FighterData *fp, int ts)
         Prediction *p = pred_live;
         int ai_next = Cues_Ai() && p->ai_first == 1 && p->uncertain_from > 1;
         int wl_next = Cues_Waveland() && p->wl_first == 1 && p->uncertain_from > 1;
-        miss = (prev_ai_first == 1 || prev_wl_first == 1) && !ai_next && !wl_next;
+        skip = (prev_ai_first == 1 || prev_wl_first == 1) && !ai_next && !wl_next;
     }
-    if (miss && Options_Sounds[SOPT_WINDOW].val)
+    if ((miss && Options_Sounds[SOPT_WINDOW].val) || (skip && Options_Sounds[SOPT_SKIP].val))
         SFX_PlayCommon(3);
 }
 
@@ -5554,7 +5652,8 @@ static void Landing_Resolve(FighterData *fp)
     int hit = kind == LAND_NIL || kind == LAND_PERFECT_WL || (kind == LAND_AI && !landing_air);
     last_kind = kind == LAND_NIL ? CUE_NIL : kind == LAND_AI ? CUE_AI : kind == LAND_PERFECT_WL ? CUE_WL : -1;
     Cue_Landed(fp, kind, landing_air);
-    if (Options_Sounds[SOPT_CHIME].val && hit)
+    // only for the cues that are on; a ledge route chimes on its own
+    if (Options_Sounds[SOPT_CHIME].val && hit && Kind_Shown(kind) && !route_active)
         SFX_PlayRaw(303, 255, 128, 20, 3); // laserland's success sound
 
     char buf[200];
@@ -6557,7 +6656,6 @@ static void Meter_FromCue(int kind)
 }
 
 static int route_rows_active; // ledge routes fill the meter; the cues' rows give way
-static int route_active;      // following a ledge route after letting go
 static int route_dj_done;     // ... and its double jump happened
 static void Meter_AddRoutes(void);
 
@@ -8383,7 +8481,7 @@ static void Hud_GX(GOBJ *gobj, int pass)
     quad_num = 0;
 
     Meter_Build();
-    if (Options_Hud[HOPT_SPOT].val)
+    if (Options_Cues[COPT_SPOT].val)
         Spot_Draw(fp);
     int timer = Options_Hud[HOPT_TIMER].val;
     if (meter_rows == 0)
@@ -10062,7 +10160,7 @@ static void Meter_AddRoutes(void)
 
 static void Draw_RoutePath(void)
 {
-    if (!Routes_On() || !Options_Paths[POPT_PATH].val || route_path_num < 2)
+    if (!Routes_On() || !Options_Paths[POPT_ROUTE].val || route_path_num < 2)
         return;
     int show = (hang_ledge >= 0 && route_show_num > 0) || (route_active && !route_dj_done);
     if (!show)
@@ -10636,6 +10734,8 @@ static void Ledge_Think(FighterData *fp, int sid)
             if (route_note[0])
                 sprintf(text_last + t, ", %s", route_note);
             last_kind = route_act == route_landed ? CUE_NIL : CUE_AI;
+            if (Options_Sounds[SOPT_ROUTE_CHIME].val)
+                SFX_PlayRaw(303, 255, 128, 20, 3);
             sprintf(buf, "LandingLab route: %s, predicted %d on the drop\n", text_last, route_pred);
             Log(buf);
             Drill_Finish(1);

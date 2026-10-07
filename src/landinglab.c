@@ -4669,6 +4669,7 @@ typedef struct Cue
     int span; // frames the countdown had when it showed up
     int age;  // frames into the window, or into the ending
     int pulse; // frames since the window opened, -1 = none
+    int press; // frames since a press that works (or the hit, with none), -1 = none
     int lag;  // hit: the landing lag the timer burns over
     Vec2 spot; // on the floor: where the AI or NIL lands, or the rails' middle
     float x0, x1; // rails: where that floor ends
@@ -5300,7 +5301,7 @@ static void Window_Forget(void)
 /// Timers          ///
 ///////////////////////
 
-#define LL_GHOST 8 // frames a window's ghost takes to spread out
+#define LL_GHOST 6 // frames a ghost takes to spread out and fade: snappy
 #define LL_BURST 7 // a hit's burst
 #define LL_FADE 10 // a miss or skip folding in
 #define LL_CUT 4   // a countdown the prediction dropped
@@ -5414,6 +5415,7 @@ static void Cue_Set(int kind, int left, int width, u8 dirs, int wd, float x, flo
         memset(c, 0, sizeof(*c));
         c->span = left;
         c->pulse = -1;
+        c->press = -1;
     }
     // a window's width is fixed before it opens; once open, what's left of
     // it shrinks
@@ -5457,6 +5459,7 @@ static void Cue_Pressed(int kind)
     if (c->phase != PH_WINDOW)
         Cue_Open(c);
     c->held = 1;
+    c->press = 0;
 }
 
 // A hit plays until the burn over the landing lag and its flash are done,
@@ -5485,6 +5488,7 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
     {
         memset(e, 0, sizeof(*e));
         e->pulse = -1;
+        e->press = -1;
     }
     c->phase = PH_OFF;
     e->phase = PH_HIT;
@@ -5496,6 +5500,8 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
         e->dirs = dirs;
     if (e->pulse < 0)
         e->pulse = 0;
+    if (e->press < 0)
+        e->press = 0; // no press to pulse on (a NIL): the hit pulses
     Cue_Place(e, fp->phys.pos.X, fp->phys.pos.Y + 1.f);
 }
 
@@ -5545,6 +5551,8 @@ static void Cues_Begin(void)
         {
             if (c->pulse >= 0)
                 c->pulse++;
+            if (c->press >= 0)
+                c->press++;
             if (c->phase == PH_WINDOW)
                 c->age++;
             if (c->held && c->age > 15)
@@ -5560,6 +5568,8 @@ static void Cues_Begin(void)
         {
             if (e->pulse >= 0)
                 e->pulse++;
+            if (e->press >= 0)
+                e->press++;
             e->age++;
             int len = e->phase == PH_HIT ? Cue_HitLen(e, i) : e->phase == PH_FADE ? LL_FADE : LL_CUT;
             if (e->age >= len && !(e->phase == PH_HIT && galint_now > 1))
@@ -6110,9 +6120,10 @@ static void Draw_Prediction(Prediction *p, int body, int style)
 //   an AI or NIL, ticks run in from both ends of the slide to the middle
 //   for a waveland or wavedash.
 // - the fixed strip (optional), a bigger meter at the bottom with labels.
-// Every timer pulses a ghost outward on each frame of its window, the first
-// and last brightest, and ends in a burst (hit) or a muted implosion (miss
-// or skip). Hits keep the cue's color, misses turn a cold slate and skips
+// Every timer sends one ghost out: a strong one with a burst on a press
+// that works, else a faint one on the window's last frame (a skip), and
+// none for an early or late press. It ends in a burst (hit) or a muted
+// implosion (miss or skip). Hits keep the cue's color, misses turn a cold slate and skips
 // gray.
 static const GXColor color_miss = {104, 114, 150, 255}; // cold slate
 static const GXColor color_skip = {140, 149, 168, 255};
@@ -6556,18 +6567,31 @@ static void Row_Ghost(MeterRow *r, int age, int bright)
     }
 }
 
-// One ghost leaves the gate on each frame of a window, until it ended.
-static void Row_Ghosts(MeterRow *r, Cue *c, int ended)
+// The one ghost a timer sends out: a strong one on a press that works (or
+// on the hit, when there was no press), else a faint one on the window's
+// last frame, which a dry run can time against. An early or late press
+// sends none, so it can't be mistaken for either. Returns its age, or -1.
+static int Cue_Ghost(Cue *c, int *bright)
 {
-    if (c->pulse < 0)
-        return;
-    int last = ended ? c->pulse - c->age : c->pulse;
-    for (int j = 0; j < c->width && j <= last; j++)
+    if (c->press >= 0)
     {
-        int g = c->pulse - j;
-        if (g >= 0 && g < LL_GHOST)
-            Row_Ghost(r, g, j == 0 || j == c->width - 1 || j == last);
+        *bright = 1;
+        return c->press < LL_GHOST ? c->press : -1;
     }
+    *bright = 0;
+    if (c->dim == DIM_MISS || c->pulse < 0)
+        return -1;
+    int g = c->pulse - (c->width - 1);
+    return g >= 0 && g < LL_GHOST ? g : -1;
+}
+
+static void Row_Ghosts(MeterRow *r, Cue *c)
+{
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g >= 0)
+        Row_Ghost(r, g, bright);
+    if (c->press >= 0 && c->press < LL_BURST)
+        r->burst = c->press; // the burst goes with the hit's ghost
 }
 
 // The ledge intangibility tail after the first frame Falcon can act (act,
@@ -6601,11 +6625,9 @@ static void Meter_FromCue(int kind)
         if (act >= 0)
             Row_Set(r, act, CELL_ACT, TONE_CUE, 1);
         Row_Tail(r, act);
-        if (e->age < LL_BURST)
-            r->burst = e->age;
         if (act <= 0 && -act < 4)
             r->flash = -act;
-        Row_Ghosts(r, e, 1);
+        Row_Ghosts(r, e);
         if (galint_now > 1 && act < 0)
             sprintf(r->info, "%d GALINT", galint_now - 1);
         else if (act > 0)
@@ -6617,6 +6639,7 @@ static void Meter_FromCue(int kind)
     case PH_FADE:
         r->implode = e->age;
         r->implode_tone = e->dim == DIM_MISS ? TONE_MISS : TONE_SKIP;
+        Row_Ghosts(r, e); // a skip's faint ghost plays out
         sprintf(r->info, e->dim == DIM_MISS ? "miss" : "skip");
         break;
     case PH_CUT:
@@ -6650,7 +6673,7 @@ static void Meter_FromCue(int kind)
             Row_Set(r, j - c->age, CELL_PRESS, tone, 1);
         if (!c->dim)
             r->hot = c->age == 0 || c->age == c->width - 1 ? 2 : 1;
-        Row_Ghosts(r, c, 0);
+        Row_Ghosts(r, c);
         sprintf(r->info, c->dim ? "miss" : "now");
     }
 }
@@ -6857,10 +6880,14 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         {
             if (r->ghost[g] < 0)
                 continue;
-            float q = (float)r->ghost[g] / LL_GHOST;
-            float grow = (0.15f + 1.3f * Ease_Out(q)) * scale;
-            GXColor gc = Color_Fill(Color_Mix(r->color, color_white, 0.5f), (r->ghost_bright[g] ? 0.95f : 0.45f) * (1.f - q));
-            Hud_Frame(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, 1.6f * PX * scale, gc);
+            // a filled copy of the gate's cell, in the row's color, that
+            // swells and fades fast
+            float q = (float)r->ghost[g] / LL_GHOST, fade = (1.f - q) * (1.f - q);
+            int b = r->ghost_bright[g];
+            float grow = (b ? 0.1f + 1.2f * Ease_Out(q) : 0.05f + 0.55f * Ease_Out(q)) * scale;
+            GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
+            Hud_Rect(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
+            Hud_Frame(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, 1.6f * PX * scale, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
         }
         if (r->burst >= 0)
         {
@@ -7139,9 +7166,9 @@ static void Meter_Fixed(FighterData *fp)
 ///////////////////////
 
 #define SPOT_HW 4.f     // half the footprint, in world units
-#define SPOT_STEM 0.9f  // bracket height, HUD units
-#define SPOT_LINE 0.28f // footprint and bracket thickness
-#define SPOT_FOOT 0.45f
+#define SPOT_STEM 1.5f  // bracket height, HUD units
+#define SPOT_LINE 0.4f  // footprint and bracket thickness
+#define SPOT_FOOT 0.7f
 
 static float Meter_Pitch(void)
 {
@@ -7153,6 +7180,32 @@ static void Spot_Bracket(float x, float y, int side, float stem, GXColor c)
     Hud_Rect(x - SPOT_LINE / 2, y, x + SPOT_LINE / 2, y + stem, c);
     float fx = x - side * SPOT_FOOT;
     Hud_Rect(side > 0 ? fx : x, y, side > 0 ? x : fx, y + SPOT_LINE, c);
+}
+
+// A bracket on a dark edge, so it reads over any stage.
+static void Spot_BracketEdged(float x, float y, int side, float stem, GXColor c, float a)
+{
+    float e = 0.12f;
+    Hud_Rect(x - SPOT_LINE / 2 - e, y - e, x + SPOT_LINE / 2 + e, y + stem + e, Color_Over(color_plate, 0.55f * a));
+    float fx = x - side * (SPOT_FOOT + e);
+    Hud_Rect(side > 0 ? fx : x - e, y - e, side > 0 ? x + e : fx, y + SPOT_LINE + e, Color_Over(color_plate, 0.55f * a));
+    Spot_Bracket(x, y, side, stem, c);
+}
+
+// The timer's one ghost (Cue_Ghost): brackets that spread out and fade.
+static void Spot_BracketGhost(Cue *c, GXColor base, float lx, float ly, float rx, float ry)
+{
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g < 0)
+        return;
+    float q = (float)g / LL_GHOST, fade = (1.f - q) * (1.f - q);
+    float o = (bright ? 3.f : 1.4f) * Ease_Out(q);
+    GXColor gc = Color_Over(Color_Mix(base, color_white, bright ? 0.4f : 0.2f), (bright ? 0.95f : 0.45f) * fade);
+    float stem = SPOT_STEM * (1.f + (bright ? 0.6f : 0.25f) * q);
+    Spot_Bracket(lx - o, ly, -1, stem, gc);
+    Spot_Bracket(rx + o, ry, 1, stem, gc);
+    if (bright)
+        Hud_Seg(lx - o, ly, rx + o, ry, SPOT_LINE, Color_Over(base, 0.5f * fade));
 }
 
 // AI and NIL: the footprint where Falcon touches down, and brackets that
@@ -7177,30 +7230,17 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
             return;
         GXColor col = c->dim ? Dim_Color(c->dim) : base;
         float am = c->dim ? 0.5f : 1.f;
-        float charge = k >= 5 ? 0.55f : 1.f - k * 0.09f;
+        float charge = k >= 5 ? 0.75f : 1.f - k * 0.05f;
         int now = c->phase == PH_WINDOW && !c->dim;
+        Hud_Seg(lx, ly, rx, ry, SPOT_LINE + 0.24f, Color_Over(color_plate, 0.5f * am));
         Hud_Seg(lx, ly, rx, ry, SPOT_LINE + 0.04f, Color_Fill(now ? color_white : col, charge * am));
         float off = k * pitch;
-        GXColor bc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f) : col,
-                                (k == 0 ? 1.f : 0.5f + 0.5f * (1.f - k / 10.f)) * am);
-        Spot_Bracket(lx - off, ly, -1, SPOT_STEM, bc);
-        Spot_Bracket(rx + off, ry, 1, SPOT_STEM, bc);
-        if (now)
-        {
-            // the window's ghosts: brackets spreading out
-            for (int j = 0; j < c->width && j <= c->age; j++)
-            {
-                int g = c->pulse - j;
-                if (g < 0 || g >= LL_GHOST)
-                    continue;
-                float q = (float)g / LL_GHOST;
-                float o = 2.6f * Ease_Out(q);
-                int bright = j == 0 || j == c->width - 1 || j == c->age;
-                GXColor gc = Color_Fill(Color_Mix(base, color_white, 0.5f), (bright ? 0.9f : 0.45f) * (1.f - q));
-                Spot_Bracket(lx - o, ly, -1, SPOT_STEM * (1.f + 0.4f * q), gc);
-                Spot_Bracket(rx + o, ry, 1, SPOT_STEM * (1.f + 0.4f * q), gc);
-            }
-        }
+        float ba = (k == 0 ? 1.f : 0.7f + 0.3f * (1.f - k / 10.f)) * am;
+        GXColor bc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f) : col, ba);
+        Spot_BracketEdged(lx - off, ly, -1, SPOT_STEM, bc, ba);
+        Spot_BracketEdged(rx + off, ry, 1, SPOT_STEM, bc, ba);
+        if (c->phase == PH_WINDOW)
+            Spot_BracketGhost(c, base, lx, ly, rx, ry);
         return;
     }
 
@@ -7231,6 +7271,7 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
             Hud_Rect(mx - a - 0.9f, my, mx - a, my + 0.12f, sc);
             Hud_Rect(mx + a, my, mx + a + 0.9f, my + 0.12f, sc);
         }
+        Spot_BracketGhost(c, base, lx, ly, rx, ry);
         break;
     }
     case PH_FADE:
@@ -7243,6 +7284,7 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
         float o = (rx - mx) * k;
         Spot_Bracket(mx - o, my, -1, SPOT_STEM * k, dc);
         Spot_Bracket(mx + o, my, 1, SPOT_STEM * k, dc);
+        Spot_BracketGhost(c, base, lx, ly, rx, ry); // a skip's faint ghost
         break;
     }
     case PH_CUT:
@@ -7273,15 +7315,32 @@ static void Hud_Bump(float cx, float y, float wb, float h, GXColor c)
 }
 
 // One of the waveland ticks at f of the way from the spot (0) to the slide's
-// end (1): wide and low out at the ends, where it first catches the eye,
-// thinner and taller as it closes in, and a spike where the two meet, like
-// two waves adding up.
+// end (1): wide and low out at the ends, where it first catches the eye.
+// It keeps the same area as its foot narrows at a steady rate, so it grows
+// taller faster and faster and spikes where the two meet, like two waves
+// adding up, while it slides in at a steady speed.
 static void Rail_Tick(float x, float y, float f, GXColor c)
 {
-    float n = 1.f - f;
-    float wb = 0.4f + 1.2f * f;
-    float h = 0.8f + 1.9f * n * n * n;
+    float wb = 0.35f + 2.2f * f;
+    float h = 1.9f / wb;
+    Hud_Bump(x, y - 0.15f, wb + 0.3f, h + 0.25f, Color_Over(color_plate, 0.5f * c.a / 255.f));
     Hud_Bump(x, y - 0.15f, wb, h, c);
+}
+
+// The rails' one ghost (Cue_Ghost): ticks running back out to the ends.
+static void Spot_RailGhost(Cue *c, GXColor base, int ok_l, int ok_r, float mx, float my, float lx, float ly, float rx, float ry)
+{
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g < 0)
+        return;
+    float q = (float)g / LL_GHOST, e = Ease_Out(q) * (bright ? 0.7f : 0.35f);
+    float fade = (1.f - q) * (1.f - q);
+    GXColor gc = Color_Over(Color_Mix(base, color_white, bright ? 0.4f : 0.2f), (bright ? 0.95f : 0.45f) * fade);
+    float h = bright ? 2.4f : 1.2f;
+    if (ok_l)
+        Hud_Rect(mx + (lx - mx) * e - 0.14f, my + (ly - my) * e - 0.2f, mx + (lx - mx) * e + 0.14f, my + (ly - my) * e + h, gc);
+    if (ok_r)
+        Hud_Rect(mx + (rx - mx) * e - 0.14f, my + (ry - my) * e - 0.2f, mx + (rx - mx) * e + 0.14f, my + (ry - my) * e + h, gc);
 }
 
 static void Spot_Rails(Cue *c, FighterData *fp, int ended)
@@ -7329,29 +7388,15 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
         int k = c->phase == PH_WINDOW ? 0 : c->left - 1;
         float f = c->span > 1 ? Clamp01((float)k / (c->span - 1)) : 0;
         float n = 1.f - f;
-        GXColor tc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f)
+        GXColor tc = Color_Over(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f)
                                     : Color_Mix(col, color_white, 0.35f * n * n),
-                                (0.75f + 0.25f * n) * am);
+                                (0.85f + 0.15f * n) * am);
         if (ok_l)
             Rail_Tick(mx + (lx - mx) * f, my + (ly - my) * f, f, tc);
         if (ok_r)
             Rail_Tick(mx + (rx - mx) * f, my + (ry - my) * f, f, tc);
-        if (now)
-        {
-            for (int j = 0; j < c->width && j <= c->age; j++)
-            {
-                int g = c->pulse - j;
-                if (g < 0 || g >= LL_GHOST)
-                    continue;
-                float q = (float)g / LL_GHOST, e = Ease_Out(q) * 0.6f;
-                int bright = j == 0 || j == c->width - 1 || j == c->age;
-                GXColor gc = Color_Fill(Color_Mix(base, color_white, 0.5f), (bright ? 0.9f : 0.45f) * (1.f - q));
-                if (ok_l)
-                    Hud_Rect(mx + (lx - mx) * e - 0.12f, my + (ly - my) * e - 0.2f, mx + (lx - mx) * e + 0.12f, my + (ly - my) * e + 1.1f, gc);
-                if (ok_r)
-                    Hud_Rect(mx + (rx - mx) * e - 0.12f, my + (ry - my) * e - 0.2f, mx + (rx - mx) * e + 0.12f, my + (ry - my) * e + 1.1f, gc);
-            }
-        }
+        if (c->phase == PH_WINDOW)
+            Spot_RailGhost(c, base, ok_l, ok_r, mx, my, lx, ly, rx, ry);
 
         // where the stick held now would stop the slide: the dodge takes
         // its angle and keeps the sideways part of its speed
@@ -7417,6 +7462,7 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
         Hud_Seg(mx + (lx - mx) * k, my + (ly - my) * k, mx + (rx - mx) * k, my + (ry - my) * k, 0.14f, dc);
         Hud_Rect(mx + (lx - mx) * k - 0.1f, my, mx + (lx - mx) * k + 0.1f, my + 1.1f * k, dc);
         Hud_Rect(mx + (rx - mx) * k - 0.1f, my, mx + (rx - mx) * k + 0.1f, my + 1.1f * k, dc);
+        Spot_RailGhost(c, base, ok_l, ok_r, mx, my, lx, ly, rx, ry); // a skip's faint ghost
         break;
     }
     case PH_CUT:

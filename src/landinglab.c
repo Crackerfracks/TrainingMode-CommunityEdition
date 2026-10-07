@@ -3985,7 +3985,7 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .value_num = 1,
         .val = 1,
         .format = route_pick_fmt,
-        .desc = {route_desc[0], route_desc[1], route_desc[2], "Left and right browse. Assist follows it."},
+        .desc = {route_desc[0], route_desc[1], route_desc[2], "Left/right browse, or D-pad up on the ledge."},
         .OnChange = Event_ChangeRoutes,
     },
     {
@@ -4093,6 +4093,14 @@ static EventOption Options_Controls[] = {
                  "When Reset starts from the ledge, it starts a",
                  "new attempt instead, and with a test script",
                  "chosen it plays the script again."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Next Route",
+        .desc = {"While hanging from a ledge, D-pad up shows the",
+                 "next ledge route in the list, and the first",
+                 "again after the last. Ledge Practice > Route",
+                 "picks any route directly."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -13972,6 +13980,14 @@ void Event_Update(void)
     // pressed by chance, everything the event draws would stay hidden.
     if ((down & HSD_BUTTON_DPAD_UP) && Options_Game[GOPT_FRAME_ADV].val && (Options_Dev[DOPT_LOG].val || script_cur >= 0))
         capture_clean ^= 1;
+    else if ((down & HSD_BUTTON_DPAD_UP) && hang_ledge >= 0 && route_list_num > 1 && Routes_On())
+    {
+        // hanging: the next route in the list, back to the first after the last
+        EventOption *o = &Options_Ledge[LOPT_PICK];
+        o->val = o->val >= route_list_num ? 1 : o->val + 1;
+        Route_MenuText();
+        SFX_PlayCommon(2);
+    }
     if (!Options_Game[GOPT_FRAME_ADV].val)
         capture_clean = 0;
     if ((down & HSD_BUTTON_DPAD_LEFT) && Options_Dev[DOPT_SCRIPT].val)

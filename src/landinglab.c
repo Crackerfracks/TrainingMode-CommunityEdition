@@ -3776,7 +3776,10 @@ static const char *mark_size_names[] = {"Small", "Medium", "Large"};
 static const float mark_sizes[] = {0.9f, 1.25f, 1.6f};
 static const char *ai_filter_names[] = {"Useful", "All"};
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
-static const char *timer_names[] = {"Near Falcon", "Fixed Strip", "Both", "Off"};
+static const char *near_names[] = {"Off", "Bubble", "Halo", "Pincers", "ECB Fill", "Lights", "Old Strip"};
+static const char *strip_names[] = {"Off", "Cells", "Highway", "Dial"};
+static const char *wl_timer_names[] = {"Off", "Ticks", "Rails", "Chevrons"};
+static const char *wd_timer_names[] = {"Off", "Cells", "Pips", "Ring"};
 static const char *stick_names[] = {"By Percent", "Bottom Left", "Bottom Right", "Off"};
 static const char *pad_look_names[] = {"Ring", "Classic"};
 static const float ring_sizes[] = {1.f, 1.25f, 1.5f};
@@ -3795,12 +3798,40 @@ static const char *cam_names[] = {"Normal", "Zoom", "Fixed", "Advanced"};
 #define LL_SCRIPT_MAX 48 // scripts read from the script file
 static const char *script_names[LL_SCRIPT_MAX + 2] = {"Off"}; // and All
 
-enum timer_kind
+// The timers' looks (see the Timers menu). Each draws the same cues.
+enum near_kind
 {
-    TIMER_FALCON,
-    TIMER_FIXED,
-    TIMER_BOTH,
-    TIMER_OFF,
+    NEAR_OFF,
+    NEAR_BUBBLE,  // a ring closes on a bubble where his body will be at the press
+    NEAR_HALO,    // a bead runs around a ring on him into the window's notch
+    NEAR_PINCERS, // brackets as tall as him close in from both sides
+    NEAR_ECB,     // his ECB diamond fills, then spikes onto the floor
+    NEAR_LIGHTS,  // a fuse, then one light a frame over his head
+    NEAR_STRIP,   // the old cell strip that finds room around him
+};
+
+enum strip_kind
+{
+    STRIP_OFF,
+    STRIP_CELLS,   // cells slide into a gate
+    STRIP_HIGHWAY, // notes fall onto a line, one lane per cue
+    STRIP_DIAL,    // a hand sweeps into the window's wedge
+};
+
+enum wl_timer_kind
+{
+    WLT_OFF,
+    WLT_TICKS,    // ticks slide in from the slide's ends and spike where they meet
+    WLT_RAILS,    // the rails fill in from the ends
+    WLT_CHEVRONS, // arrowheads hop in a notch a frame
+};
+
+enum wd_timer_kind
+{
+    WDT_OFF,
+    WDT_CELLS, // a row in the strips
+    WDT_PIPS,  // a pip a jumpsquat frame under his feet
+    WDT_RING,  // a ring on the floor tightens each frame
 };
 
 enum stick_place
@@ -4104,7 +4135,6 @@ enum options_cues
     COPT_NIL,
     COPT_AI,
     COPT_WL,
-    COPT_SPOT,
     COPT_AI_FILTER,
     COPT_FLASH,
     COPT_GLOW,
@@ -4137,14 +4167,6 @@ static EventOption Options_Cues[COPT_COUNT] = {
                  "at once with full speed (perfect waveland), and",
                  "the wavedash out of a jump. Platforms leaves out",
                  "wavelands onto the main floor."},
-    },
-    {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Spot Timers",
-        .val = 1,
-        .desc = {"Count down at the landing spot too: brackets",
-                 "close in for an AI or NIL; for a waveland, ticks",
-                 "run in from the ends of the slide to the middle."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -4269,11 +4291,86 @@ static EventMenu Menu_Paths = {
     .options = Options_Paths,
 };
 
+// The countdowns to each input, and how each one looks.
+enum options_timers
+{
+    TOPT_NEAR,
+    TOPT_STRIP,
+    TOPT_WIDE,
+    TOPT_SPOT,
+    TOPT_WL,
+    TOPT_WD,
+
+    TOPT_COUNT
+};
+
+static EventOption Options_Timers[TOPT_COUNT] = {
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Near Falcon",
+        .value_num = countof(near_names),
+        .values = near_names,
+        .desc = {"A countdown that rides with Falcon. Bubble: a",
+                 "ring closes on where his body will be. Halo: a",
+                 "bead runs into a notch. Pincers, ECB Fill and",
+                 "Lights close, fill or count in on him."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Fixed Strip",
+        .val = STRIP_CELLS,
+        .value_num = countof(strip_names),
+        .values = strip_names,
+        .desc = {"A countdown in a corner. Cells slide into a gate,",
+                 "Highway drops notes onto a line, Dial sweeps a",
+                 "hand into the window. Press as it arrives."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Wide Cells",
+        .val = 1,
+        .desc = {"Make each frame cell of the cell timers a little",
+                 "wider."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Landing Spot",
+        .val = 1,
+        .desc = {"Brackets close in on the landing spot of an AI",
+                 "or NIL and meet it on the frame to press."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Waveland",
+        .val = WLT_TICKS,
+        .value_num = countof(wl_timer_names),
+        .values = wl_timer_names,
+        .desc = {"At the slide: ticks run in from its ends and",
+                 "spike where they meet, the rails fill in, or",
+                 "chevrons hop in a notch a frame. They meet on",
+                 "the frame to airdodge."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Wavedash",
+        .val = WDT_CELLS,
+        .value_num = countof(wd_timer_names),
+        .values = wd_timer_names,
+        .desc = {"Out of the jumpsquat: a row in the strips, a pip",
+                 "a frame under Falcon's feet, or a ring on the",
+                 "floor that closes on the airdodge frame."},
+    },
+};
+
+static EventMenu Menu_Timers = {
+    .name = "Timers",
+    .option_num = countof(Options_Timers),
+    .options = Options_Timers,
+};
+
 // What's drawn on the screen rather than in the stage.
 enum options_hud
 {
-    HOPT_TIMER,
-    HOPT_WIDE,
     HOPT_STICK,
     HOPT_LOOK,
     HOPT_PAD_SIZE,
@@ -4286,24 +4383,6 @@ enum options_hud
 };
 
 static EventOption Options_Hud[HOPT_COUNT] = {
-    {
-        .kind = OPTKIND_STRING,
-        .name = "Timer",
-        .val = TIMER_FIXED,
-        .value_num = countof(timer_names),
-        .values = timer_names,
-        .desc = {"Count down to each input frame by frame: cells",
-                 "slide into the gate, press as one reaches it.",
-                 "Near Falcon stays put by him, clear of his path;",
-                 "Fixed Strip is a bigger one with labels."},
-    },
-    {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Wide Cells",
-        .val = 1,
-        .desc = {"Make each frame cell of the timer a little",
-                 "wider."},
-    },
     {
         .kind = OPTKIND_STRING,
         .name = "Controller",
@@ -4496,6 +4575,7 @@ static EventMenu Menu_Game = {
 enum options_main
 {
     OPT_CUES,
+    OPT_TIMERS,
     OPT_PATHS,
     OPT_HUD,
     OPT_SOUNDS,
@@ -4515,9 +4595,16 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_MENU,
         .name = "Cues",
         .menu = &Menu_Cues,
-        .desc = {"Which landings get cues (NIL, AI, waveland), spot",
-                 "timers, the AI filter, Body Flash and Platform",
-                 "Glow."},
+        .desc = {"Which landings get cues (NIL, AI, waveland), the",
+                 "AI filter, Body Flash and Platform Glow."},
+    },
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Timers",
+        .menu = &Menu_Timers,
+        .desc = {"The countdowns to each input: near Falcon, in a",
+                 "corner, at the landing spot, and for wavelands",
+                 "and wavedashes."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -4531,8 +4618,7 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_MENU,
         .name = "HUD",
         .menu = &Menu_Hud,
-        .desc = {"The timer, the controller display and the info",
-                 "panel."},
+        .desc = {"The controller display and the info panel."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -6633,7 +6719,10 @@ static void Meter_FromCue(int kind)
     int live = c->phase != PH_OFF;
     if (!live && e->phase == PH_OFF)
         return;
-    MeterRow *r = Meter_Add(Cue_Color(kind), kind == CUE_WL && (live ? c->wd : e->wd) ? "WD" : cue_labels[kind]);
+    int wd = kind == CUE_WL && (live ? c->wd : e->wd);
+    if (wd && Options_Timers[TOPT_WD].val != WDT_CELLS)
+        return; // drawn by Falcon's feet, or not at all
+    MeterRow *r = Meter_Add(Cue_Color(kind), wd ? "WD" : cue_labels[kind]);
     if (!r)
         return;
 
@@ -6800,7 +6889,7 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
 // labels. Returns nothing drawn when there are no rows.
 static void Meter_Draw(float gx, float base, float scale, int max_cells, int labels)
 {
-    int wide = Options_Hud[HOPT_WIDE].val;
+    int wide = Options_Timers[TOPT_WIDE].val;
     float pitch = (MT_PITCH + (wide ? MT_WIDE : 0)) * scale;
     float cw = (MT_CW + (wide ? MT_WIDE : 0)) * scale;
     float ch = MT_CH * scale, gap = MT_GAP * scale;
@@ -7074,8 +7163,7 @@ static int Pin_Clear(FighterData *fp, float gx, float base, float w, float h)
         if (Box_Hit(&m, &panel))
             return 0;
     }
-    int timer = Options_Hud[HOPT_TIMER].val;
-    if (timer == TIMER_BOTH)
+    if (Options_Timers[TOPT_STRIP].val != STRIP_OFF)
     {
         // the fixed strip along the bottom
         Box strip = {-SAFE_W, -SAFE_H, SAFE_W, -SAFE_H + 0.4f + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
@@ -7159,7 +7247,7 @@ static void Meter_Above(FighterData *fp)
     float head_x, head_y;
     Hud_FromWorld(fp->phys.pos.X, fp->phys.pos.Y + 18.f, &head_x, &head_y);
 
-    int wide = Options_Hud[HOPT_WIDE].val;
+    int wide = Options_Timers[TOPT_WIDE].val;
     float pitch = MT_PITCH + (wide ? MT_WIDE : 0);
     float cw = MT_CW + (wide ? MT_WIDE : 0);
     int len = 1;
@@ -7218,7 +7306,7 @@ static void Meter_Fixed(FighterData *fp)
 
 static float Meter_Pitch(void)
 {
-    return MT_PITCH + (Options_Hud[HOPT_WIDE].val ? MT_WIDE : 0);
+    return MT_PITCH + (Options_Timers[TOPT_WIDE].val ? MT_WIDE : 0);
 }
 
 static void Spot_Bracket(float x, float y, int side, float stem, GXColor c)
@@ -7517,6 +7605,18 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
     }
 }
 
+// The near-Falcon timers other than the old strip, in the look picked in the
+// Timers menu.
+static void Near_Draw(FighterData *fp, int look)
+{
+}
+
+// The wavedash timers drawn at Falcon's feet (Pips, Ring); Cells is a row in
+// the strips.
+static void Wd_Draw(FighterData *fp)
+{
+}
+
 static void Spot_Draw(FighterData *fp)
 {
     for (int pass = 0; pass < 2; pass++)
@@ -7529,8 +7629,11 @@ static void Spot_Draw(FighterData *fp)
             if (i == CUE_AI ? !Cues_Ai() : i == CUE_WL ? !Cues_Waveland() : !Cues_Nil())
                 continue;
             if (i == CUE_WL)
-                Spot_Rails(c, fp, !pass);
-            else
+            {
+                if (Options_Timers[TOPT_WL].val != WLT_OFF)
+                    Spot_Rails(c, fp, !pass);
+            }
+            else if (Options_Timers[TOPT_SPOT].val)
                 Spot_Brackets(i, c, !pass);
         }
     }
@@ -8792,18 +8895,20 @@ static void Hud_GX(GOBJ *gobj, int pass)
     quad_num = 0;
 
     Meter_Build();
-    if (Options_Cues[COPT_SPOT].val)
-        Spot_Draw(fp);
-    int timer = Options_Hud[HOPT_TIMER].val;
+    Spot_Draw(fp);
+    int near = Options_Timers[TOPT_NEAR].val;
     if (meter_rows == 0)
         Pin_Idle();
     else
     {
-        if (timer == TIMER_FALCON || timer == TIMER_BOTH)
+        if (near == NEAR_STRIP)
             Meter_Above(fp);
-        if (timer == TIMER_FIXED || timer == TIMER_BOTH)
+        if (Options_Timers[TOPT_STRIP].val != STRIP_OFF)
             Meter_Fixed(fp);
     }
+    if (near != NEAR_OFF && near != NEAR_STRIP)
+        Near_Draw(fp, near);
+    Wd_Draw(fp);
     Markers_Draw();
     Compass_Draw();
     Pad_Draw(fp);

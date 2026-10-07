@@ -66,6 +66,10 @@
 #define COMMON_FALL_LEAN_RATE 0x448     // float: how fast the lean moves to its target each frame
 #define COMMON_AIR_FRICTION_OOB 0x1FC   // float: air friction while faster than the drift max
 #define COMMON_UPB_DRIFT_STICK 0x258    // float: |stick x| below this stops a Falcon Dive's drift
+#define COMMON_DROP_STICK 0x464         // float: stick y <= -this drops through a platform out of shield
+#define COMMON_DROP_WINDOW 0x468        // frames the flick may take to get there (the decomp types it float)
+#define COMMON_SPOT_STICK 0x314         // float: stick y <= this is a spotdodge
+#define COMMON_SPOT_WINDOW 0x318        // int: frames the flick may take for that
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
@@ -2362,6 +2366,10 @@ static float common_fall_lean_deadzone;
 static float common_fall_lean_rate;
 static float common_air_friction_oob;
 static float common_upb_drift_stick;
+static float common_drop_stick;  // as a positive number: stick y <= -this
+static int common_drop_window;
+static float common_spot_stick;  // as a negative number: stick y <= this
+static int common_spot_window;
 
 static int ai_show_all; // the AI Filter option is on All
 
@@ -2373,6 +2381,14 @@ static float Common_Float(int offset)
 static int Common_Int(int offset)
 {
     return *(int *)((u8 *)*stc_ftcommon + offset);
+}
+
+// A frame count the decomp may type as a float (the shield drop's): a word
+// that isn't a small int is read as a float.
+static int Common_Frames(int offset)
+{
+    int n = Common_Int(offset);
+    return n >= 0 && n < 256 ? n : (int)Common_Float(offset);
 }
 
 // ftCommon_CalcSelfAccel_DriftFrom with the stick held at stick_x
@@ -4747,6 +4763,9 @@ static void Log_Attributes(FighterData *fp)
     Log(buf);
     sprintf(buf, "LandingLab common: nair below stick x %.4f y %.4f, uair/dair above %.4f rad\n",
             common_aerial_stick_x, common_aerial_stick_y, common_aerial_angle);
+    Log(buf);
+    sprintf(buf, "LandingLab common: shield drop stick %.4f window %d (raw %x), spotdodge stick %.4f window %d\n",
+            common_drop_stick, common_drop_window, Common_Int(COMMON_DROP_WINDOW), common_spot_stick, common_spot_window);
     Log(buf);
     sprintf(buf, "LandingLab common: fall lean deadzone %.5f rate %.5f, max jumps %d\n",
             common_fall_lean_deadzone, common_fall_lean_rate, fp->attr.max_jumps);
@@ -7544,29 +7563,32 @@ static void Spot_Draw(FighterData *fp)
 // The Ring look: the whole controller in an ellipse 9.1 by 6.4 HUD units at
 // Small, the room TM-CE's own controller model takes (lab.dat). L and R are
 // the ellipse's halves, each a band from the gap at the top to the gap at
-// the bottom that swells into a pointed nub at the side. A press fills both
-// ends of the band to the middle, then floods the nub; the click flashes it
-// and it stays lit while held. The stick's gate is in the middle with the
-// buttons in the four bulbs around it, in the controller's own colors and
-// sizes: the X and Y kidneys top left, Z top right, A bottom left, B bottom
-// right. Below the gate the C-stick: four arrows for the direction the game
-// reads as a smash or aerial, around a small live gate whose trail shows
-// smash DI. Every edge is soft, so the small shapes don't look jagged.
+// the bottom that swells into a deep, pointed nub at the side. A press fills
+// both ends of the band to the middle, then floods the nub; a click lights
+// the whole half and keeps it lit while held. The stick's gate is in the
+// middle with the buttons in the four bays around it, filled in the
+// controller's own colors and lettered like the real ones: X and Y top left,
+// Z top right, B bottom left, A bottom right, each in the middle of its bay
+// (the widest circle that fits there). A press leaves a ghost of the button's
+// own fill that grows a little and fades in a few frames. Below the gate the
+// C-stick: four arrows for the direction the game reads as a smash or aerial,
+// around a small live gate whose trail shows smash DI. Every edge is soft, so
+// the small shapes don't look jagged.
 #define RING_A 4.55f    // the ellipse's half width
 #define RING_B 3.2f     // and half height
 #define RING_BAND 0.3f  // the triggers' band, where a light press shows
-#define RING_NUB 1.4f   // how far the nub reaches in past the band
-#define RING_NUB_W 48.f // the nub's half width, in degrees around the ellipse
+#define RING_NUB 2.2f   // how far the nub reaches in past the band
+#define RING_NUB_W 34.f // the nub's half width, in degrees around the ellipse
 #define RING_GAP 7.f    // degrees left open at the top and bottom
 #define RING_CH 0.5f    // the share of a trigger's travel that fills the band; the rest floods the nub
 #define RING_LIGHT (43.f / 140.f) // a light press, where the game starts counting a trigger
 #define RING_LEG_SEGS 4
 #define RING_NUB_SEGS 12
 #define RING_SEGS (2 * RING_LEG_SEGS + RING_NUB_SEGS)
-#define RING_STICK_Y 0.3f // the stick gate's center, above the ellipse's
-#define RING_STICK_R 1.55f
-#define RING_C_Y -2.2f // the C-stick's center
-#define RING_C_R 0.45f
+#define RING_STICK_Y 0.35f // the stick gate's center, above the ellipse's
+#define RING_STICK_R 1.45f
+#define RING_C_Y -2.16f // the C-stick's center, clear of the gate above it
+#define RING_C_R 0.4f
 
 // The inputs that glow.
 enum pad_input
@@ -7805,22 +7827,118 @@ static void Pad_Trigger(float x, float by, float analog, float glow)
         Hud_Rect(x + 0.06f, by + 4.86f, x1 - 0.06f, by + 5.24f, Color_Fill(c, glow));
 }
 
+// The shield drop zone: the stick angles that drop Falcon through a platform
+// out of his shield, shaded in the gate while he stands or shields on one.
+//
+// Checked in the decomp:
+// - The drop is ftCo_80099F1C (ftCo_Pass.c), reached through ftCo_8009A080:
+//   L or R held, stick y <= -PlCo 0x464, the y timer (active_timer.lstick.y,
+//   the frames since the stick left the tilt zone; timer_lstick_tilt_y here)
+//   below PlCo 0x468, and mpColl_IsOnPlatform on the floor under him (the
+//   line's platform flag, desc->is_unk). It never looks at x, so everything
+//   below the line drops: the zone is a cap of the gate.
+// - It's the last check in GuardOn's and Guard's IASA (ftCo_Guard.c). The
+//   spotdodge is ahead of it (ftCo_8009980C, ftCo_Escape.c): stick y <=
+//   PlCo 0x314 with that timer below PlCo 0x318, or the C-stick down as far.
+//   A flick that gets that far down fast enough spotdodges and never drops.
+//   The sideways roll check (ftCo_8009917C) is ahead of it too, but goes by
+//   the x flick, so it isn't drawn.
+// Inferred, not checked on a console:
+// - The signs: 0x314 is compared as it is (so negative), 0x464 negated (so
+//   positive). The decomp types 0x468 as a float where the other windows are
+//   ints, so Common_Frames reads it either way. Event_Init logs all four.
+// - Standing (Wait) and the two shield states are where to show it.
+static int Pad_DropShown(FighterData *fp)
+{
+    int sid = fp->state_id;
+    int id = fp->coll_data.ground_index;
+    RawCollLine *lines = (RawCollLine *)*stc_collline;
+    return Options_Hud[HOPT_SHIELD_DROP].val && fp->phys.air_state == 0 &&
+           (sid == ASID_WAIT || sid == ASID_GUARDON || sid == ASID_GUARD) &&
+           common_drop_stick > 0.3f && common_drop_stick < 1.f && // as read from the game
+           lines && id >= 0 && lines[id].desc->is_unk;            // is_unk is the platform flag
+}
+
+// The part of the gate (an octagon) at or below the stick height lim (-1 to
+// 1), tinted c at a, with a line along its top edge at la (none if 0). Cut
+// like any convex polygon: the points that are below it, and where the edges
+// that cross it do.
+static void Pad_Cap(float cx, float cy, float R, float k, float lim, GXColor c, float a, float la)
+{
+    float vx[8], vy[8], px[10], py[10], ex[2];
+    float y = cy + lim * R;
+    Circle_Points(cx, cy, R, 8, vx, vy);
+    int n = 0, e = 0;
+    for (int i = 0; i < 8; i++)
+    {
+        int j = (i + 1) % 8;
+        int in0 = vy[i] <= y, in1 = vy[j] <= y;
+        if (in0)
+        {
+            px[n] = vx[i];
+            py[n++] = vy[i];
+        }
+        if (in0 != in1 && e < 2)
+        {
+            ex[e] = vx[i] + (vx[j] - vx[i]) * (y - vy[i]) / (vy[j] - vy[i]);
+            px[n] = ex[e++];
+            py[n++] = y;
+        }
+    }
+    if (e < 2 || n < 3)
+        return;
+    float mx = 0, my = 0;
+    for (int i = 0; i < n; i++)
+    {
+        mx += px[i] / n;
+        my += py[i] / n;
+    }
+    Hud_Fan(mx, my, px, py, n, Color_Over(c, a));
+    if (la > 0)
+        Hud_Seg(ex[0], y, ex[1], y, 0.06f * k, Color_Over(c, la));
+}
+
+// The zone in the stick's gate: blue where a press drops, with amber over
+// where a flick down fast enough spotdodges instead (a slow one still drops
+// there). Each brightens while the stick is doing it now, as the fastfall
+// line does.
+static void Pad_DropZone(FighterData *fp, float cx, float cy, float R, float k)
+{
+    if (!Pad_DropShown(fp))
+        return;
+    float y = fp->input.lstick.Y;
+    int flick = (u8)fp->input.timer_lstick_tilt_y;
+    int dodges = y <= common_spot_stick && flick < common_spot_window;
+    int drops = y <= -common_drop_stick && flick < common_drop_window && !dodges;
+    GXColor blue = {100, 170, 255, 255}, amber = {255, 175, 60, 255};
+    Pad_Cap(cx, cy, R, k, -common_drop_stick, blue, drops ? 0.36f : 0.2f, drops ? 0.9f : 0.5f);
+    if (common_spot_stick > -1.f && common_spot_stick < -0.3f)
+    {
+        // the two lines would sit on each other if the thresholds are close
+        int apart = fabs(common_spot_stick + common_drop_stick) > 0.08f;
+        Pad_Cap(cx, cy, R, k, common_spot_stick, amber, dodges ? 0.34f : 0.14f, !apart ? 0 : dodges ? 0.9f : 0.5f);
+    }
+}
+
 // The stick: its gate, the band Melee reads as zero, the last frames as a
-// trail, where the stick is, and while falling the line where pulling down
-// starts a fastfall (lit while a fastfall flick is live). R is the gate's
-// radius, k scales the marks inside it.
+// trail, where the stick is, while falling the line where pulling down
+// starts a fastfall (lit while a fastfall flick is live), and on a platform
+// the shield drop zone. R is the gate's radius, k scales the marks inside it.
 static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R, float k)
 {
     Pad_Gate(cx, cy, R, 0.12f * k, Color_Fill(color_white, 0.45f));
 
-    // the deadzone cross, where an axis reads as zero
+    // the deadzone cross, where an axis reads as zero; fainter in the Ring
+    // look, so the gate and the stick read first
     float rx = pad->fstickX, ry = pad->fstickY;
     float dzx = Common_Float(0x0), dzy = Common_Float(0x4);
-    GXColor band = Color_Over(color_white, 0.25f);
+    GXColor band = Color_Over(color_white, pad_soft ? 0.1f : 0.25f);
     float len = R * 0.88f;
     Hud_Rect(cx - dzx * R, cy - len, cx + dzx * R, cy + len, band);
     Hud_Rect(cx - len, cy - dzy * R, cx - dzx * R, cy + dzy * R, band);
     Hud_Rect(cx + dzx * R, cy - dzy * R, cx + len, cy + dzy * R, band);
+
+    Pad_DropZone(fp, cx, cy, R, k);
 
     // fastfall line: lit on the frames the game takes a flick past it (it
     // has to be falling, not fastfalling yet, and not in an airdodge or a
@@ -7875,16 +7993,16 @@ static void Pad_CStick(HSD_Pad *pad, float cx, float cy, float aerial)
     Hud_Rect(dx - 0.17f, dy - 0.17f, dx + 0.17f, dy + 0.17f, c);
 }
 
-// The nub's depth past the band, t degrees from its middle: broad
-// shoulders that flow out of the band, and a pointed tip.
+// The nub's depth past the band, t degrees from its middle: a smooth bell,
+// since a point flares into a spike where the soft outline turns.
 static float Ring_Swell(float t)
 {
     float u = fabs(t) / RING_NUB_W;
     if (u >= 1)
         return 0;
     float sh = 1 - u * u;
-    float tip = 1 - u / 0.38f;
-    return RING_NUB * (0.6f * sh * sh + (tip > 0 ? 0.4f * tip * sqrtf(tip) : 0));
+    sh *= sh;
+    return RING_NUB * sh * sh;
 }
 
 // A point of the ring's left half at size s: t degrees around the ellipse
@@ -7897,6 +8015,16 @@ static void Ring_Point(float t, float off, float s, float *x, float *y)
     float nx = c / RING_A, ny = sn / RING_B, m = sqrtf(nx * nx + ny * ny);
     *x = (RING_A * c - nx / m * off) * s;
     *y = (RING_B * sn - ny / m * off) * s;
+}
+
+// A point on the inner edge of the left half, pushed d units further in
+// toward the middle (the nub): straight across rather than along the
+// ellipse's normal, which folds over itself once it's deeper than the
+// ellipse's curve at the side is round.
+static void Ring_Inner(float t, float d, float s, float *x, float *y)
+{
+    Ring_Point(t, RING_BAND, s, x, y);
+    *x += d * s;
 }
 
 // The angle of the k-th sample along a half, from its top end (k = 0) to its
@@ -7913,23 +8041,23 @@ static float Ring_Angle(int k)
     return n1 + (bot - n1) * k / RING_LEG_SEGS;
 }
 
-// A quad of a half between the angles t0 and t1, from the offset o0 in to
-// the offset o1 (each given at both angles). m is 1 for the left half and
-// -1 for the right one.
-static void Ring_Quad(float cx, float cy, float s, float m, float t0, float t1, float o0a, float o0b, float o1a, float o1b, GXColor c)
+// A quad of a half between the angles t0 and t1, from the offset o0 in to the
+// band's inner edge pushed d further in (each given at both angles). m is 1
+// for the left half and -1 for the right one.
+static void Ring_Quad(float cx, float cy, float s, float m, float t0, float t1, float o0a, float o0b, float d1a, float d1b, GXColor c)
 {
     float x[4], y[4];
     Ring_Point(t0, o0a, s, &x[0], &y[0]);
     Ring_Point(t1, o0b, s, &x[1], &y[1]);
-    Ring_Point(t1, o1b, s, &x[2], &y[2]);
-    Ring_Point(t0, o1a, s, &x[3], &y[3]);
+    Ring_Inner(t1, d1b, s, &x[2], &y[2]);
+    Ring_Inner(t0, d1a, s, &x[3], &y[3]);
     Quad_Add(cx + m * x[0], cy + y[0], cx + m * x[1], cy + y[1], cx + m * x[2], cy + y[2], cx + m * x[3], cy + y[3], c);
 }
 
 // One trigger as a half of the ring around (cx, cy): side -1 is L, 1 is R.
-// analog is how far it's pressed, click whether it's clicked, flash the
-// click's flash.
-static void Ring_Trigger(float cx, float cy, float s, int side, float analog, int click, float flash)
+// analog is how far it's pressed, click whether it's clicked, lit how lit the
+// click leaves it (1 while it's held, fading after), flash the press's flash.
+static void Ring_Trigger(float cx, float cy, float s, int side, float analog, int click, float lit, float flash)
 {
     GXColor c = color_in_dodge;
     float m = -side;
@@ -7940,7 +8068,7 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         float t = Ring_Angle(k);
         int o = k, i = n - 1 - k;
         Ring_Point(t, 0, s, &px[o], &py[o]);
-        Ring_Point(t, RING_BAND + Ring_Swell(t - 180), s, &px[i], &py[i]);
+        Ring_Inner(t, Ring_Swell(t - 180), s, &px[i], &py[i]);
         px[o] = cx + m * px[o];
         py[o] += cy;
         px[i] = cx + m * px[i];
@@ -7949,8 +8077,9 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
     GXColor plate = Color_Fill(color_plate, 0.55f);
     for (int k = 0; k < RING_SEGS; k++)
         Quad_Add(px[k], py[k], px[k + 1], py[k + 1], px[n - 2 - k], py[n - 2 - k], px[n - 1 - k], py[n - 1 - k], plate);
-    // the outline, under the fill so a light press isn't hidden by it
-    Hud_Line(px, py, n, 1, 0.05f * s, PX, Color_Fill(c, 0.8f));
+    // the outline, under the fill so a light press isn't hidden by it; a
+    // lit half has a bright, heavier one
+    Hud_Line(px, py, n, 1, (0.05f + 0.04f * lit) * s, PX, Color_Mix(Color_Fill(c, 0.8f), color_white, lit));
 
     // the fill: both ends of the band run in to the middle, then the nub
     // floods from its base to its tip
@@ -7965,9 +8094,9 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         {
             float t0 = Ring_Angle(k), t1 = Ring_Angle(k + 1);
             if (t0 < f0)
-                Ring_Quad(cx, cy, s, m, t0, t1 < f0 ? t1 : f0, 0, 0, RING_BAND, RING_BAND, fc);
+                Ring_Quad(cx, cy, s, m, t0, t1 < f0 ? t1 : f0, 0, 0, 0, 0, fc);
             if (t1 > f1)
-                Ring_Quad(cx, cy, s, m, t0 > f1 ? t0 : f1, t1, 0, 0, RING_BAND, RING_BAND, fc);
+                Ring_Quad(cx, cy, s, m, t0 > f1 ? t0 : f1, t1, 0, 0, 0, 0, fc);
         }
     }
     if (as > 0.002f)
@@ -7977,31 +8106,33 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         {
             float t0 = Ring_Angle(k), t1 = Ring_Angle(k + 1);
             float d0 = Ring_Swell(t0 - 180), d1 = Ring_Swell(t1 - 180);
-            Ring_Quad(cx, cy, s, m, t0, t1, RING_BAND * 0.5f, RING_BAND * 0.5f,
-                      RING_BAND + (d0 < level ? d0 : level), RING_BAND + (d1 < level ? d1 : level), fc);
+            Ring_Quad(cx, cy, s, m, t0, t1, RING_BAND * 0.5f, RING_BAND * 0.5f, d0 < level ? d0 : level, d1 < level ? d1 : level, fc);
         }
     }
 
-    // a tick on each way in where a light press counts
+    // a mark on each way in where a light press counts: a short bar across
+    // the band with a pointer under it
     for (int e = 0; e < 2; e++)
     {
         float end = e ? 270 - RING_GAP : 90 + RING_GAP;
         float t = end + (180 - end) * (RING_LIGHT / RING_CH);
         float tx[2], ty[2];
-        Ring_Point(t, -0.06f, s, &tx[0], &ty[0]);
-        Ring_Point(t, RING_BAND + 0.06f, s, &tx[1], &ty[1]);
+        Ring_Point(t, 0.03f, s, &tx[0], &ty[0]);
+        Ring_Point(t, RING_BAND - 0.03f, s, &tx[1], &ty[1]);
         tx[0] = cx + m * tx[0];
         tx[1] = cx + m * tx[1];
         ty[0] += cy;
         ty[1] += cy;
-        Hud_Line(tx, ty, 2, 0, 0.05f * s, PX, Color_Fill(color_white, 0.8f));
+        Hud_Line(tx, ty, 2, 0, 0.07f * s, PX, Color_Over(color_white, 0.95f));
     }
 
-    // the click: a white flash over the whole half, and lit while it's held
-    float w = click && flash < 0.5f ? 0.5f : flash;
+    // a click lights the whole half, as bright as the flash it starts with,
+    // and keeps it so while it's held (the flash is the same light, brighter,
+    // settling into it)
+    float w = 0.68f * lit + (1.f - 0.68f * lit) * flash;
     if (w > 0)
     {
-        GXColor fl = Color_Fill(color_white, w);
+        GXColor fl = Color_Over(color_white, w);
         for (int k = 0; k < RING_SEGS; k++)
             Quad_Add(px[k], py[k], px[k + 1], py[k + 1], px[n - 2 - k], py[n - 2 - k], px[n - 1 - k], py[n - 1 - k], fl);
     }
@@ -8020,31 +8151,125 @@ static void Ring_Backing(float cx, float cy, float s)
     Hud_Fan(cx, cy, px, py, 32, Color_Fill(color_plate, 0.45f)); // the triggers' outlines soften its edge
 }
 
-// A round button: a faint fill of its color so it reads even unlit, a soft
-// outline, its glow, and a bigger ring on the frame it goes down.
-static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in, float glow)
+// A button's fill: its own color at rest, lighter and fully opaque the more
+// it's pressed.
+static GXColor Ring_Lit(GXColor c, float glow)
 {
-    float px[18], py[18];
-    Circle_Points(cx, cy, r, 18, px, py);
-    Hud_Fan(cx, cy, px, py, 18, Color_Fill(c, glow > 0.22f ? glow : 0.22f));
-    Hud_Line(px, py, 18, 1, 0.07f * s, PX, Color_Fill(c, 0.9f));
-    if (pad_glow[in] >= 1.f && pad_glow_prev[in] < 1.f)
+    return Color_Mix(Color_Over(c, 0.62f), Color_Over(Color_Mix(c, color_white, 0.4f), 1.f), glow);
+}
+
+// A button's outline, lighter than its fill.
+static GXColor Ring_Edge(GXColor c)
+{
+    return Color_Over(Color_Mix(c, color_white, 0.35f), 0.9f);
+}
+
+// The ghost a press leaves, a copy of the button's fill, from the button's
+// flash (1 on the frame it went down, times 0.6 on each after, so a few
+// frames in all): how far it has grown (1 and up) ...
+static float Ghost_Grow(float flash)
+{
+    return 1.15f + 0.2f * (1.f - flash);
+}
+
+#define GHOST_MIN 0.1f
+
+// ... and fading to nothing as the flash reaches GHOST_MIN
+static GXColor Ghost_Color(GXColor c, float flash)
+{
+    return Color_Over(Color_Mix(c, color_white, 0.45f), 0.9f * sqrtf((flash - GHOST_MIN) / (1.f - GHOST_MIN)));
+}
+
+// One stroke of a button's letter: n points in units of the letter's height h,
+// from -0.5 to 0.5 each way, around (cx, cy).
+static void Ring_Stroke(float cx, float cy, float h, GXColor c, int n, const float *xy)
+{
+    float px[7], py[7];
+    for (int i = 0; i < n; i++)
     {
-        Circle_Points(cx, cy, r + 0.2f * s, 18, px, py);
-        Hud_Line(px, py, 18, 1, 0.08f * s, PX, Color_Mix(c, color_white, 0.5f));
+        px[i] = cx + xy[2 * i] * h;
+        py[i] = cy + xy[2 * i + 1] * h;
+    }
+    Hud_Line(px, py, n, 0, (0.17f * h > 0.095f ? 0.17f * h : 0.095f), PX * 0.6f, c);
+}
+
+// The letter printed on a button, in strokes since there's no text engine.
+static void Ring_Letter(int in, float cx, float cy, float h)
+{
+    GXColor c = Color_Over(color_plate, 0.92f);
+    switch (in)
+    {
+    case PIN_A:
+    {
+        float legs[] = {-0.34f, -0.5f, 0, 0.5f, 0.34f, -0.5f};
+        float bar[] = {-0.2f, -0.14f, 0.2f, -0.14f};
+        Ring_Stroke(cx, cy, h, c, 3, legs);
+        Ring_Stroke(cx, cy, h, c, 2, bar);
+        break;
+    }
+    case PIN_B:
+    {
+        float top[] = {-0.3f, -0.5f, -0.3f, 0.5f, 0.08f, 0.5f, 0.3f, 0.36f, 0.3f, 0.16f, 0.08f, 0, -0.3f, 0};
+        float low[] = {0.08f, 0, 0.34f, -0.14f, 0.34f, -0.36f, 0.08f, -0.5f, -0.3f, -0.5f};
+        Ring_Stroke(cx, cy, h, c, 7, top);
+        Ring_Stroke(cx, cy, h, c, 5, low);
+        break;
+    }
+    case PIN_X:
+    {
+        float down[] = {-0.32f, 0.5f, 0.32f, -0.5f};
+        float up[] = {-0.32f, -0.5f, 0.32f, 0.5f};
+        Ring_Stroke(cx, cy, h, c, 2, down);
+        Ring_Stroke(cx, cy, h, c, 2, up);
+        break;
+    }
+    case PIN_Y:
+    {
+        float arms[] = {-0.34f, 0.5f, 0, 0.02f, 0.34f, 0.5f};
+        float stem[] = {0, 0.02f, 0, -0.5f};
+        Ring_Stroke(cx, cy, h, c, 3, arms);
+        Ring_Stroke(cx, cy, h, c, 2, stem);
+        break;
+    }
+    case PIN_Z:
+    {
+        float z[] = {-0.32f, 0.5f, 0.32f, 0.5f, -0.32f, -0.5f, 0.32f, -0.5f};
+        Ring_Stroke(cx, cy, h, c, 4, z);
+        break;
+    }
     }
 }
 
+// A round button: filled in its color, lettered, with a soft outline, and on
+// a press a ghost of its fill that grows a little and fades in a few frames.
+static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in, float glow)
+{
+    float px[18], py[18];
+    float flash = pad_flash[in];
+    if (flash > GHOST_MIN)
+    {
+        Circle_Points(cx, cy, r * Ghost_Grow(flash), 18, px, py);
+        Hud_Fan(cx, cy, px, py, 18, Ghost_Color(c, flash));
+    }
+    Circle_Points(cx, cy, r, 18, px, py);
+    Hud_Fan(cx, cy, px, py, 18, Ring_Lit(c, glow));
+    Hud_Line(px, py, 18, 1, 0.07f * s, PX, Ring_Edge(c));
+    Ring_Letter(in, cx, cy, 0.95f * r);
+}
+
 // A kidney, the shape of the X and Y buttons (and here Z): an arc rho from
-// (cx, cy) between the angles a0 and a1 (degrees, a0 < a1), w thick with
-// round ends, filled by its glow (faintly while unlit) with a soft outline.
+// the middle of its line (mx, my) bulging toward dir degrees, span degrees
+// long and w thick with round ends.
 #define KIDNEY_ARC 6
 #define KIDNEY_CAP 4
 #define KIDNEY_POINTS (2 * KIDNEY_ARC + 2 * KIDNEY_CAP)
-static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float w, float s, GXColor c, int in, float glow)
+
+// Its outline into px and py, and the centers of its round ends into ends.
+static void Kidney_Points(float mx, float my, float dir, float rho, float span, float w, float *px, float *py, float *ends)
 {
-    float px[KIDNEY_POINTS], py[KIDNEY_POINTS];
-    float h = w / 2, d2r = 0.01745329f;
+    float d2r = 0.01745329f;
+    float cx = mx - cos(dir * d2r) * rho, cy = my - sin(dir * d2r) * rho; // the arc's center
+    float a0 = dir - span / 2, a1 = dir + span / 2, h = w / 2;
     int n = 0;
     for (int i = 0; i <= KIDNEY_ARC; i++) // the outside, a0 to a1
     {
@@ -8052,12 +8277,14 @@ static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float
         px[n] = cx + cos(a) * (rho + h);
         py[n++] = cy + sin(a) * (rho + h);
     }
-    float e = a1 * d2r, ex = cx + cos(e) * rho, ey = cy + sin(e) * rho;
+    float e = a1 * d2r;
+    ends[0] = cx + cos(e) * rho;
+    ends[1] = cy + sin(e) * rho;
     for (int i = 1; i < KIDNEY_CAP; i++) // round end at a1
     {
         float a = e + 3.1415927f * i / KIDNEY_CAP;
-        px[n] = ex + cos(a) * h;
-        py[n++] = ey + sin(a) * h;
+        px[n] = ends[0] + cos(a) * h;
+        py[n++] = ends[1] + sin(a) * h;
     }
     for (int i = 0; i <= KIDNEY_ARC; i++) // the inside, a1 back to a0
     {
@@ -8065,14 +8292,19 @@ static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float
         px[n] = cx + cos(a) * (rho - h);
         py[n++] = cy + sin(a) * (rho - h);
     }
-    float b = a0 * d2r, bx = cx + cos(b) * rho, by = cy + sin(b) * rho;
+    float b = a0 * d2r;
+    ends[2] = cx + cos(b) * rho;
+    ends[3] = cy + sin(b) * rho;
     for (int i = 1; i < KIDNEY_CAP; i++) // round end at a0
     {
         float a = b + 3.1415927f + 3.1415927f * i / KIDNEY_CAP;
-        px[n] = bx + cos(a) * h;
-        py[n++] = by + sin(a) * h;
+        px[n] = ends[2] + cos(a) * h;
+        py[n++] = ends[3] + sin(a) * h;
     }
-    GXColor f = Color_Fill(c, glow > 0.22f ? glow : 0.22f);
+}
+
+static void Kidney_Fill(const float *px, const float *py, const float *ends, GXColor f)
+{
     for (int i = 0; i < KIDNEY_ARC; i++)
     {
         int o = i, in0 = 2 * KIDNEY_ARC + KIDNEY_CAP - i; // the inside point at the same angle
@@ -8081,23 +8313,27 @@ static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float
     for (int i = 0; i < KIDNEY_CAP; i++)
     {
         int j = KIDNEY_ARC + i;
-        Hud_Tri(ex, ey, px[j], py[j], px[j + 1], py[j + 1], f);
+        Hud_Tri(ends[0], ends[1], px[j], py[j], px[j + 1], py[j + 1], f);
         j = 2 * KIDNEY_ARC + KIDNEY_CAP + i;
-        Hud_Tri(bx, by, px[j], py[j], px[(j + 1) % KIDNEY_POINTS], py[(j + 1) % KIDNEY_POINTS], f);
+        Hud_Tri(ends[2], ends[3], px[j], py[j], px[(j + 1) % KIDNEY_POINTS], py[(j + 1) % KIDNEY_POINTS], f);
     }
-    Hud_Line(px, py, n, 1, 0.07f * s, PX, Color_Fill(c, 0.9f));
-    if (pad_glow[in] >= 1.f && pad_glow_prev[in] < 1.f)
+}
+
+// Filled in its color, lettered, with a soft outline and the press ghost.
+static void Ring_Kidney(float mx, float my, float dir, float rho, float span, float w, float s, GXColor c, int in, float glow)
+{
+    float px[KIDNEY_POINTS], py[KIDNEY_POINTS], ends[4];
+    float flash = pad_flash[in];
+    if (flash > GHOST_MIN)
     {
-        float r = (rho + h + 0.18f * s);
-        float ox[12], oy[12];
-        for (int i = 0; i < 12; i++)
-        {
-            float a = (a0 + (a1 - a0) * i / 11) * d2r;
-            ox[i] = cx + cos(a) * r;
-            oy[i] = cy + sin(a) * r;
-        }
-        Hud_Line(ox, oy, 12, 0, 0.08f * s, PX, Color_Mix(c, color_white, 0.5f));
+        // the same shape grown about its middle
+        Kidney_Points(mx, my, dir, rho * Ghost_Grow(flash), span, w * Ghost_Grow(flash), px, py, ends);
+        Kidney_Fill(px, py, ends, Ghost_Color(c, flash));
     }
+    Kidney_Points(mx, my, dir, rho, span, w, px, py, ends);
+    Kidney_Fill(px, py, ends, Ring_Lit(c, glow));
+    Hud_Line(px, py, KIDNEY_POINTS, 1, 0.07f * s, PX, Ring_Edge(c));
+    Ring_Letter(in, mx, my, 0.85f * w);
 }
 
 // The Ring look's C-stick around (cx, cy): the four arrows, lit the way the
@@ -8110,16 +8346,19 @@ static void Ring_CStick(HSD_Pad *pad, float cx, float cy, float s)
     {
         float g = d == dir ? 1.f : pad_cdir_glow[d];
         int level = d % 2 == 0; // left and right have more room
-        float base = (level ? 0.72f : 0.62f) * s;
-        float len = (level ? 0.32f : 0.27f) * s, half = (level ? 0.27f : 0.22f) * s;
+        float base = (level ? 0.58f : 0.52f) * s;
+        float len = (level ? 0.26f : 0.22f) * s, half = (level ? 0.23f : 0.2f) * s;
         float ux = d == 0 ? 1 : d == 2 ? -1 : 0, uy = d == 1 ? 1 : d == 3 ? -1 : 0;
         float ax[3] = {cx + ux * base - uy * half, cx + ux * (base + len), cx + ux * base + uy * half};
         float ay[3] = {cy + uy * base + ux * half, cy + uy * (base + len), cy + uy * base - ux * half};
-        Hud_Tri(ax[0], ay[0], ax[1], ay[1], ax[2], ay[2], Color_Fill(yel, g > 0.22f ? g : 0.22f));
-        Hud_Line(ax, ay, 3, 1, 0.06f * s, PX, Color_Mix(Color_Fill(yel, 0.8f), color_white, g * 0.5f));
+        Hud_Tri(ax[0], ay[0], ax[1], ay[1], ax[2], ay[2], Ring_Lit(yel, g));
+        Hud_Line(ax, ay, 3, 1, 0.06f * s, PX, Ring_Edge(yel));
     }
     float R = RING_C_R * s;
-    Pad_Gate(cx, cy, R, 0.06f * s, Color_Fill(color_white, 0.7f));
+    float vx[8], vy[8];
+    Circle_Points(cx, cy, R, 8, vx, vy);
+    Hud_Fan(cx, cy, vx, vy, 8, Color_Over(yel, 0.3f)); // the stick is yellow too
+    Pad_Gate(cx, cy, R, 0.06f * s, Color_Over(yel, 0.8f));
     for (int n = PAD_CTRAIL - 1; n >= 1; n--)
     {
         Vec2 *p = &pad_ctrail[(pad_ctrail_pos - n + PAD_CTRAIL) % PAD_CTRAIL];
@@ -8145,21 +8384,20 @@ static void Ring_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
 
     pad_soft = 1;
     Ring_Backing(cx, cy, s);
-    Ring_Trigger(cx, cy, s, -1, pad->ftriggerLeft, held[PIN_L], pad_flash[PIN_L]);
-    Ring_Trigger(cx, cy, s, 1, pad->ftriggerRight, held[PIN_R], pad_flash[PIN_R]);
+    Ring_Trigger(cx, cy, s, -1, pad->ftriggerLeft, held[PIN_L], glow[PIN_L], pad_flash[PIN_L]);
+    Ring_Trigger(cx, cy, s, 1, pad->ftriggerRight, held[PIN_R], glow[PIN_R], pad_flash[PIN_R]);
 
-    // the stick in the middle, the buttons in the bulbs around it
+    // the stick in the middle, the buttons in the bays around it, each in
+    // the middle of its bay (where its outline keeps the most room)
     float sx = cx, sy = cy + RING_STICK_Y * s;
     Pad_Stick(fp, pad, sx, sy, RING_STICK_R * s, 0.72f * s);
-    // Y over X, curled around a point in the top left bulb the way they curl
-    // around A on the controller, mirrored across the bulb; Z mirrors the
-    // gap between them in the top right
-    float kx = 1.7f * s, ky = cy + 1.1f * s;
-    Ring_Kidney(cx - kx, ky, 1.0f * s, 67, 115, 0.6f * s, s, color_btn_xy, PIN_Y, glow[PIN_Y]);
-    Ring_Kidney(cx - kx, ky, 1.0f * s, 155, 203, 0.6f * s, s, color_btn_xy, PIN_X, glow[PIN_X]);
-    Ring_Kidney(cx + kx, ky, 1.0f * s, 14, 76, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
-    Ring_Button(cx + 2.3f * s, cy - 1.5f * s, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
-    Ring_Button(cx - 2.3f * s, cy - 1.5f * s, 0.42f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
+    float tx = 2.22f * s, ty = cy + 1.26f * s, lx = 1.92f * s, ly = cy - 1.38f * s;
+    // Y left of X and a little above it, the same bean mirrored
+    Ring_Kidney(cx - tx - 0.55f * s, ty + 0.1f * s, 180, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_Y, glow[PIN_Y]);
+    Ring_Kidney(cx - tx + 0.55f * s, ty - 0.1f * s, 0, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_X, glow[PIN_X]);
+    Ring_Kidney(cx + tx, ty, 45, 0.9f * s, 65, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
+    Ring_Button(cx + lx, ly, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
+    Ring_Button(cx - lx, ly, 0.5f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
 
     Ring_CStick(pad, cx, cy + RING_C_Y * s, s);
     pad_soft = 0;
@@ -11498,6 +11736,10 @@ void Event_Init(GOBJ *gobj)
     common_fall_lean_rate = Common_Float(COMMON_FALL_LEAN_RATE);
     common_air_friction_oob = Common_Float(COMMON_AIR_FRICTION_OOB);
     common_upb_drift_stick = Common_Float(COMMON_UPB_DRIFT_STICK);
+    common_drop_stick = fabs(Common_Float(COMMON_DROP_STICK));
+    common_drop_window = Common_Frames(COMMON_DROP_WINDOW);
+    common_spot_stick = -fabs(Common_Float(COMMON_SPOT_STICK));
+    common_spot_window = Common_Frames(COMMON_SPOT_WINDOW);
 
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     upb_table = calloc(sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);

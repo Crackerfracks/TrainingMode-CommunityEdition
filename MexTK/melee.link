@@ -608,6 +608,8 @@
 80361C60:HSD_StateSetPointSize
 80361E8C:HSD_StateSetZCompLoc
 803786F0:HSD_PadRumbleInterpret
+80378170:HSD_PadRumbleRemove
+80378430:HSD_PadRumbleAdd
 803761C0:HSD_VICopyXFBASync
 80375C34:HSD_VIPostRetraceCallback
 80375E60:HSD_VIGetDrawDoneWaitingFlag

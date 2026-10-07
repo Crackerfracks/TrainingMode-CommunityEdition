@@ -385,6 +385,8 @@ void HSD_PadRenewMasterStatus();
 void HSD_PadRenewCopyStatus();
 void HSD_PadRenewUpdateStruct();
 void HSD_PadRumbleInterpret();
+void HSD_PadRumbleRemove(u8 no);
+int HSD_PadRumbleAdd(u8 no, int id, int frame, int pri, void *listp);
 void HSD_VIPostRetraceCallback(int unk);
 void GX_AllocImageData(_HSD_ImageDesc *image_desc, int width, int height, int fmt, int size); // image data buffer is stored to the image_desc
 void GXTexModeSync();

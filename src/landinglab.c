@@ -2392,6 +2392,7 @@ static float common_spot_stick;  // as a negative number: stick y <= this
 static int common_spot_window;
 
 static int ai_show_all; // the AI Filter option is on All
+static u8 ai_only;      // the AI Aerial option: the one aerial to count down to, 0 = any
 
 static float Common_Float(int offset)
 {
@@ -3444,6 +3445,8 @@ static void Windows_Summarize(FighterData *fp, Prediction *p)
     for (int k = 1; k <= last_ai; k++)
     {
         u8 m = p->ai_mask[k];
+        if (ai_only)
+            m &= ai_only;
         if (!ai_show_all)
         {
             m &= ~p->ai_lag_mask[k];
@@ -3802,6 +3805,7 @@ static const char *tick_names[] = {"Frame Advance", "Always", "Off"};
 static const char *mark_size_names[] = {"Small", "Medium", "Large"};
 static const float mark_sizes[] = {0.9f, 1.25f, 1.6f};
 static const char *ai_filter_names[] = {"Useful", "All"};
+static const char *ai_aerial_names[] = {"Any", "Nair", "Fair", "Bair", "Uair", "Dair"}; // after Any, in TS_AIRN order
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
 static const char *near_names[] = {"Off", "Bubble", "Halo", "Pincers", "ECB Fill", "Lights", "Old Strip"};
 static const char *strip_names[] = {"Off", "Cells", "Highway", "Dial"};
@@ -4189,6 +4193,7 @@ enum options_cues
     COPT_AI,
     COPT_WL,
     COPT_AI_FILTER,
+    COPT_AI_AERIAL,
     COPT_FLASH,
     COPT_GLOW,
 
@@ -4229,6 +4234,16 @@ static EventOption Options_Cues[COPT_COUNT] = {
         .desc = {"Useful shows only aerial interrupts that land",
                  "while Falcon is still rising and save 4 frames or",
                  "more without aerial lag. All shows them all."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "AI Aerial",
+        .value_num = countof(ai_aerial_names),
+        .values = ai_aerial_names,
+        .desc = {"Count down to one aerial's window only. Any uses",
+                 "the aerial that works on the most frames. With",
+                 "the stick held in, A is a fair, not a nair, and",
+                 "its window can be shorter."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -5365,9 +5380,25 @@ static void Press_CheckMissed(FighterData *fp, int ts)
         if (!(dodge ? Cues_Waveland() : Cues_Ai()))
             return;
         int off = Window_Offset(pred_seg, shown, k, bit);
-        if (off == 0)
+        u8 others = dodge ? 0 : shown[k] & ~bit; // aerials that would have landed on this frame
+        if (others)
+        {
+            // the frame was in the window, for another aerial: say which,
+            // since the stick held in turns A into a fair
+            char *t = text_last;
+            t += sprintf(t, "No AI: %s here, ", tracked_state_names[ts]);
+            int n = 0;
+            for (int a = TS_AIRN; a <= TS_AIRLW && n < 2; a++)
+                if (others & AERIAL_BIT(a))
+                    t += sprintf(t, n++ ? "/%s" : "%s", tracked_state_names[a]);
+            sprintf(t, n > 1 ? " land" : " lands");
+        }
+        else if (off == 0)
             return;
-        sprintf(text_last, "No %s, %df %s", name, off < 0 ? -off : off, off < 0 ? "early" : "late");
+        else if (dodge)
+            sprintf(text_last, "No %s, %df %s", name, off < 0 ? -off : off, off < 0 ? "early" : "late");
+        else
+            sprintf(text_last, "No AI: %s %df %s", tracked_state_names[ts], off < 0 ? -off : off, off < 0 ? "early" : "late");
         last_kind = -1;
         sprintf(buf, "LandingLab press: %s at %d stayed in the air, %df %s for the window (from %d)\n",
                 tracked_state_names[ts], event_vars->game_timer, off < 0 ? -off : off, off < 0 ? "early" : "late",
@@ -9972,7 +10003,7 @@ void Event_ChangeScript(GOBJ *menu, int value)
 #define LR_SIM 45           // frames simulated after the jump
 #define LR_BUDGET 1500      // simulated frames per game frame, on the ground or ledge
 #define LR_BUDGET_AIR 400   // ... and while the live prediction runs too
-#define LR_TIME_US 3000     // the most real time the search takes in a frame
+#define LR_TIME_US 2000     // the most real time the search takes in a frame (it can run over by one route)
 
 // The stick on the double jump: all the way in, 45 degrees down and in (a
 // partial drift that clears the underside of stages like Battlefield's when
@@ -12115,6 +12146,7 @@ static void Ground_Preview(FighterData *fp)
 
 void Event_Init(GOBJ *gobj)
 {
+    int init_tick = OSGetTick(); // the start-up work, timed for the log
     Cues_Clear();
     common_fastfall_stick = Common_Float(COMMON_FASTFALL_STICK);
     common_fastfall_window = Common_Int(COMMON_FASTFALL_WINDOW);
@@ -12181,6 +12213,10 @@ void Event_Init(GOBJ *gobj)
     Script_Load();
     GOBJ *script_gobj = GObj_Create(0, 7, 0);
     GObj_AddProc(script_gobj, Script_Think, 3);
+
+    char buf[64];
+    sprintf(buf, "LLPERF init %.2f ms\n", OSTicksToMicroseconds(OSGetTick() - init_tick) / 1000.f);
+    Log(buf);
 }
 
 static void Event_ThinkFrame(GOBJ *event);
@@ -12224,6 +12260,7 @@ static void Event_ThinkFrame(GOBJ *event)
     }
 
     ai_show_all = Options_Cues[COPT_AI_FILTER].val == 1;
+    ai_only = Options_Cues[COPT_AI_AERIAL].val ? AERIAL_BIT(TS_AIRN + Options_Cues[COPT_AI_AERIAL].val - 1) : 0;
     int logging = Options_Dev[DOPT_LOG].val || script_cur >= 0;
     cue_log = logging;
 

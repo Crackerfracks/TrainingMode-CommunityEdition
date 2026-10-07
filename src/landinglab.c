@@ -6502,6 +6502,9 @@ enum glyph_kind
     GLYPH_UP,     // stick (or C-stick) up
     GLYPH_DOWN_LEFT,
     GLYPH_DOWN_RIGHT,
+    GLYPH_FF,            // fastfall: a double chevron, where a plain hold down is one solid arrow
+    GLYPH_FF_DOWN_LEFT,
+    GLYPH_FF_DOWN_RIGHT,
 };
 
 typedef struct MeterRow
@@ -6702,6 +6705,20 @@ static GXColor Tone_Color(MeterRow *r, int tone)
     return tone == TONE_MISS ? color_miss : tone == TONE_SKIP ? color_skip : r->color;
 }
 
+// Two chevrons stacked along (dx, dy), like speed lines: a fastfall.
+static void Glyph_Chevrons(float x, float y, float r, float dx, float dy, float w, GXColor c)
+{
+    float px = -dy, py = dx;
+    for (int i = 0; i < 2; i++)
+    {
+        float t = i ? r * 0.95f : r * 0.05f; // the tips, along the way down
+        float tx = x + dx * t, ty = y + dy * t;
+        float bx = tx - dx * r * 0.85f, by = ty - dy * r * 0.85f; // narrow, so turned 45 degrees it isn't an L
+        Hud_Seg(bx + px * r * 0.62f, by + py * r * 0.62f, tx, ty, w, c);
+        Hud_Seg(bx - px * r * 0.62f, by - py * r * 0.62f, tx, ty, w, c);
+    }
+}
+
 static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
 {
     GXColor shade = Color_Fill(color_plate, c.a / 255.f * 0.9f);
@@ -6745,6 +6762,16 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
             // a shield bubble
             Hud_Ring(x, y, s * 0.75f, (pass ? 0.45f : 0.45f + 0.24f / s) * s, col);
             break;
+        case GLYPH_FF:
+        case GLYPH_FF_DOWN_LEFT:
+        case GLYPH_FF_DOWN_RIGHT:
+        {
+            float dx = glyph == GLYPH_FF ? 0 : glyph == GLYPH_FF_DOWN_RIGHT ? 0.707f : -0.707f;
+            float dy = glyph == GLYPH_FF ? -1.f : -0.707f;
+            float w = 0.3f * s + (pass ? 0 : 0.16f);
+            Glyph_Chevrons(x - dx * s * 0.1f, y - dy * s * 0.1f, s, dx, dy, w, col); // centered
+            break;
+        }
         }
     }
 }

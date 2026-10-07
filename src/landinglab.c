@@ -6723,6 +6723,7 @@ typedef struct MeterRow
     GXColor color;
     int len;      // cells used: the last one + 1
     u8 hot;       // a press is at the gate in its window: 1, 2 on the window's first or last frame
+    u8 spent;     // frames of that window already gone: the cells show what's left, the dial the whole wedge
     u8 dim;       // a route that isn't the chosen one
     s8 ghost[4];  // ages of the ghosts spreading out of the gate, -1 none
     u8 ghost_bright[4];
@@ -6884,6 +6885,7 @@ static void Meter_FromCue(int kind)
     {
         for (int j = c->age; j < c->width; j++)
             Row_Set(r, j - c->age, CELL_PRESS, tone, 1);
+        r->spent = c->age < c->width ? c->age : c->width;
         if (!c->dim)
             r->hot = c->age == 0 || c->age == c->width - 1 ? 2 : 1;
         Row_Ghosts(r, c);
@@ -7239,6 +7241,67 @@ static void Pin_Path(FighterData *fp)
 
 static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1); // with the controller display
 
+// The fixed strip's other looks sit in a bottom corner, the one away from
+// the controller display. The highway is a lane a row, HW_ROWS frames tall
+// with the hit line at the bottom; the dial is a small dial a row, side by
+// side. Both leave room under for the row's label, and the first lane for
+// the glyphs of a route's inputs.
+#define HW_ROWS 18       // frames of lead a lane shows
+#define HW_PITCH 0.68f   // one frame's height
+#define HW_LANE 2.1f
+#define HW_LANE_GAP 0.5f
+#define HW_GLYPH 1.5f
+#define HW_LABEL 1.7f
+#define DL_R 1.55f       // a dial's radius
+#define DL_CELL 4.2f     // the room one takes, side to side
+#define DL_LABEL 1.7f
+#define STRIP_PAD 0.35f
+
+static int Strip_Glyphs(void)
+{
+    if (meter_rows == 0)
+        return 0;
+    for (int k = 0; k < meter[0].len && k < HW_ROWS; k++)
+    {
+        if (meter[0].glyph[k])
+            return 1;
+    }
+    return 0;
+}
+
+// Where the highway or the dial is: its left, bottom, width and height.
+static void Strip_Place(FighterData *fp, int look, float *x, float *y, float *w, float *h)
+{
+    int n = meter_rows > 0 ? meter_rows : 1;
+    if (look == STRIP_HIGHWAY)
+    {
+        *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + n * HW_LANE + (n - 1) * HW_LANE_GAP;
+        *h = HW_LABEL + HW_ROWS * HW_PITCH + 0.5f;
+    }
+    else
+    {
+        *w = 2 * STRIP_PAD + n * DL_CELL - 0.4f;
+        *h = DL_LABEL + 2 * DL_R + 0.9f;
+    }
+    float x0, y0, x1, y1;
+    Pad_Box(fp, &x0, &y0, &x1, &y1);
+    *x = x0 + x1 < 0 ? SAFE_W - *w : -SAFE_W;
+    *y = -SAFE_H + 0.4f;
+}
+
+// The fixed strip's box, so the near-Falcon strip keeps out of it.
+static Box Strip_Box(FighterData *fp)
+{
+    int look = Options_Timers[TOPT_STRIP].val;
+    if (look == STRIP_HIGHWAY || look == STRIP_DIAL)
+    {
+        float x, y, w, h;
+        Strip_Place(fp, look, &x, &y, &w, &h);
+        return (Box){x - 0.2f, -SAFE_H, x + w + 0.2f, y + h + 0.3f};
+    }
+    return (Box){-SAFE_W, -SAFE_H, SAFE_W, -SAFE_H + 0.4f + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
+}
+
 // Whether the meter at (gx, base), w by h, is clear of everything else.
 static int Pin_Clear(FighterData *fp, float gx, float base, float w, float h)
 {
@@ -7267,8 +7330,8 @@ static int Pin_Clear(FighterData *fp, float gx, float base, float w, float h)
     }
     if (Options_Timers[TOPT_STRIP].val != STRIP_OFF)
     {
-        // the fixed strip along the bottom
-        Box strip = {-SAFE_W, -SAFE_H, SAFE_W, -SAFE_H + 0.4f + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
+        // the fixed strip along the bottom, or in its corner
+        Box strip = Strip_Box(fp);
         if (Box_Hit(&m, &strip))
             return 0;
     }
@@ -7387,10 +7450,339 @@ static void Meter_Above(FighterData *fp)
     Meter_Draw(pin_x, pin_y, 1.f, len, 0);
 }
 
+// A row's label centered at cx, its line's middle at y.
+static void Strip_Label(MeterRow *r, float cx, float y)
+{
+    GXColor tc = Color_Mix(r->color, color_white, 0.35f);
+    if (r->dim)
+        tc = Color_Fill(tc, 0.6f);
+    tc.a = 255;
+    Hud_Text(r->label, cx - Text_Width(r->label, 0.42f) / 2, y - 1.25f, 0.42f, tc);
+}
+
+// The dial's wedge, ring and hand are measured in degrees clockwise from
+// twelve o'clock; a frame is DL_DEG of them.
+#define DL_DEG 15.f
+
+static void Dial_Pt(float cx, float cy, float r, float deg, float *x, float *y)
+{
+    float a = deg * 0.0174533f;
+    *x = cx + sin(a) * r;
+    *y = cy + cos(a) * r;
+}
+
+// A pie slice from one angle to the next (a whole disc for 360), in steps
+// of at most 30 degrees.
+static void Dial_Fan(float cx, float cy, float r, float from, float to, GXColor c)
+{
+    int n = (int)((to - from) / 30.f + 0.999f);
+    if (n < 1)
+        return;
+    float step = (to - from) / n, px, py, nx, ny;
+    Dial_Pt(cx, cy, r, from, &px, &py);
+    for (int i = 1; i <= n; i++)
+    {
+        Dial_Pt(cx, cy, r, from + step * i, &nx, &ny);
+        Hud_Tri(cx, cy, px, py, nx, ny, c);
+        px = nx;
+        py = ny;
+    }
+}
+
+// An arc band between two radii.
+static void Dial_Band(float cx, float cy, float r0, float r1, float from, float to, GXColor c)
+{
+    int n = (int)((to - from) / 30.f + 0.999f);
+    if (n < 1)
+        return;
+    float step = (to - from) / n, ix, iy, ox, oy, jx, jy, kx, ky;
+    Dial_Pt(cx, cy, r0, from, &ix, &iy);
+    Dial_Pt(cx, cy, r1, from, &ox, &oy);
+    for (int i = 1; i <= n; i++)
+    {
+        Dial_Pt(cx, cy, r0, from + step * i, &jx, &jy);
+        Dial_Pt(cx, cy, r1, from + step * i, &kx, &ky);
+        Quad_Add(ix, iy, ox, oy, kx, ky, jx, jy, c);
+        ix = jx;
+        iy = jy;
+        ox = kx;
+        oy = ky;
+    }
+}
+
+// The ending a row plays at its gate, shared by the highway and the dial:
+// the ghost's swell (a filled copy of the gate that grows and fades, strong
+// on a press that worked), the hit's burst and the fold of a miss or skip.
+// (cx, cy) is the gate's middle, hw by hh its half size (a round gate uses
+// hw), s a size to scale the effects by.
+static void Strip_Ending(MeterRow *r, float cx, float cy, float hw, float hh, float s, int round)
+{
+    for (int g = 0; g < 4; g++)
+    {
+        if (r->ghost[g] < 0)
+            continue;
+        float q = (float)r->ghost[g] / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        int b = r->ghost_bright[g];
+        float grow = (b ? 0.1f + 1.0f * Ease_Out(q) : 0.05f + 0.45f * Ease_Out(q)) * s;
+        GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
+        if (round)
+            Dial_Fan(cx, cy, hw + grow, 0, 360, Color_Over(tint, (b ? 0.5f : 0.2f) * fade));
+        else
+        {
+            Hud_Rect(cx - hw - grow, cy - hh - grow, cx + hw + grow, cy + hh + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
+            Hud_Frame(cx - hw - grow, cy - hh - grow, cx + hw + grow, cy + hh + grow, 1.6f * PX, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
+        }
+    }
+    if (r->burst >= 0)
+    {
+        float q = (float)r->burst / LL_BURST;
+        float rad = (round ? hw + 0.3f * s : 0.5f * s) + 1.6f * s * Ease_Out(q);
+        float from = rad * 0.55f;
+        if (round)
+            from = rad - 0.8f * s > hw + 0.1f * s ? rad - 0.8f * s : hw + 0.1f * s; // a dial's rays start outside its rim
+        GXColor bc = Color_Fill(r->color, 1.f - q);
+        for (int ray = 0; ray < 6; ray++)
+        {
+            float ang = ray * 1.0471976f + 0.5235988f;
+            float dx = cos(ang), dy = sin(ang);
+            Hud_Seg(cx + dx * from, cy + dy * from, cx + dx * rad, cy + dy * rad, 0.18f * s, bc);
+        }
+    }
+    if (r->implode >= 0)
+    {
+        float q = (float)r->implode / LL_FADE;
+        GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
+        float k = 1.f - Ease_Out(q);
+        if (round)
+        {
+            float rr = (hw + 0.8f * s) * k;
+            if (rr > 0.15f)
+                Dial_Band(cx, cy, rr - 0.1f, rr + 0.1f, 0, 360, Color_Fill(dc, 0.6f * (1.f - q)));
+        }
+        else
+        {
+            if (r->implode == 0)
+                Hud_Rect(cx - hw, cy - hh, cx + hw, cy + hh, dc); // the frame that was needed
+            float fw = (hw + 0.8f * s) * k, fh = (hh + 0.6f * s) * k;
+            if (fw > 0.05f)
+                Hud_Frame(cx - fw, cy - fh, cx + fw, cy + fh, 1.4f * PX, Color_Fill(dc, 0.6f * (1.f - q)));
+        }
+    }
+}
+
+// One lane of the highway: its cells as notes, a cell a frame up from the
+// hit line.
+static void Hw_Lane(MeterRow *r, int i, float lx, float line_y)
+{
+    float rx = lx + HW_LANE, in = 0.15f;
+    float dim = r->dim ? 0.5f : 1.f;
+    int len = r->len < HW_ROWS ? r->len : HW_ROWS;
+
+    for (int k = 0; k < len; k++)
+    {
+        int kind = r->cell[k];
+        if (kind == CELL_NONE)
+            continue;
+        int tone = r->tone[k], al = r->alpha[k];
+        int j = k;
+        // a window two frames wide is one note two rows tall
+        if (kind == CELL_PRESS || kind == CELL_LAG || kind == CELL_TAIL)
+        {
+            while (j + 1 < len && r->cell[j + 1] == kind && r->tone[j + 1] == tone && r->alpha[j + 1] == al)
+                j++;
+        }
+        float a = al / 255.f * dim;
+        GXColor col = Tone_Color(r, tone);
+        float y0 = line_y + k * HW_PITCH + 0.04f, y1 = line_y + (j + 1) * HW_PITCH - 0.04f;
+        float yc = (y0 + y1) / 2, mid = (lx + rx) / 2;
+        switch (kind)
+        {
+        case CELL_PRESS:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(col, a));
+            break;
+        case CELL_ACT:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(col, a));
+            Hud_Rect(lx + in, y0, rx - in, y0 + 0.2f * HW_PITCH + 0.04f, Color_Fill(color_white, a * 0.9f));
+            break;
+        case CELL_AIR:
+            Hud_Rect(lx + 0.45f, yc - 0.07f, rx - 0.45f, yc + 0.07f, Color_Over(col, 0.45f * a));
+            break;
+        case CELL_LAND:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(color_plate, a * 0.6f));
+            Hud_Frame(lx + in, y0, rx - in, y1, 1.4f * PX, Color_Fill(col, a));
+            Hud_Rect(lx + in, y0, rx - in, y0 + 0.24f * HW_PITCH + 0.04f, Color_Fill(col, a));
+            break;
+        case CELL_LAG:
+            Hud_Rect(mid - 0.5f, y0, mid + 0.5f, y1, Color_Fill(col, a * 0.75f));
+            break;
+        case CELL_TAIL:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(color_galint, a));
+            break;
+        }
+        k = j;
+    }
+    if (i != 0)
+        return;
+    for (int k = 0; k < len; k++)
+    {
+        if (r->glyph[k])
+            Glyph_Draw(r->glyph[k], lx - 0.8f, line_y + (k + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim));
+    }
+}
+
+// The highway (Fixed Strip): one vertical lane per row, notes falling onto a
+// hit line at the bottom, a row a frame with every fifth one heavier, the
+// label under the lane. The hit line lights while a press is due, and the
+// ghost, burst and fold are the cells' at the line.
+static void Highway_Draw(FighterData *fp)
+{
+    int rows = meter_rows;
+    float x0, y0, w, h;
+    Strip_Place(fp, STRIP_HIGHWAY, &x0, &y0, &w, &h);
+    float lane0 = x0 + STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0);
+    float line_y = y0 + HW_LABEL;
+    float lanes_r = lane0 + rows * HW_LANE + (rows - 1) * HW_LANE_GAP;
+
+    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Fill(color_plate, 0.72f));
+    for (int k = 1; k <= HW_ROWS; k++)
+    {
+        int five = k % 5 == 0;
+        float y = line_y + k * HW_PITCH, e = five ? 0.1f : 0.05f;
+        Hud_Rect(lane0 - 0.1f, y - e, lanes_r + 0.1f, y + e, Color_Over(color_white, five ? 0.3f : 0.12f));
+    }
+
+    for (int i = 0; i < rows; i++)
+    {
+        MeterRow *r = &meter[i];
+        float lx = lane0 + i * (HW_LANE + HW_LANE_GAP), rx = lx + HW_LANE;
+        Hud_Rect(lx, line_y, rx, line_y + HW_ROWS * HW_PITCH, Color_Over(color_white, 0.05f));
+        Hw_Lane(r, i, lx, line_y);
+
+        int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
+        if (hot > 0)
+        {
+            GXColor fill = Color_Mix(r->color, color_white, hot >= 2 ? 1.f : 0.4f);
+            Hud_Rect(lx - 0.3f, line_y - 0.2f, rx + 0.3f, line_y + HW_PITCH + 0.12f, Color_Fill(r->color, 0.3f));
+            Hud_Rect(lx - 0.15f, line_y - 0.09f, rx + 0.15f, line_y + 0.09f, fill);
+            if (hot >= 2)
+                Hud_Rect(lx - 0.3f, line_y - 0.2f, rx + 0.3f, line_y + 0.2f, color_white); // the press frame
+        }
+        else
+            Hud_Rect(lx - 0.2f, line_y - 0.07f, rx + 0.2f, line_y + 0.07f, Color_Over(color_white, r->dim ? 0.3f : 0.6f));
+
+        if (!r->dim)
+            Strip_Ending(r, (lx + rx) / 2, line_y + HW_PITCH / 2, HW_LANE / 2, HW_PITCH / 2, 1.f, 0);
+        Strip_Label(r, (lx + rx) / 2, y0 + 0.75f);
+    }
+}
+
+static int Dial_Target(int kind)
+{
+    return kind == CELL_PRESS || kind == CELL_LAND || kind == CELL_ACT;
+}
+
+// One dial for a row: the first run of cells that matter (a press, a
+// touchdown, the first frame Falcon can act) is its wedge at twelve
+// o'clock, and the hand sweeps clockwise a frame at a time into it, with
+// ticks for the last six frames. A hand more than 21 frames out waits
+// hidden. The ledge intangibility after the wedge is a band on the rim.
+static void Dial_One(MeterRow *r, float cx, float cy)
+{
+    float R = DL_R, dim = r->dim ? 0.5f : 1.f;
+    int a = -1, n = 0, tail = 0;
+    for (int k = 0; k < r->len && k < MT_CELLS; k++)
+    {
+        if (Dial_Target(r->cell[k]))
+        {
+            a = k;
+            break;
+        }
+    }
+    if (a >= 0)
+    {
+        for (n = 1; a + n < r->len && a + n < MT_CELLS && n < 24 && Dial_Target(r->cell[a + n]); n++)
+            ;
+        while (a + n + tail < r->len && a + n + tail < MT_CELLS && n + tail < 24 && r->cell[a + n + tail] == CELL_TAIL)
+            tail++;
+    }
+
+    Dial_Fan(cx, cy, R + 0.35f, 0, 360, Color_Fill(color_plate, 0.8f));
+    Dial_Band(cx, cy, R - 0.05f, R + 0.05f, 0, 360, Color_Over(color_white, 0.2f * dim));
+
+    if (a >= 0)
+    {
+        int tone = r->tone[a];
+        float al = r->alpha[a] / 255.f * dim;
+        GXColor col = Tone_Color(r, tone);
+        int hot = r->flash >= 0 ? 2 : r->hot;
+        float span = (n + r->spent) * DL_DEG;
+        if (span > 360.f)
+            span = 360.f;
+        GXColor wc = hot >= 2 && tone == TONE_CUE ? Color_Mix(col, color_white, 0.6f) : col;
+        Dial_Fan(cx, cy, R - 0.05f, 0, span, Color_Over(wc, (hot ? 1.f : 0.75f) * al));
+        if (tail > 0 && span < 360.f)
+        {
+            float end = span + tail * DL_DEG;
+            Dial_Band(cx, cy, R - 0.38f, R - 0.1f, span, end > 360.f ? 360.f : end, Color_Over(color_galint, 0.85f * al));
+        }
+
+        // ticks for the last six frames, where the hand will be (not on the
+        // routes that aren't the chosen one)
+        for (int d = 1; d <= 6 && !r->dim; d++)
+        {
+            float deg = (0.5f - d) * DL_DEG, x0, y0, x1, y1;
+            Dial_Pt(cx, cy, R - 0.4f, deg, &x0, &y0);
+            Dial_Pt(cx, cy, R, deg, &x1, &y1);
+            Hud_Seg(x0, y0, x1, y1, 0.1f, Color_Over(color_white, 0.6f * al));
+        }
+
+        // the hand, in the middle of its frame's slice
+        if (a <= 21)
+        {
+            float deg = (r->spent - a + 0.5f) * DL_DEG, hx, hy;
+            Dial_Pt(cx, cy, R + 0.2f, deg, &hx, &hy);
+            GXColor hc = tone == TONE_CUE ? Color_Mix(r->color, color_white, hot ? 1.f : 0.55f) : Tone_Color(r, tone);
+            Hud_Seg(cx, cy, hx, hy, 0.34f, Color_Over(color_plate, 0.5f * al));
+            Hud_Seg(cx, cy, hx, hy, 0.2f, Color_Over(hc, al));
+        }
+    }
+    if (r->implode == 0)
+        Dial_Fan(cx, cy, R - 0.05f, 0, DL_DEG, r->implode_tone == TONE_MISS ? color_miss : color_skip); // the frame that was needed
+    if (!r->dim)
+        Strip_Ending(r, cx, cy, R, R, 1.f, 1);
+}
+
+// The dial (Fixed Strip): a small dial for each row, side by side, the label
+// under it.
+static void Dial_Draw(FighterData *fp)
+{
+    float x0, y0, w, h;
+    Strip_Place(fp, STRIP_DIAL, &x0, &y0, &w, &h);
+    for (int i = 0; i < meter_rows; i++)
+    {
+        MeterRow *r = &meter[i];
+        float cx = x0 + STRIP_PAD + DL_R + 0.35f + i * DL_CELL, cy = y0 + DL_LABEL + DL_R + 0.45f;
+        Dial_One(r, cx, cy);
+        Strip_Label(r, cx, y0 + 0.75f);
+    }
+}
+
 // The fixed strip: bottom left, or bottom right when the controller display
-// is on the left half of the screen.
+// is on the left half of the screen. Cells, or the highway or dial in a
+// corner.
 static void Meter_Fixed(FighterData *fp)
 {
+    int look = Options_Timers[TOPT_STRIP].val;
+    if (look == STRIP_HIGHWAY)
+    {
+        Highway_Draw(fp);
+        return;
+    }
+    if (look == STRIP_DIAL)
+    {
+        Dial_Draw(fp);
+        return;
+    }
     float x0, y0, x1, y1;
     Pad_Box(fp, &x0, &y0, &x1, &y1);
     float gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 3.2f;
@@ -7529,10 +7921,232 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
     }
 }
 
-// Waveland and wavedash: a rail as long as the slide each way, and ticks
-// that start at both ends and converge on the touchdown, thinning as they
-// come; they meet on the frame to press, then ghost back out. A white mark
-// shows where the stick held now would stop the slide.
+// A small round dot as an octagon, in three quads.
+static void Hud_Oct(float x, float y, float r, GXColor c)
+{
+    float s = r * 0.4142f;
+    Hud_Rect(x - r, y - s, x + r, y + s, c);
+    Hud_Rect(x - s, y + s, x + s, y + r, c);
+    Hud_Rect(x - s, y - r, x + s, y - s, c);
+}
+
+// A flat disc on the floor: an ellipse rx wide and ry tall.
+static void Hud_Ellipse(float cx, float cy, float rx, float ry, GXColor c)
+{
+    float px = cx + rx, py = cy;
+    for (int i = 1; i <= DISC_SEGS; i++)
+    {
+        float ang = i * (6.2831853f / DISC_SEGS);
+        float nx = cx + cos(ang) * rx, ny = cy + sin(ang) * ry;
+        Hud_Tri(cx, cy, px, py, nx, ny, c);
+        px = nx;
+        py = ny;
+    }
+}
+
+// An ellipse's outline, w thick all the way around (not thinner where it
+// is flat), in enough steps that a flat one stays smooth.
+#define ELL_SEGS 20
+static void Hud_EllipseRing(float cx, float cy, float rx, float ry, float w, GXColor c)
+{
+    float ix[ELL_SEGS + 1], iy[ELL_SEGS + 1], ox[ELL_SEGS + 1], oy[ELL_SEGS + 1];
+    if (rx < 0.05f)
+        rx = 0.05f;
+    if (ry < 0.05f)
+        ry = 0.05f;
+    if (w > ry * 1.6f)
+        w = ry * 1.6f; // the inside of a very flat ring can't turn inside out
+    for (int i = 0; i <= ELL_SEGS; i++)
+    {
+        float ang = i * (6.2831853f / ELL_SEGS);
+        float ca = cos(ang), sa = sin(ang);
+        // the outline's normal there points along (cos / rx, sin / ry)
+        float nx = ca / rx, ny = sa / ry, nl = sqrtf(nx * nx + ny * ny);
+        nx = nx / nl * w / 2;
+        ny = ny / nl * w / 2;
+        ix[i] = cx + ca * rx - nx;
+        iy[i] = cy + sa * ry - ny;
+        ox[i] = cx + ca * rx + nx;
+        oy[i] = cy + sa * ry + ny;
+    }
+    for (int i = 0; i < ELL_SEGS; i++)
+        Quad_Add(ix[i], iy[i], ox[i], oy[i], ox[i + 1], oy[i + 1], ix[i + 1], iy[i + 1], c);
+}
+
+// The wavedash timers that sit at Falcon's feet, drawn from the waveland
+// cue of a wavedash (its jumpsquat, which the cue counts down to the
+// airdodge): Pips and Ring. The countdown is the jumpsquat's own frames, so
+// a pip or a notch of the ring is a frame; the press frame is the cue's
+// window, which opens on the jumpsquat's last frame, as for any timer.
+#define WD_PIPS 4      // frames in Falcon's jumpsquat
+#define WD_SLOT 2.6f   // the pips' spacing, in world units
+#define WD_RING 4.f    // the ring when closed, and
+#define WD_STEP 3.2f   // how much wider it is for each frame left, in world units
+#define WD_FLAT 0.22f  // how flat it lies
+
+// Where the cue's spot is on the screen, and how many HUD units a world unit
+// is there.
+static int Wd_Spot(Cue *c, float *mx, float *my, float *sx)
+{
+    float hx, hy;
+    if (!Hud_FromWorld(c->spot.X, c->spot.Y, mx, my) || !Hud_FromWorld(c->spot.X + 10.f, c->spot.Y, &hx, &hy))
+        return 0;
+    *sx = (hx - *mx) / 10.f;
+    if (*sx < 0.05f)
+        *sx = 0.05f;
+    return 1;
+}
+
+// How a wavedash cue looks right now: how far along (k frames before the
+// airdodge frame, 0 in the window), how strongly it shows, and the color it
+// is drawn in. A press that worked fades it out over the ghost's frames; an
+// ending folds it away muted.
+typedef struct WdLook
+{
+    int k;
+    int lit;       // jumpsquat frames gone, of WD_PIPS
+    float alpha;
+    float fold;    // 1 live, shrinking to 0 as a miss or skip folds
+    GXColor color; // the cue's color, or the muted one
+    int now;       // the frame to press, and it's not muted
+} WdLook;
+
+static void Wd_Look(Cue *c, int ended, WdLook *w)
+{
+    GXColor base = Cue_Color(CUE_WL);
+    w->k = c->phase == PH_WINDOW ? 0 : c->left - 1;
+    if (w->k < 0)
+        w->k = 0;
+    w->lit = c->phase == PH_WINDOW ? WD_PIPS : WD_PIPS + 1 - c->left;
+    w->lit = w->lit < 0 ? 0 : w->lit > WD_PIPS ? WD_PIPS : w->lit;
+    w->alpha = 1.f;
+    w->fold = 1.f;
+    w->color = c->dim ? Dim_Color(c->dim) : base;
+    w->now = !ended && c->phase == PH_WINDOW && !c->dim;
+    if (ended && c->phase == PH_FADE)
+    {
+        float q = (float)c->age / LL_FADE;
+        w->alpha = (c->age == 0 ? 0.9f : 0.5f) * (1.f - q);
+        w->fold = 1.f - Ease_Out(q);
+        w->lit = WD_PIPS;
+    }
+    else if (ended && c->phase == PH_CUT)
+    {
+        w->alpha = 0.4f * (1.f - (float)c->age / LL_CUT);
+        w->color = color_skip;
+    }
+    else if (!ended && c->press >= 0)
+        w->alpha = 1.f - Clamp01((float)c->press / LL_GHOST); // gone with the ghost
+}
+
+// Squat pips: four small pips under Falcon's feet, one lit for each
+// jumpsquat frame, then a diamond for the airdodge frame that turns white
+// in place when it's due.
+static void Wd_Pips(Cue *c, int ended)
+{
+    float mx, my, sx;
+    if (!Wd_Spot(c, &mx, &my, &sx))
+        return;
+    float s = sx < 0.3f ? 0.3f : sx > 0.55f ? 0.55f : sx; // small shapes, kept readable at any zoom
+    float step = WD_SLOT * s, pr = 0.8f * s, dr = 1.4f * s;
+    float y = my - 2.f * s, dx = mx + 2.f * step;
+    GXColor base = Cue_Color(CUE_WL);
+
+    if (c->phase == PH_FADE || c->phase == PH_CUT || c->phase == PH_COUNT || c->phase == PH_WINDOW)
+    {
+        WdLook w;
+        Wd_Look(c, ended, &w);
+        if (w.alpha > 0.01f)
+        {
+            for (int i = 0; i < WD_PIPS; i++)
+            {
+                int on = i < w.lit;
+                float x = mx + (i - 2) * step;
+                GXColor pc = on ? (c->dim || c->phase == PH_FADE || c->phase == PH_CUT ? w.color : color_white) : color_skip;
+                Hud_Oct(x, y, pr + 0.1f, Color_Over(color_plate, 0.6f * w.alpha * (on ? 1.f : 0.6f)));
+                Hud_Oct(x, y, pr, Color_Over(pc, (on ? 0.95f : 0.4f) * w.alpha));
+            }
+            GXColor dc = w.now ? Color_Mix(base, color_white, c->age == 0 ? 0.9f : 0.4f) : c->dim || ended ? w.color : Color_Mix(base, color_plate, 0.4f);
+            float r = dr * w.fold;
+            if (r > 0.05f)
+            {
+                Hud_Diamond(dx, y, r + 0.14f, Color_Over(color_plate, 0.6f * w.alpha));
+                Hud_Diamond(dx, y, r, Color_Over(dc, 0.95f * w.alpha));
+            }
+        }
+    }
+
+    // the one ghost: a disc swelling out of the diamond
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g >= 0 && c->phase != PH_CUT)
+    {
+        float q = (float)g / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float r = (1.4f + (bright ? 3.f : 1.2f) * Ease_Out(q)) * s;
+        Hud_Disc(dx, y, r, Color_Over(Color_Mix(base, color_white, 0.35f), (bright ? 0.6f : 0.25f) * fade));
+    }
+}
+
+// Ground ring: a flat ring on the floor around Falcon's feet, a notch wider
+// for each jumpsquat frame left, closing on the airdodge frame.
+static void Wd_Ring(Cue *c, int ended)
+{
+    float mx, my, sx;
+    if (!Wd_Spot(c, &mx, &my, &sx))
+        return;
+    GXColor base = Cue_Color(CUE_WL);
+
+    if (c->phase == PH_FADE || c->phase == PH_CUT || c->phase == PH_COUNT || c->phase == PH_WINDOW)
+    {
+        WdLook w;
+        Wd_Look(c, ended, &w);
+        float appear = c->phase == PH_COUNT ? Clamp01((c->span - c->left + 1) / 2.f) : 1.f;
+        float rw = (WD_RING + WD_STEP * w.k) * w.fold, a = w.alpha * appear;
+        GXColor rc = w.now ? color_white : w.color;
+        if (rw * sx > 0.1f && a > 0.01f)
+        {
+            Hud_EllipseRing(mx, my, rw * sx, rw * sx * WD_FLAT, 0.42f, Color_Over(color_plate, 0.5f * a));
+            Hud_EllipseRing(mx, my, rw * sx, rw * sx * WD_FLAT, 0.28f, Color_Over(rc, 0.95f * a));
+        }
+    }
+
+    // the one ghost: a flat disc swelling out of the closed ring
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g >= 0 && c->phase != PH_CUT)
+    {
+        float q = (float)g / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float rx = (WD_RING + (bright ? 12.f : 4.f) * Ease_Out(q)) * sx;
+        Hud_Ellipse(mx, my, rx, rx * (WD_FLAT + 0.03f), Color_Over(Color_Mix(base, color_white, 0.35f), (bright ? 0.55f : 0.22f) * fade));
+    }
+}
+
+// Waveland and wavedash: a rail as long as the slide each way, and a mark on
+// each end that counts down to the airdodge frame, in the look picked in the
+// Timers menu: ticks that slide in and spike where they meet, rails that
+// fill from the ends, or chevrons that hop a notch a frame. Every look
+// crosses the rail at one speed, whatever the lead; a shorter one just
+// starts closer. They meet in the middle on the frame to press, then the
+// timer's one ghost plays in place. A white mark shows where the stick held
+// now would stop the slide.
+#define RAIL_FRAMES (LL_COUNT_FRAMES - 1) // frames a mark takes to cross a whole rail
+#define RAIL_FILL 0.3f                    // how thick the filling rails are
+#define CHEV_STEPS 8                      // notches a chevron hops over the last frames
+#define CHEV_GAP 0.5f                     // the last notch's distance from the spot
+
+// The rails on the screen: the spot and the slide's two ends, and which
+// directions work.
+typedef struct RailGeom
+{
+    float mx, my, lx, ly, rx, ry;
+    int ok_l, ok_r;
+} RailGeom;
+
+// How far along its rail a mark k frames from the airdodge frame is: 0 at the
+// spot, 1 at the slide's end.
+static float Rail_Q(int k)
+{
+    return Clamp01((float)k / RAIL_FRAMES);
+}
+
 // A bump standing on y: a bell curve wb wide at its foot and h tall, the
 // shape of the waveland ticks' wave.
 #define BUMP_SLICES 8
@@ -7550,33 +8164,140 @@ static void Hud_Bump(float cx, float y, float wb, float h, GXColor c)
     }
 }
 
-// One of the waveland ticks at f of the way from the spot (0) to the slide's
-// end (1): wide and low out at the ends, where it first catches the eye.
-// It keeps the same area as its foot narrows at a steady rate, so it grows
-// taller faster and faster and spikes where the two meet, like two waves
-// adding up, while it slides in at a steady speed.
-static void Rail_Tick(float x, float y, float f, GXColor c)
+// How tall the spike gets: about Falcon's height on the screen, kept between
+// a height that shows and one that fills it.
+static float Rail_Peak(Cue *c)
 {
-    float wb = 0.35f + 2.2f * f;
-    float h = 1.9f / wb;
+    float ax, ay, bx, by;
+    if (!Hud_FromWorld(c->spot.X, c->spot.Y, &ax, &ay) || !Hud_FromWorld(c->spot.X, c->spot.Y + 17.f, &bx, &by))
+        return 6.f;
+    float h = fabs(by - ay);
+    return h < 4.5f ? 4.5f : h > 12.f ? 12.f : h;
+}
+
+// One of the waveland ticks, q of the way from the spot (0) to the slide's
+// end (1): wide and low out at the ends, where it first catches the eye. It
+// keeps the same area as its foot narrows at a steady rate, so it shoots up
+// taller and faster the closer it gets, to peak tall at the spot, while it
+// slides in at a steady speed.
+#define TICK_W0 0.6f // the foot at the spot
+#define TICK_W1 4.0f // and at the slide's end
+static void Rail_Tick(float x, float y, float q, float peak, GXColor c)
+{
+    float wb = TICK_W0 + (TICK_W1 - TICK_W0) * q;
+    float h = peak * TICK_W0 / wb;
     Hud_Bump(x, y - 0.15f, wb + 0.3f, h + 0.25f, Color_Over(color_plate, 0.5f * c.a / 255.f));
     Hud_Bump(x, y - 0.15f, wb, h, c);
 }
 
-// The rails' one ghost (Cue_Ghost): ticks running back out to the ends.
-static void Spot_RailGhost(Cue *c, GXColor base, int ok_l, int ok_r, float mx, float my, float lx, float ly, float rx, float ry)
+// The countdown, k frames from the airdodge frame (0 in the window), in
+// the picked look, in col at am of its strength.
+static void Rail_Count(int look, Cue *c, RailGeom *g, int k, GXColor col, float am)
 {
-    int bright, g = Cue_Ghost(c, &bright);
-    if (g < 0)
+    float q = Rail_Q(k), n = 1.f - q;
+    int now = c->phase == PH_WINDOW && !c->dim;
+    GXColor tc = now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f) : Color_Mix(col, color_white, 0.35f * n * n);
+    GXColor mark = Color_Over(tc, (0.85f + 0.15f * n) * am);
+
+    switch (look)
+    {
+    case WLT_TICKS:
+    {
+        float peak = Rail_Peak(c);
+        if (k == 0)
+        {
+            // they have met: one spike
+            if (g->ok_l || g->ok_r)
+                Rail_Tick(g->mx, g->my, 0, peak, mark);
+            break;
+        }
+        if (g->ok_l)
+            Rail_Tick(g->mx + (g->lx - g->mx) * q, g->my + (g->ly - g->my) * q, q, peak, mark);
+        if (g->ok_r)
+            Rail_Tick(g->mx + (g->rx - g->mx) * q, g->my + (g->ry - g->my) * q, q, peak, mark);
+        break;
+    }
+    case WLT_RAILS:
+        // the rail fills from its end toward the spot, the same share each
+        // frame on both sides, and is full on the airdodge frame
+        for (int side = -1; side <= 1; side += 2)
+        {
+            if (side < 0 ? !g->ok_l : !g->ok_r)
+                continue;
+            float ex = side < 0 ? g->lx : g->rx, ey = side < 0 ? g->ly : g->ry;
+            if (n < 0.001f)
+                continue;
+            float tx = ex + (g->mx - ex) * n, ty = ey + (g->my - ey) * n;
+            Hud_Seg(ex, ey, tx, ty, RAIL_FILL + 0.14f, Color_Over(color_plate, 0.5f * am));
+            Hud_Seg(ex, ey, tx, ty, RAIL_FILL, mark);
+            if (k > 0)
+                Hud_Rect(tx - 0.08f, ty - 0.12f, tx + 0.08f, ty + 0.6f, Color_Over(Color_Mix(tc, color_white, 0.5f), 0.9f * am));
+        }
+        break;
+    case WLT_CHEVRONS:
+    {
+        // arrowheads pointing at the spot, a notch closer a frame over the
+        // last CHEV_STEPS; the notches are marked under the rail
+        int step = k > CHEV_STEPS ? CHEV_STEPS : k;
+        for (int side = -1; side <= 1; side += 2)
+        {
+            if (side < 0 ? !g->ok_l : !g->ok_r)
+                continue;
+            float ex = side < 0 ? g->lx : g->rx, ey = side < 0 ? g->ly : g->ry;
+            float dx = ex - g->mx, dy = ey - g->my, len = sqrtf(dx * dx + dy * dy);
+            if (len < 3.f * CHEV_GAP)
+                continue;
+            float ux = dx / len, uy = dy / len, notch = (len - CHEV_GAP) / (CHEV_STEPS + 1);
+            for (int i = 1; i <= CHEV_STEPS; i++)
+            {
+                float p = CHEV_GAP + i * notch;
+                Hud_Rect(g->mx + ux * p - 0.05f, g->my + uy * p - 0.45f, g->mx + ux * p + 0.05f, g->my + uy * p - 0.1f, Color_Over(color_white, 0.4f * am));
+            }
+            float p = CHEV_GAP + step * notch;
+            float tx = g->mx + ux * p, ty = g->my + uy * p + 0.75f;
+            float bx = tx + ux * 0.65f, by = ty + uy * 0.65f, wx = -uy * 0.7f, wy = ux * 0.7f;
+            GXColor edge = Color_Over(color_plate, 0.5f * am);
+            Hud_Seg(bx + wx, by + wy, tx, ty, 0.42f, edge);
+            Hud_Seg(bx - wx, by - wy, tx, ty, 0.42f, edge);
+            Hud_Seg(bx + wx, by + wy, tx, ty, 0.26f, mark);
+            Hud_Seg(bx - wx, by - wy, tx, ty, 0.26f, mark);
+        }
+        break;
+    }
+    }
+}
+
+// The rails' one ghost (Cue_Ghost), in place like the look it belongs to,
+// strong and growing for a press that worked, small and dim for a skip:
+// the spike swells into a glow (Ticks), the rails swell (Rails), a disc
+// rises at the spot (Chevrons). Nothing runs back out along the rail.
+static void Spot_RailGhost(int look, Cue *c, GXColor base, RailGeom *g)
+{
+    int bright, gh = Cue_Ghost(c, &bright);
+    if (gh < 0)
         return;
-    float q = (float)g / LL_GHOST, e = Ease_Out(q) * (bright ? 0.7f : 0.35f);
-    float fade = (1.f - q) * (1.f - q);
-    GXColor gc = Color_Over(Color_Mix(base, color_white, bright ? 0.4f : 0.2f), (bright ? 0.95f : 0.45f) * fade);
-    float h = bright ? 2.4f : 1.2f;
-    if (ok_l)
-        Hud_Rect(mx + (lx - mx) * e - 0.14f, my + (ly - my) * e - 0.2f, mx + (lx - mx) * e + 0.14f, my + (ly - my) * e + h, gc);
-    if (ok_r)
-        Hud_Rect(mx + (rx - mx) * e - 0.14f, my + (ry - my) * e - 0.2f, mx + (rx - mx) * e + 0.14f, my + (ry - my) * e + h, gc);
+    float q = (float)gh / LL_GHOST, e = Ease_Out(q), fade = (1.f - q) * (1.f - q);
+    GXColor gc = Color_Mix(base, color_white, bright ? 0.4f : 0.2f);
+    switch (look)
+    {
+    case WLT_TICKS:
+    {
+        float wb = TICK_W0 + (bright ? 2.2f : 1.0f) * e;
+        float h = Rail_Peak(c) * (bright ? 1.f + 0.25f * e : 0.5f);
+        Hud_Bump(g->mx, g->my - 0.15f, wb, h, Color_Over(gc, (bright ? 0.95f : 0.45f) * fade));
+        break;
+    }
+    case WLT_RAILS:
+    {
+        float ax = g->ok_l ? g->lx : g->mx, ay = g->ok_l ? g->ly : g->my;
+        float bx = g->ok_r ? g->rx : g->mx, by = g->ok_r ? g->ry : g->my;
+        Hud_Seg(ax, ay, bx, by, RAIL_FILL + 2.f * (bright ? 0.9f : 0.35f) * e, Color_Over(gc, (bright ? 0.6f : 0.25f) * fade));
+        break;
+    }
+    case WLT_CHEVRONS:
+        Hud_Disc(g->mx, g->my + 0.5f, bright ? 0.5f + 1.8f * e : 0.3f + 0.6f * e, Color_Over(gc, (bright ? 0.6f : 0.25f) * fade));
+        break;
+    }
 }
 
 static void Spot_Rails(Cue *c, FighterData *fp, int ended)
@@ -7596,12 +8317,17 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
     GXColor base = Cue_Color(CUE_WL);
     int ok_l = c->wd || (c->dirs & DODGE_LEFT);
     int ok_r = c->wd || (c->dirs & DODGE_RIGHT);
+    RailGeom g = {mx, my, lx, ly, rx, ry, ok_l, ok_r};
+    int look = Options_Timers[TOPT_WL].val;
+    // a wavedash out of the jumpsquat has a timer of its own (Wavedash in
+    // the menu), so the rails only mark the slide then, unless that timer
+    // is the strip's row
+    int timed = !c->wd || Options_Timers[TOPT_WD].val == WDT_CELLS;
 
     if (!ended && (c->phase == PH_COUNT || c->phase == PH_WINDOW))
     {
         GXColor col = c->dim ? Dim_Color(c->dim) : base;
         float am = c->dim ? 0.5f : 1.f;
-        int now = c->phase == PH_WINDOW && !c->dim;
 
         Hud_Seg(lx, ly, mx, my, 0.12f, Color_Fill(col, (ok_l ? 0.4f : 0.15f) * am));
         Hud_Seg(mx, my, rx, ry, 0.12f, Color_Fill(col, (ok_r ? 0.4f : 0.15f) * am));
@@ -7621,18 +8347,13 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
                 Hud_Rect(ex - 0.1f, ey, ex + 0.1f, ey + 0.75f, ec);
         }
 
+        // a countdown fades in over its first 2 frames
         int k = c->phase == PH_WINDOW ? 0 : c->left - 1;
-        float f = c->span > 1 ? Clamp01((float)k / (c->span - 1)) : 0;
-        float n = 1.f - f;
-        GXColor tc = Color_Over(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f)
-                                    : Color_Mix(col, color_white, 0.35f * n * n),
-                                (0.85f + 0.15f * n) * am);
-        if (ok_l)
-            Rail_Tick(mx + (lx - mx) * f, my + (ly - my) * f, f, tc);
-        if (ok_r)
-            Rail_Tick(mx + (rx - mx) * f, my + (ry - my) * f, f, tc);
-        if (c->phase == PH_WINDOW)
-            Spot_RailGhost(c, base, ok_l, ok_r, mx, my, lx, ly, rx, ry);
+        float appear = c->phase == PH_COUNT ? Clamp01((c->span - c->left + 1) / 2.f) : 1.f;
+        if (timed)
+            Rail_Count(look, c, &g, k < 0 ? 0 : k, col, am * appear);
+        if (timed && c->phase == PH_WINDOW)
+            Spot_RailGhost(look, c, base, &g);
 
         // where the stick held now would stop the slide: the dodge takes
         // its angle and keeps the sideways part of its speed
@@ -7679,15 +8400,9 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
             Hud_FromWorld(fx, c->spot.Y, &hx, &hy);
             Hud_Rect(hx - 0.1f, hy - 0.2f, hx + 0.1f, hy + 1.0f, Color_Fill(color_white, 0.85f * fade));
         }
-        if (age < LL_GHOST * 2)
-        {
-            // the pulse out along the floor
-            float q = (float)age / (LL_GHOST * 2), e = Ease_Out(q);
-            GXColor gc = Color_Fill(Color_Mix(base, color_white, 0.4f), 0.9f * (1.f - q) * s);
-            float ox = (rx - mx) * e, oy = (ry - my) * e;
-            Hud_Rect(mx + ox - 0.12f, my + oy - 0.2f, mx + ox + 0.12f, my + oy + 1.2f, gc);
-            Hud_Rect(mx - ox - 0.12f, my - oy - 0.2f, mx - ox + 0.12f, my - oy + 1.2f, gc);
-        }
+        // the ghost carries on from the press
+        if (timed)
+            Spot_RailGhost(look, c, base, &g);
         break;
     }
     case PH_FADE:
@@ -7698,7 +8413,8 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
         Hud_Seg(mx + (lx - mx) * k, my + (ly - my) * k, mx + (rx - mx) * k, my + (ry - my) * k, 0.14f, dc);
         Hud_Rect(mx + (lx - mx) * k - 0.1f, my, mx + (lx - mx) * k + 0.1f, my + 1.1f * k, dc);
         Hud_Rect(mx + (rx - mx) * k - 0.1f, my, mx + (rx - mx) * k + 0.1f, my + 1.1f * k, dc);
-        Spot_RailGhost(c, base, ok_l, ok_r, mx, my, lx, ly, rx, ry); // a skip's faint ghost
+        if (timed)
+            Spot_RailGhost(look, c, base, &g); // a skip's faint ghost
         break;
     }
     case PH_CUT:
@@ -8419,6 +9135,20 @@ static void Near_Draw(FighterData *fp, int look)
 // the strips.
 static void Wd_Draw(FighterData *fp)
 {
+    int look = Options_Timers[TOPT_WD].val;
+    if ((look != WDT_PIPS && look != WDT_RING) || !Cues_Waveland())
+        return;
+    // the last one's ending first, the live one over it
+    for (int pass = 0; pass < 2; pass++)
+    {
+        Cue *c = pass ? &cue_live[CUE_WL] : &cue_end[CUE_WL];
+        if (!c->phase || !c->wd)
+            continue;
+        if (look == WDT_PIPS)
+            Wd_Pips(c, !pass);
+        else
+            Wd_Ring(c, !pass);
+    }
 }
 
 static void Spot_Draw(FighterData *fp)

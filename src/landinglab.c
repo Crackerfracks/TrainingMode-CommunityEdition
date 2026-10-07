@@ -3794,6 +3794,8 @@ void Event_ClearLearned(GOBJ *menu);
 void Event_ChangeCollDisplay(GOBJ *menu, int value);
 void Event_ChangeScript(GOBJ *menu, int value);
 void Event_ChangeCamera(GOBJ *menu, int value);
+void Event_ChangeView(GOBJ *menu, int value);
+void Event_SaveView(GOBJ *menu);
 void Event_ChangeLedgeStart(GOBJ *menu, int value);
 void Event_ChangeRoutes(GOBJ *menu, int value);
 void Event_ChangePreset(GOBJ *menu, int value);
@@ -3836,6 +3838,7 @@ static const int reset_delay_hit[] = {120, 60, 30, 1};
 static const int reset_delay_miss[] = {60, 20, 1, 1};
 static const char *start_names[] = {"Ledge", "Saved Position"};
 static const char *cam_names[] = {"Normal", "Zoom", "Fixed", "Advanced"};
+static const char *view_names[] = {"None", "View 1", "View 2", "View 3", "View 4"};
 #define LL_SCRIPT_MAX 48 // scripts read from the script file
 static const char *script_names[LL_SCRIPT_MAX + 2] = {"Off"}; // and All
 
@@ -4057,9 +4060,13 @@ static EventMenu Menu_Ledge = {
 enum options_camera
 {
     CAMOPT_MODE,
+    CAMOPT_VIEW,
+    CAMOPT_SAVE,
 
     CAMOPT_COUNT
 };
+
+#define CAM_ADVANCED 3 // cam_names
 
 static EventOption Options_Camera[CAMOPT_COUNT] = {
     {
@@ -4071,6 +4078,24 @@ static EventOption Options_Camera[CAMOPT_COUNT] = {
                  "In advanced mode, use C-Stick while holding",
                  "A/B/Y to pan, rotate and zoom, respectively."},
         .OnChange = Event_ChangeCamera,
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "View",
+        .value_num = countof(view_names),
+        .values = view_names,
+        .desc = {"Jump the camera to a saved view and hold it",
+                 "there (Advanced mode, so it can still be moved).",
+                 "Presets keep the view they were saved with."},
+        .OnChange = Event_ChangeView,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Save View",
+        .desc = {"Keep the camera as it is now as the view picked",
+                 "above (pick View 1 to 4 first). Set it up in",
+                 "Advanced mode, or pause on a moment you like."},
+        .OnSelect = Event_SaveView,
     },
 };
 
@@ -4970,7 +4995,15 @@ typedef struct PresetSlot
 } PresetSlot;
 
 #define PRESET_MAGIC 0x4C4C5052 // "LLPR"
-#define PRESET_VERSION 1
+#define PRESET_VERSION 2
+#define CAM_VIEWS 4
+typedef struct CamView
+{
+    u8 used;
+    u8 pad[3];
+    Vec3 eye, interest;
+    float fov;
+} CamView;
 typedef struct PresetFile
 {
     u32 magic;
@@ -4978,6 +5011,7 @@ typedef struct PresetFile
     u8 start; // the preset loaded at start
     u8 pad;
     PresetSlot slot[PS_SAVED];
+    CamView view[CAM_VIEWS]; // Camera > View 1 to 4
 } PresetFile;
 
 typedef struct PresetMenu
@@ -5006,6 +5040,8 @@ static PresetSlot *preset_builtin; // [PS_COUNT - PS_SAVED]
 static u8 preset_dirty;            // preset_file changed since it was last written
 static u8 preset_was_paused;
 static u8 preset_cam_pending; // a preset changed the camera mode
+static u8 view_pending;       // ... or its view
+static u8 view_hold;          // frames left putting the camera at the view
 
 static int Preset_Kept(EventOption *o)
 {
@@ -5084,7 +5120,7 @@ static void Preset_Apply(PresetSlot *s)
 {
     if (!s->used)
         return;
-    int cam = Options_Camera[CAMOPT_MODE].val, start = Options_Ledge[LOPT_START].val;
+    int cam = Options_Camera[CAMOPT_MODE].val, view = Options_Camera[CAMOPT_VIEW].val, start = Options_Ledge[LOPT_START].val;
     for (int m = 0; m < (int)countof(preset_menus); m++)
         for (int i = 0; i < preset_menus[m].num; i++)
         {
@@ -5100,6 +5136,8 @@ static void Preset_Apply(PresetSlot *s)
     // the match's camera is ready.
     if (Options_Camera[CAMOPT_MODE].val != cam)
         preset_cam_pending = 1;
+    if (Options_Camera[CAMOPT_VIEW].val != view && Options_Camera[CAMOPT_VIEW].val)
+        view_pending = 1;
     if (Options_Ledge[LOPT_START].val != start)
         Event_ChangeLedgeStart(0, Options_Ledge[LOPT_START].val);
     Event_ChangeRoutes(0, 0);
@@ -5306,7 +5344,7 @@ static void Presets_Init(void)
 // asks for.
 static void Presets_Loaded(int ok)
 {
-    if (!ok || preset_file->magic != PRESET_MAGIC)
+    if (!ok || preset_file->magic != PRESET_MAGIC || preset_file->version != PRESET_VERSION)
     {
         memset(preset_file, 0, sizeof(*preset_file));
         preset_file->magic = PRESET_MAGIC;
@@ -5666,6 +5704,67 @@ static void Presets_KeepUser(void)
     }
 }
 
+// Camera views: where the camera's eye is, what it looks at, and its field
+// of view. A view is held in Advanced mode, which leaves the camera where
+// it's put; it's put there for a couple of frames, since switching modes
+// moves it first.
+static void View_Hold(void)
+{
+    int v = Options_Camera[CAMOPT_VIEW].val;
+    if (!view_hold || v <= 0 || !preset_file->view[v - 1].used)
+    {
+        view_hold = 0;
+        return;
+    }
+    view_hold--;
+    CamView *w = &preset_file->view[v - 1];
+    COBJ *cobj = Match_GetCObj();
+    CObj_SetEyePosition(cobj, &w->eye);
+    CObj_SetInterest(cobj, &w->interest);
+    cobj->projection_param.perspective.fov = w->fov;
+}
+
+static void View_Apply(int v)
+{
+    if (v <= 0 || !preset_file->view[v - 1].used)
+        return;
+    Options_Camera[CAMOPT_MODE].val = CAM_ADVANCED;
+    Event_ChangeCamera(0, CAM_ADVANCED);
+    view_hold = 3;
+    View_Hold();
+}
+
+void Event_ChangeView(GOBJ *menu, int value)
+{
+    if (value > 0 && !preset_file->view[value - 1].used)
+    {
+        SFX_PlayCommon(3); // nothing saved there yet
+        return;
+    }
+    View_Apply(value);
+}
+
+void Event_SaveView(GOBJ *menu)
+{
+    int v = Options_Camera[CAMOPT_VIEW].val;
+    if (v <= 0)
+    {
+        SFX_PlayCommon(3);
+        return;
+    }
+    CamView *w = &preset_file->view[v - 1];
+    COBJ *cobj = Match_GetCObj();
+    COBJ_GetEyePosition(cobj, &w->eye);
+    COBJ_GetInterest(cobj, &w->interest);
+    w->fov = cobj->projection_param.perspective.fov;
+    w->used = 1;
+    preset_dirty = 1;
+    OSReport("LLVIEW saved %d: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f\n", v, w->eye.X, w->eye.Y, w->eye.Z,
+             w->interest.X, w->interest.Y, w->interest.Z, w->fov);
+    View_Apply(v);
+    SFX_PlayCommon(1);
+}
+
 // Each frame: closing the menu keeps the settings in User Custom, and the
 // card is written when anything it holds changed.
 static void Presets_Update(void)
@@ -5679,6 +5778,12 @@ static void Presets_Update(void)
         preset_cam_pending = 0;
         Event_ChangeCamera(0, Options_Camera[CAMOPT_MODE].val);
     }
+    if (view_pending)
+    {
+        view_pending = 0;
+        View_Apply(Options_Camera[CAMOPT_VIEW].val);
+    }
+    View_Hold();
     Card_Update();
 }
 
@@ -11928,6 +12033,7 @@ static int Advance_CheckStep(void)
 //   card restart               as if the event started over: every option
 //                              back to its default, then the card read again
 //   chord lr|z|lrz up|down|left|right  a quick toggle
+//   view save|load <1-4>       Camera > Save View, or picking that View
 // Inputs: A B X Y Z L R (L and R fully pressed), s:x,y (stick), c:x,y
 // (C-stick), lt:v (light press, no click), with x, y, v from -1 to 1. A
 // stick value is round(80 v), pulled back onto the rim if it's past it.
@@ -11959,6 +12065,7 @@ enum script_cmd
     SCMD_CARD,
     SCMD_CHORD,
     SCMD_GET,
+    SCMD_VIEW,
 };
 
 typedef struct ScriptInput
@@ -12231,10 +12338,10 @@ static void Script_Parse(void)
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
-                 Script_Is(w, "card") || Script_Is(w, "chord"))
+                 Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view"))
         {
             op->kind = SOP_CMD;
-            op->count = w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
+            op->count = w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
@@ -12680,6 +12787,29 @@ static void Script_Cmd(ScriptOp *op)
     case SCMD_CLOSEMENU:
         Presets_KeepUser();
         return;
+    case SCMD_VIEW:
+    {
+        char *what = Script_Word(&rest), *n = Script_Word(&rest);
+        int v = n ? (int)Script_Number(&n) : 0;
+        ok = what && v >= 1 && v <= CAM_VIEWS;
+        if (!ok)
+            break;
+        Options_Camera[CAMOPT_VIEW].val = v;
+        if (Script_Is(what, "save"))
+            Event_SaveView(0);
+        else if (Script_Is(what, "load"))
+        {
+            Event_ChangeView(0, v);
+            COBJ *cobj = Match_GetCObj();
+            Vec3 eye;
+            COBJ_GetEyePosition(cobj, &eye);
+            sprintf(buf, "LLVIEW load %d: eye now %.1f %.1f %.1f\n", v, eye.X, eye.Y, eye.Z);
+            Log(buf);
+        }
+        else
+            ok = 0;
+        break;
+    }
     case SCMD_PRESET:
     {
         char *what = Script_Word(&rest);
@@ -14639,6 +14769,8 @@ void Event_ChangeLedgeStart(GOBJ *menu, int value)
 void Event_ChangeCamera(GOBJ *menu, int value)
 {
     MatchCamera *cam = stc_matchcam;
+    if (menu)
+        Options_Camera[CAMOPT_VIEW].val = 0; // a mode picked by hand leaves the view
     if (value == 0)
         Match_SetNormalCamera();
     else if (value == 1)

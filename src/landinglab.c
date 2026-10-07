@@ -12401,6 +12401,10 @@ static int Script_Instant(GOBJ *ft, int pre)
         else
             return 1;
         Script_Next();
+        // the steps after a shot wait for the next frame, so the frozen
+        // frame shows what the script set up for it
+        if (op->kind == SOP_SHOT && !pre)
+            return 1;
     }
 }
 

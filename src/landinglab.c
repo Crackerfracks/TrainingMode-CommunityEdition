@@ -12086,7 +12086,8 @@ static int Route_Find(LedgeRoute *list, int n, LedgeRoute *r)
     return near;
 }
 
-static void Routes_Update(int ledge)
+// Returns 1 when it built the list anew.
+static int Routes_Update(int ledge)
 {
     int kinds = Options_Ledge[LOPT_KIND].val;
     int sort = Options_Ledge[LOPT_SORT].val;
@@ -12094,7 +12095,7 @@ static void Routes_Update(int ledge)
     int have = L && L->have;
     int version = have ? L->version : -1;
     if (ledge == route_list_ledge && version == route_list_version && kinds == route_list_kind && sort == route_list_sort)
-        return;
+        return 0;
     route_list_ledge = ledge;
     route_list_version = version;
     route_list_kind = kinds;
@@ -12119,18 +12120,24 @@ static void Routes_Update(int ledge)
 
         // the Route number is 1 to the routes found. The route chosen on
         // this ledge stays chosen when the list is put in another order or
-        // searched again; a ledge with none chosen keeps the number.
+        // searched again. Each order keeps its own best routes, so it may
+        // not be in this one: then the list starts at its first route, and
+        // the choice comes back with an order that has it. A ledge with
+        // none chosen keeps the number.
         EventOption *o = &Options_Ledge[LOPT_PICK];
         o->value_num = n > 0 ? n : 1;
-        int found = L->has_pick ? Route_Find(route_list, n, &L->pick) : -1;
-        if (found >= 0)
-            o->val = found + 1;
+        if (L->has_pick)
+        {
+            int found = Route_Find(route_list, n, &L->pick);
+            o->val = found >= 0 ? found + 1 : 1;
+        }
         if (o->val > o->value_num)
             o->val = o->value_num;
         if (o->val < 1)
             o->val = 1;
     }
     Route_MenuText();
+    return 1;
 }
 
 // Remember the route the Route option shows as the one chosen on its ledge.
@@ -12664,8 +12671,10 @@ static void Route_MenuText(void)
 
 void Event_ChangeRoutes(GOBJ *menu, int value)
 {
-    Routes_Update(route_browse);
-    Route_RememberPick();
+    // a new kind or order rebuilds the list and keeps the chosen route; only
+    // a new Route number is a new choice
+    if (!Routes_Update(route_browse))
+        Route_RememberPick();
     if (hang_ledge >= 0 && ledges[hang_ledge].have)
         Routes_Show(); // the rows follow the choice as soon as the game goes on
     Route_MenuText();

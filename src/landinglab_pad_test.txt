@@ -53,3 +53,17 @@ set Camera/View = 0
 closemenu
 card flush
 mark views done
+
+# Rumble cues on through a waveland countdown and back off: a crash check
+# (a pipe pad can't buzz, so feel is Stephen's call on a real controller)
+script Rumble run
+set Rumble/AI Rumble = 1
+set Rumble/Waveland Rumble = 1
+start 38 0 right
+5 X
+60
+mark rumble ran: expect no crash or freeze
+set Rumble/AI Rumble = 0
+set Rumble/Waveland Rumble = 0
+30
+mark rumble off

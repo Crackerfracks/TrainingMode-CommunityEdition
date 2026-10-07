@@ -3796,6 +3796,10 @@ void Event_ChangeScript(GOBJ *menu, int value);
 void Event_ChangeCamera(GOBJ *menu, int value);
 void Event_ChangeLedgeStart(GOBJ *menu, int value);
 void Event_ChangeRoutes(GOBJ *menu, int value);
+void Event_ChangePreset(GOBJ *menu, int value);
+void Event_ChangePresetStart(GOBJ *menu, int value);
+void Event_PresetLoad(GOBJ *menu);
+void Event_PresetSave(GOBJ *menu);
 
 static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
@@ -4093,6 +4097,21 @@ static EventOption Options_Controls[] = {
                  "When Reset starts from the ledge, it starts a",
                  "new attempt instead, and with a test script",
                  "chosen it plays the script again."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Quick: Cues and Paths",
+        .desc = {"Hold L or R (a light press past 60% counts)",
+                 "and press the D-pad. Up and down go round the",
+                 "cue sets, left and right round the landing and",
+                 "body paths. Best between attempts."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Quick: Pad and Presets",
+        .desc = {"Hold Z and press the D-pad. Up and down go",
+                 "round the controller looks and sizes, left and",
+                 "right load the next preset (Presets menu)."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -4648,8 +4667,90 @@ static EventMenu Menu_Game = {
     .options = Options_Game,
 };
 
+// Settings presets: what every menu is set to, kept on the memory card in
+// Landing Lab's own small file, so TM-CE's save is never touched.
+enum preset_slot
+{
+    PS_USER, // the last settings: saved whenever the menu closes
+    PS_1,
+    PS_2,
+    PS_3,
+    PS_4,
+    PS_SAVED, // the ones above are on the card, the ones from here built in
+    PS_DEFAULTS = PS_SAVED,
+    PS_MINIMAL,
+    PS_EVERYTHING,
+    PS_LEDGE,
+
+    PS_COUNT
+};
+static const char *preset_names[PS_COUNT] = {"User Custom", "Preset 1", "Preset 2", "Preset 3", "Preset 4",
+                                             "Defaults", "Minimal", "Everything", "Ledge Drill"};
+static char preset_desc[3][52];      // the chosen preset's settings, in short
+static char preset_card_desc[3][52]; // what the memory card is doing
+
+enum options_presets
+{
+    PROPT_PICK,
+    PROPT_LOAD,
+    PROPT_SAVE,
+    PROPT_START,
+    PROPT_CARD,
+
+    PROPT_COUNT
+};
+
+static EventOption Options_Presets[PROPT_COUNT] = {
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Preset",
+        .value_num = PS_COUNT,
+        .values = preset_names,
+        .desc = {preset_desc[0], preset_desc[1], preset_desc[2], "Load it or save to it below."},
+        .OnChange = Event_ChangePreset,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Load Preset",
+        .desc = {"Set every menu the way the preset above has",
+                 "it."},
+        .OnSelect = Event_PresetLoad,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Save to Preset",
+        .desc = {"Keep the current settings in the preset above:",
+                 "User Custom or Preset 1 to 4. Defaults,",
+                 "Minimal, Everything and Ledge Drill are built",
+                 "in and stay as they are."},
+        .OnSelect = Event_PresetSave,
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Load at Start",
+        .value_num = PS_COUNT,
+        .values = preset_names,
+        .desc = {"The preset the event starts with. User Custom",
+                 "is how you left the menus the last time you",
+                 "closed them."},
+        .OnChange = Event_ChangePresetStart,
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Memory Card",
+        .desc = {preset_card_desc[0], preset_card_desc[1], preset_card_desc[2]},
+    },
+};
+
+static EventMenu Menu_Presets = {
+    .name = "Presets",
+    .option_num = countof(Options_Presets),
+    .options = Options_Presets,
+};
+
 enum options_main
 {
+    OPT_PRESETS,
     OPT_CUES,
     OPT_TIMERS,
     OPT_PATHS,
@@ -4667,6 +4768,14 @@ enum options_main
 };
 
 static EventOption Options_Main[OPT_COUNT] = {
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Presets",
+        .menu = &Menu_Presets,
+        .desc = {"Load and save whole setups, and pick the one",
+                 "the event starts with. Settings are kept on",
+                 "the memory card in slot A."},
+    },
     {
         .kind = OPTKIND_MENU,
         .name = "Cues",
@@ -4758,6 +4867,725 @@ static EventMenu Menu_Main = {
 };
 
 EventMenu *Event_Menu = &Menu_Main;
+
+///////////////////////
+/// Presets         ///
+///////////////////////
+
+// A preset is a list of (option, value) pairs, each option known by a hash
+// of its menu's and its own name, so a later version with options added,
+// removed or moved still reads an older file: what it doesn't know stays as
+// it is.
+typedef struct PresetOpt
+{
+    u32 key;
+    s16 val;
+    u16 pad;
+} PresetOpt;
+
+#define PRESET_OPTS 72
+typedef struct PresetSlot
+{
+    u16 used;
+    u16 num;
+    PresetOpt opt[PRESET_OPTS];
+} PresetSlot;
+
+#define PRESET_MAGIC 0x4C4C5052 // "LLPR"
+#define PRESET_VERSION 1
+typedef struct PresetFile
+{
+    u32 magic;
+    u16 version;
+    u8 start; // the preset loaded at start
+    u8 pad;
+    PresetSlot slot[PS_SAVED];
+} PresetFile;
+
+typedef struct PresetMenu
+{
+    const char *tag;
+    EventOption *opts;
+    int num;
+} PresetMenu;
+
+// Every menu a player sets up: not Developer, and not Frame Advance or the
+// chosen ledge route, which belong to the moment.
+static const PresetMenu preset_menus[] = {
+    {"Cues", Options_Cues, COPT_COUNT},
+    {"Timers", Options_Timers, TOPT_COUNT},
+    {"Paths", Options_Paths, POPT_COUNT},
+    {"HUD", Options_Hud, HOPT_COUNT},
+    {"Sounds", Options_Sounds, SOPT_COUNT},
+    {"Ledge", Options_Ledge, LOPT_COUNT},
+    {"Camera", Options_Camera, CAMOPT_COUNT},
+    {"Speed", Options_Game, GOPT_COUNT},
+};
+
+static PresetFile *preset_file;    // what's on the card, and what gets written to it
+static PresetSlot *preset_builtin; // [PS_COUNT - PS_SAVED]
+static u8 preset_dirty;            // preset_file changed since it was last written
+static u8 preset_was_paused;
+
+static int Preset_Kept(EventOption *o)
+{
+    if (o == &Options_Ledge[LOPT_PICK] || o == &Options_Game[GOPT_FRAME_ADV])
+        return 0;
+    return o->kind == OPTKIND_STRING || o->kind == OPTKIND_INT || o->kind == OPTKIND_TOGGLE;
+}
+
+static u32 Preset_Hash(u32 h, const char *t)
+{
+    for (; *t; t++)
+        h = (h ^ (u8)*t) * 16777619u;
+    return h;
+}
+
+static u32 Preset_Key(const char *tag, EventOption *o)
+{
+    return Preset_Hash(Preset_Hash(2166136261u, tag) * 16777619u, o->name);
+}
+
+// The key of an option from any of the menus above, 0 if it's in none.
+static u32 Preset_KeyOf(EventOption *o)
+{
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        if (o >= preset_menus[m].opts && o < preset_menus[m].opts + preset_menus[m].num)
+            return Preset_Key(preset_menus[m].tag, o);
+    return 0;
+}
+
+static PresetSlot *Preset_Slot(int i)
+{
+    return i < PS_SAVED ? &preset_file->slot[i] : &preset_builtin[i - PS_SAVED];
+}
+
+static void Preset_Capture(PresetSlot *s)
+{
+    s->num = 0;
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        for (int i = 0; i < preset_menus[m].num; i++)
+        {
+            EventOption *o = &preset_menus[m].opts[i];
+            if (!Preset_Kept(o) || s->num >= PRESET_OPTS)
+                continue;
+            PresetOpt *p = &s->opt[s->num++];
+            p->key = Preset_Key(preset_menus[m].tag, o);
+            p->val = o->val;
+            p->pad = 0;
+        }
+    s->used = 1;
+}
+
+static PresetOpt *Preset_Find(PresetSlot *s, u32 key)
+{
+    for (int i = 0; i < s->num && i < PRESET_OPTS; i++)
+        if (s->opt[i].key == key)
+            return &s->opt[i];
+    return 0;
+}
+
+// What the preset sets an option to: its own value when the preset doesn't
+// have it.
+static int Preset_Value(PresetSlot *s, EventOption *o)
+{
+    PresetOpt *p = Preset_Find(s, Preset_KeyOf(o));
+    return p ? p->val : o->val;
+}
+
+static int Preset_Fits(EventOption *o, int v)
+{
+    if (o->kind == OPTKIND_TOGGLE)
+        return v == 0 || v == 1;
+    return v >= o->value_min && v - o->value_min < o->value_num;
+}
+
+static void Preset_Apply(PresetSlot *s)
+{
+    if (!s->used)
+        return;
+    int cam = Options_Camera[CAMOPT_MODE].val, start = Options_Ledge[LOPT_START].val;
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        for (int i = 0; i < preset_menus[m].num; i++)
+        {
+            EventOption *o = &preset_menus[m].opts[i];
+            if (!Preset_Kept(o))
+                continue;
+            PresetOpt *p = Preset_Find(s, Preset_Key(preset_menus[m].tag, o));
+            if (p && Preset_Fits(o, p->val))
+                o->val = p->val;
+        }
+    // the few settings that act when they change; the rest are read as they're used
+    if (Options_Camera[CAMOPT_MODE].val != cam)
+        Event_ChangeCamera(0, Options_Camera[CAMOPT_MODE].val);
+    if (Options_Ledge[LOPT_START].val != start)
+        Event_ChangeLedgeStart(0, Options_Ledge[LOPT_START].val);
+    Event_ChangeRoutes(0, 0);
+}
+
+static int Preset_Same(PresetSlot *a, PresetSlot *b)
+{
+    if (a->used != b->used || a->num != b->num)
+        return 0;
+    for (int i = 0; i < a->num && i < PRESET_OPTS; i++)
+        if (a->opt[i].key != b->opt[i].key || a->opt[i].val != b->opt[i].val)
+            return 0;
+    return 1;
+}
+
+// The built-in presets, as changes to the defaults.
+typedef struct PresetSet
+{
+    EventOption *o;
+    s16 val;
+} PresetSet;
+
+// The AI cue and the corner strip, nothing else on screen
+static const PresetSet preset_minimal[] = {
+    {&Options_Cues[COPT_NIL], 0},
+    {&Options_Cues[COPT_AI], 1},
+    {&Options_Cues[COPT_WL], 0},
+    {&Options_Cues[COPT_GLOW], 0},
+    {&Options_Timers[TOPT_NEAR], NEAR_OFF},
+    {&Options_Timers[TOPT_STRIP], STRIP_CELLS},
+    {&Options_Timers[TOPT_SPOT], 0},
+    {&Options_Timers[TOPT_WL], WLT_OFF},
+    {&Options_Timers[TOPT_WD], WDT_OFF},
+    {&Options_Paths[POPT_PATH], 0},
+    {&Options_Paths[POPT_BODY], 0},
+    {&Options_Paths[POPT_TICKS], 2},
+    {&Options_Paths[POPT_SLIDEOFF], 0},
+    {&Options_Paths[POPT_PREVIEW], PREVIEW_OFF},
+    {&Options_Hud[HOPT_STICK], 3},
+    {&Options_Hud[HOPT_PANEL], 0},
+};
+
+// Every cue, path, timer and sound
+static const PresetSet preset_everything[] = {
+    {&Options_Cues[COPT_NIL], 1},
+    {&Options_Cues[COPT_AI], 1},
+    {&Options_Cues[COPT_WL], 2},
+    {&Options_Cues[COPT_FLASH], 1},
+    {&Options_Cues[COPT_GLOW], 1},
+    {&Options_Timers[TOPT_NEAR], NEAR_BUBBLE},
+    {&Options_Timers[TOPT_STRIP], STRIP_CELLS},
+    {&Options_Timers[TOPT_SPOT], 1},
+    {&Options_Timers[TOPT_WL], WLT_TICKS},
+    {&Options_Timers[TOPT_WD], WDT_CELLS},
+    {&Options_Paths[POPT_PATH], 1},
+    {&Options_Paths[POPT_BODY], 1},
+    {&Options_Paths[POPT_ROUTE], 1},
+    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Paths[POPT_TICKS], 1},
+    {&Options_Paths[POPT_SLIDEOFF], 1},
+    {&Options_Paths[POPT_PREVIEW], 0},
+    {&Options_Hud[HOPT_STICK], 0},
+    {&Options_Hud[HOPT_PANEL], 1},
+    {&Options_Sounds[SOPT_SKIP], 1},
+    {&Options_Sounds[SOPT_FF], 1},
+    {&Options_Sounds[SOPT_JUMP], 1},
+    {&Options_Sounds[SOPT_AERIAL], 1},
+};
+
+// Ledge routes from the ledge, both kinds, reset to the same ledge each time
+static const PresetSet preset_ledge[] = {
+    {&Options_Ledge[LOPT_ROUTES], 1},
+    {&Options_Ledge[LOPT_KIND], ROUTES_BOTH},
+    {&Options_Ledge[LOPT_START], 0},
+    {&Options_Ledge[LOPT_RESET], 1},
+    {&Options_Paths[POPT_ROUTE], 1},
+    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Cues[COPT_NIL], 1},
+    {&Options_Cues[COPT_AI], 1},
+};
+
+static void Preset_Build(PresetSlot *s, PresetSlot *base, const PresetSet *set, int n)
+{
+    memcpy(s, base, sizeof(*s));
+    for (int i = 0; i < n; i++)
+    {
+        PresetOpt *p = Preset_Find(s, Preset_KeyOf(set[i].o));
+        if (p)
+            p->val = set[i].val;
+    }
+}
+
+// The chosen preset's settings in three short lines, for the menu.
+static void Preset_Describe(int which)
+{
+    PresetSlot *s = Preset_Slot(which);
+    if (!s->used)
+    {
+        sprintf(preset_desc[0], "Empty: Save to Preset keeps the current");
+        sprintf(preset_desc[1], "settings here.");
+        preset_desc[2][0] = 0;
+        return;
+    }
+    char *t = preset_desc[0];
+    int nil = Preset_Value(s, &Options_Cues[COPT_NIL]), ai = Preset_Value(s, &Options_Cues[COPT_AI]);
+    int wl = Preset_Value(s, &Options_Cues[COPT_WL]);
+    int n = 0;
+    t += sprintf(t, "Cues:");
+    if (ai)
+        t += sprintf(t, "%s AI", n++ ? "," : "");
+    if (nil)
+        t += sprintf(t, "%s NIL", n++ ? "," : "");
+    if (wl)
+        t += sprintf(t, "%s waveland", n++ ? "," : "");
+    if (!n)
+        sprintf(t, " none");
+
+    int near = Preset_Value(s, &Options_Timers[TOPT_NEAR]), strip = Preset_Value(s, &Options_Timers[TOPT_STRIP]);
+    t = preset_desc[1];
+    t += sprintf(t, "Timers: %s strip", strip ? strip_names[strip] : "no");
+    if (near != NEAR_OFF)
+        sprintf(t, ", %s by Falcon", near_names[near]);
+
+    int path = Preset_Value(s, &Options_Paths[POPT_PATH]), body = Preset_Value(s, &Options_Paths[POPT_BODY]);
+    int route = Preset_Value(s, &Options_Paths[POPT_ROUTE]), pad = Preset_Value(s, &Options_Hud[HOPT_STICK]);
+    t = preset_desc[2];
+    n = 0;
+    t += sprintf(t, "Paths:");
+    if (path)
+        t += sprintf(t, "%s landing", n++ ? "," : "");
+    if (body)
+        t += sprintf(t, "%s body", n++ ? "," : "");
+    if (route)
+        t += sprintf(t, "%s ledge", n++ ? "," : "");
+    if (!n)
+        t += sprintf(t, " none");
+    sprintf(t, ". Pad %s", pad == 3 ? "off" : "on");
+}
+
+static void Card_Update(void);
+static void Card_Load(void);
+
+void Event_ChangePreset(GOBJ *menu, int value)
+{
+    Preset_Describe(value);
+}
+
+void Event_ChangePresetStart(GOBJ *menu, int value)
+{
+    preset_file->start = value;
+    preset_dirty = 1;
+}
+
+void Event_PresetLoad(GOBJ *menu)
+{
+    int which = Options_Presets[PROPT_PICK].val;
+    PresetSlot *s = Preset_Slot(which);
+    if (!s->used)
+    {
+        SFX_PlayCommon(3);
+        return;
+    }
+    Preset_Apply(s);
+    SFX_PlayCommon(1);
+}
+
+void Event_PresetSave(GOBJ *menu)
+{
+    int which = Options_Presets[PROPT_PICK].val;
+    if (which >= PS_SAVED)
+    {
+        SFX_PlayCommon(3); // built in
+        return;
+    }
+    Preset_Capture(&preset_file->slot[which]);
+    preset_dirty = 1;
+    Preset_Describe(which);
+    SFX_PlayCommon(1);
+}
+
+// At start: the defaults and the built-in presets are made from the menus as
+// the event sets them, then the card is read.
+static void Presets_Init(void)
+{
+    preset_file = calloc(sizeof(PresetFile));
+    preset_builtin = calloc(sizeof(PresetSlot) * (PS_COUNT - PS_SAVED));
+    preset_file->magic = PRESET_MAGIC;
+    preset_file->version = PRESET_VERSION;
+    preset_file->start = PS_USER;
+    PresetSlot *def = &preset_builtin[PS_DEFAULTS - PS_SAVED];
+    Preset_Capture(def);
+    Preset_Build(&preset_builtin[PS_MINIMAL - PS_SAVED], def, preset_minimal, countof(preset_minimal));
+    Preset_Build(&preset_builtin[PS_EVERYTHING - PS_SAVED], def, preset_everything, countof(preset_everything));
+    Preset_Build(&preset_builtin[PS_LEDGE - PS_SAVED], def, preset_ledge, countof(preset_ledge));
+    Options_Presets[PROPT_START].val = PS_USER;
+    Preset_Describe(Options_Presets[PROPT_PICK].val);
+    Card_Load();
+}
+
+// The card's file was read (or there is none): start with the preset it
+// asks for.
+static void Presets_Loaded(int ok)
+{
+    if (!ok || preset_file->magic != PRESET_MAGIC)
+    {
+        memset(preset_file, 0, sizeof(*preset_file));
+        preset_file->magic = PRESET_MAGIC;
+        preset_file->version = PRESET_VERSION;
+        preset_file->start = PS_USER;
+    }
+    int start = preset_file->start < PS_COUNT ? preset_file->start : PS_USER;
+    Options_Presets[PROPT_START].val = start;
+    Preset_Apply(Preset_Slot(start));
+    Preset_Describe(Options_Presets[PROPT_PICK].val);
+}
+
+///////////////////////
+/// Memory card     ///
+///////////////////////
+
+// Landing Lab's own file on the memory card in slot A: one block with a
+// comment for the card screen and the presets. It's read once at start (the
+// event waits for it, as the lab does), written in the background one step
+// a frame whenever a preset changes, and once more, waiting, on Exit.
+#define CARD_SLOT 0
+#define CARD_FILE "TMCE_LandingLab"
+#define CARD_SIZE 8192 // one block
+#define CARD_TIMEOUT_US 3000000
+
+typedef struct CardImage
+{
+    char comment[CARD_COMMENT_SIZE]; // two lines of 32, at the file's start
+    u32 sum;
+    u32 size;
+    PresetFile file;
+} CardImage;
+#define CARD_READ_LEN ((sizeof(CardImage) + CARD_READ_SIZE - 1) & ~(CARD_READ_SIZE - 1))
+
+enum card_step
+{
+    CARD_IDLE,
+    CARD_MOUNT,
+    CARD_CHECK,
+    CARD_CREATE,
+    CARD_STATUS,
+    CARD_WRITE,
+};
+
+static u8 *card_buf; // CARD_SIZE, 32-byte aligned for the card's DMA
+static CARDFileInfo card_fi;
+static CARDStat card_stat;
+static volatile s32 card_result;
+static volatile int card_done;
+static int card_step;
+static int card_tick;    // when the step under way started
+static u8 card_mounted;
+static u32 card_gen;     // goes up with every change to preset_file
+static u32 card_gen_saved, card_gen_writing, card_gen_failed;
+
+static void Card_Callback(s32 chan, s32 result)
+{
+    card_result = result;
+    card_done = 1;
+}
+
+static void Card_Say(const char *a, const char *b, const char *c)
+{
+    strcpy(preset_card_desc[0], a);
+    strcpy(preset_card_desc[1], b);
+    strcpy(preset_card_desc[2], c);
+}
+
+static u32 Card_Sum(const void *data, int n)
+{
+    const u8 *b = data;
+    u32 h = 2166136261u;
+    for (int i = 0; i < n; i++)
+        h = (h ^ b[i]) * 16777619u;
+    return h;
+}
+
+// Waits for the step under way: its result, or BUSY if the card never answered.
+static s32 Card_Wait(void)
+{
+    int t0 = OSGetTick();
+    while (!card_done)
+        if (OSTicksToMicroseconds(OSGetTick() - t0) > CARD_TIMEOUT_US)
+            return CARD_RESULT_BUSY;
+    card_done = 0;
+    return card_result;
+}
+
+static void Card_Error(s32 r)
+{
+    char line[52];
+    sprintf(line, "or written (error %d), so settings last", (int)r);
+    Card_Say("The memory card in slot A couldn't be read", line, "until you leave the event.");
+}
+
+// At start, waiting: the file's presets into preset_file, if it's there.
+static void Card_Load(void)
+{
+    void *raw = calloc(CARD_SIZE + 32);
+    card_buf = (u8 *)(((u32)raw + 31) & ~31);
+    Memcard_InitWorkArea();
+    int ok = 0;
+    s32 mem, sec;
+    s32 r = CARDProbeEx(CARD_SLOT, &mem, &sec);
+    if (r != CARD_RESULT_READY)
+    {
+        Card_Say("No memory card in slot A: settings last until", "you leave the event.", "");
+        Presets_Loaded(0);
+        return;
+    }
+    card_done = 0;
+    r = CARDMountAsync(CARD_SLOT, stc_memcard_work->work_area, 0, Card_Callback);
+    if (r >= 0)
+        r = Card_Wait();
+    if (r == CARD_RESULT_READY || r == CARD_RESULT_BROKEN)
+    {
+        card_done = 0;
+        r = CARDCheckAsync(CARD_SLOT, Card_Callback);
+        if (r >= 0)
+            r = Card_Wait();
+        if (r == CARD_RESULT_READY)
+        {
+            r = CARDOpen(CARD_SLOT, CARD_FILE, &card_fi);
+            if (r == CARD_RESULT_READY)
+            {
+                DCInvalidateRange(card_buf, CARD_READ_LEN);
+                r = CARDRead(&card_fi, card_buf, CARD_READ_LEN, 0);
+                CARDClose(&card_fi);
+                CardImage *img = (CardImage *)card_buf;
+                if (r == CARD_RESULT_READY && img->size == sizeof(PresetFile) && img->sum == Card_Sum(&img->file, sizeof(PresetFile)))
+                {
+                    memcpy(preset_file, &img->file, sizeof(PresetFile));
+                    ok = 1;
+                    Card_Say("Kept in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
+                }
+                else
+                    Card_Say("Landing Lab's file on the card in slot A", "couldn't be read, so it starts over. Changes", "save when the menu closes.");
+            }
+            else if (r == CARD_RESULT_NOFILE)
+                Card_Say("Nothing saved on the card in slot A yet.", "Settings save to a file of 1 block there", "when the menu closes.");
+            else
+                Card_Error(r);
+        }
+        else
+            Card_Error(r);
+        CARDUnmount(CARD_SLOT);
+    }
+    else
+        Card_Error(r);
+    card_gen = card_gen_saved = card_gen_failed = 0;
+    Presets_Loaded(ok);
+}
+
+static void Card_Stop(void)
+{
+    if (card_mounted)
+        CARDUnmount(CARD_SLOT);
+    card_mounted = 0;
+    card_step = CARD_IDLE;
+}
+
+static void Card_Fail(s32 r)
+{
+    Card_Stop();
+    card_gen_failed = card_gen_writing;
+    if (r == CARD_RESULT_NOCARD || r == CARD_RESULT_WRONGDEVICE)
+        Card_Say("No memory card in slot A: settings last until", "you leave the event.", "");
+    else if (r == CARD_RESULT_INSSPACE || r == CARD_RESULT_NOENT)
+        Card_Say("The card in slot A is full: Landing Lab", "needs 1 free block and 1 free file, so", "settings last until you leave the event.");
+    else
+        Card_Error(r);
+}
+
+static void Card_Write(void)
+{
+    card_done = 0;
+    s32 r = CARDWriteAsync(&card_fi, card_buf, CARD_SIZE, 0, Card_Callback);
+    if (r < 0)
+    {
+        CARDClose(&card_fi);
+        Card_Fail(r);
+        return;
+    }
+    card_step = CARD_WRITE;
+}
+
+// Starts writing preset_file as it is now.
+static void Card_Begin(void)
+{
+    CardImage *img = (CardImage *)card_buf;
+    memset(card_buf, 0, CARD_SIZE);
+    strcpy(img->comment, "TM-CE Landing Lab");
+    strcpy(img->comment + 32, "Settings presets");
+    img->size = sizeof(PresetFile);
+    memcpy(&img->file, preset_file, sizeof(PresetFile));
+    img->sum = Card_Sum(&img->file, sizeof(PresetFile));
+    DCFlushRange(card_buf, CARD_SIZE);
+    card_gen_writing = card_gen;
+    card_tick = OSGetTick();
+
+    s32 mem, sec;
+    s32 r = CARDProbeEx(CARD_SLOT, &mem, &sec);
+    if (r == CARD_RESULT_READY)
+    {
+        card_done = 0;
+        r = CARDMountAsync(CARD_SLOT, stc_memcard_work->work_area, 0, Card_Callback);
+    }
+    if (r < 0)
+    {
+        Card_Fail(r);
+        return;
+    }
+    card_step = CARD_MOUNT;
+}
+
+// The next step, once the one under way is done.
+static void Card_Step(void)
+{
+    if (card_step == CARD_IDLE)
+        return;
+    if (!card_done)
+    {
+        if (OSTicksToMicroseconds(OSGetTick() - card_tick) > CARD_TIMEOUT_US)
+        {
+            if (card_step == CARD_WRITE || card_step == CARD_STATUS)
+                CARDClose(&card_fi);
+            Card_Fail(CARD_RESULT_BUSY);
+        }
+        return;
+    }
+    s32 r = card_result;
+    card_done = 0;
+    card_tick = OSGetTick();
+    switch (card_step)
+    {
+    case CARD_MOUNT:
+        if (r != CARD_RESULT_READY && r != CARD_RESULT_BROKEN)
+        {
+            Card_Fail(r);
+            return;
+        }
+        card_mounted = 1;
+        r = CARDCheckAsync(CARD_SLOT, Card_Callback);
+        if (r < 0)
+            Card_Fail(r);
+        else
+            card_step = CARD_CHECK;
+        return;
+    case CARD_CHECK:
+        if (r != CARD_RESULT_READY)
+        {
+            Card_Fail(r);
+            return;
+        }
+        r = CARDOpen(CARD_SLOT, CARD_FILE, &card_fi);
+        if (r == CARD_RESULT_READY)
+            Card_Write();
+        else if (r == CARD_RESULT_NOFILE)
+        {
+            r = CARDCreateAsync(CARD_SLOT, CARD_FILE, CARD_SIZE, &card_fi, Card_Callback);
+            if (r < 0)
+                Card_Fail(r);
+            else
+                card_step = CARD_CREATE;
+        }
+        else
+            Card_Fail(r);
+        return;
+    case CARD_CREATE:
+        if (r != CARD_RESULT_READY)
+        {
+            Card_Fail(r);
+            return;
+        }
+        // the two comment lines at the file's start show on the card screen
+        if (CARDGetStatus(CARD_SLOT, card_fi.fileNo, &card_stat) == CARD_RESULT_READY)
+        {
+            card_stat.commentAddr = 0;
+            card_stat.iconAddr = 0xFFFFFFFF;
+            card_stat.bannerFormat = 0;
+            card_stat.iconFormat = 0;
+            card_stat.iconSpeed = 0;
+            if (CARDSetStatusAsync(CARD_SLOT, card_fi.fileNo, &card_stat, Card_Callback) >= 0)
+            {
+                card_step = CARD_STATUS;
+                return;
+            }
+        }
+        Card_Write();
+        return;
+    case CARD_STATUS:
+        Card_Write(); // without the comment if it didn't take
+        return;
+    case CARD_WRITE:
+        CARDClose(&card_fi);
+        if (r != CARD_RESULT_READY)
+        {
+            Card_Fail(r);
+            return;
+        }
+        Card_Stop();
+        card_gen_saved = card_gen_writing;
+        Card_Say("Saved in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
+        return;
+    }
+}
+
+static int Card_Wanted(void)
+{
+    return card_gen != card_gen_saved && card_gen != card_gen_failed;
+}
+
+// Each frame: start a write when the presets changed, and move the one
+// under way along.
+static void Card_Update(void)
+{
+    if (preset_dirty)
+    {
+        preset_dirty = 0;
+        card_gen++;
+    }
+    if (card_step == CARD_IDLE && Card_Wanted())
+        Card_Begin();
+    Card_Step();
+}
+
+// Leaving the event: finish what's under way and write what's left, waiting.
+static void Card_Flush(void)
+{
+    for (int pass = 0; pass < 2; pass++)
+    {
+        if (card_step == CARD_IDLE)
+        {
+            Card_Update();
+            if (card_step == CARD_IDLE)
+                break;
+        }
+        while (card_step != CARD_IDLE)
+            Card_Step();
+    }
+}
+
+// The settings as they are now into User Custom, if they changed.
+static void Presets_KeepUser(void)
+{
+    PresetSlot now;
+    Preset_Capture(&now);
+    if (!Preset_Same(&now, &preset_file->slot[PS_USER]))
+    {
+        memcpy(&preset_file->slot[PS_USER], &now, sizeof(now));
+        preset_dirty = 1;
+    }
+}
+
+// Each frame: closing the menu keeps the settings in User Custom, and the
+// card is written when anything it holds changed.
+static void Presets_Update(void)
+{
+    int paused = Pause_CheckStatus(1) == 2;
+    if (preset_was_paused && !paused)
+        Presets_KeepUser();
+    preset_was_paused = paused;
+    Card_Update();
+}
 
 // live tracking
 static int prev_state_id = -1;
@@ -10146,13 +10974,30 @@ static void Panel_Line(float x, float y, int right, const char *text, int kind)
     }
 }
 
+// A quick toggle's new setting, shown for a moment at the top of the panel
+// (even with the panel off).
+static char toast_text[40];
+static int toast_timer;
+#define TOAST_FRAMES 90
+
+static void Toast(const char *t)
+{
+    strcpy(toast_text, t);
+    toast_timer = TOAST_FRAMES;
+}
+
 static void Panel_Draw(void)
 {
-    if (!Options_Hud[HOPT_PANEL].val)
-        return;
     int right = !panel_left;
     float x = right ? SAFE_W : -SAFE_W;
     float y = SAFE_H - 3.0f;
+    if (toast_timer > 0)
+    {
+        Panel_Line(x, y, right, toast_text, -2);
+        y -= 2.4f;
+    }
+    if (!Options_Hud[HOPT_PANEL].val)
+        return;
     Panel_Line(x, y, right, text_next, next_kind);
     if (text_steps[0])
     {
@@ -13743,6 +14588,7 @@ void Event_Init(GOBJ *gobj)
     update->checkPause = Advance_CheckPause;
     update->checkAdvance = Advance_CheckStep;
     Script_Load();
+    Presets_Init();
     GOBJ *script_gobj = GObj_Create(0, 7, 0);
     GObj_AddProc(script_gobj, Script_Think, 3);
 
@@ -14005,6 +14851,96 @@ static void Position_Update(int held, int down)
     }
 }
 
+// The quick toggles' steps: each list goes round, up or right forward.
+typedef struct CueSet
+{
+    u8 ai, nil, wl;
+    const char *name;
+} CueSet;
+static const CueSet cue_sets[] = {
+    {1, 0, 1, "AI and waveland cues"},
+    {1, 0, 0, "AI cues"},
+    {0, 1, 0, "NIL cues"},
+    {0, 0, 1, "Waveland cues"},
+    {1, 1, 1, "All cues"},
+    {0, 0, 0, "Cues off"},
+};
+static const char *path_set_names[] = {"Paths off", "Landing path", "Body path", "Landing and body paths"};
+static const char *pad_set_names[] = {"Controller off", "Ring, small", "Ring, medium", "Ring, large",
+                                      "Classic, small", "Classic, medium", "Classic, large"};
+static int chord_pad_place; // where the controller goes when it comes back on
+
+static int Chord_Step(int i, int n, int dir)
+{
+    return i < 0 ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
+}
+
+static void Chord(int lr, int down)
+{
+    int dir = down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_RIGHT) ? 1 : down & (HSD_BUTTON_DPAD_DOWN | HSD_BUTTON_DPAD_LEFT) ? -1 : 0;
+    if (!dir)
+        return;
+    int vert = (down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN)) != 0;
+    char buf[40];
+    if (lr && vert)
+    {
+        // the cue set
+        int wl = Options_Cues[COPT_WL].val, cur = -1;
+        for (int i = 0; i < (int)countof(cue_sets); i++)
+            if (cue_sets[i].ai == Options_Cues[COPT_AI].val && cue_sets[i].nil == Options_Cues[COPT_NIL].val && cue_sets[i].wl == (wl != 0))
+                cur = i;
+        const CueSet *c = &cue_sets[Chord_Step(cur, countof(cue_sets), dir)];
+        Options_Cues[COPT_AI].val = c->ai;
+        Options_Cues[COPT_NIL].val = c->nil;
+        Options_Cues[COPT_WL].val = c->wl ? (wl ? wl : 2) : 0;
+        Toast(c->name);
+    }
+    else if (lr)
+    {
+        // the landing and body paths
+        int cur = Options_Paths[POPT_PATH].val + 2 * Options_Paths[POPT_BODY].val;
+        int next = Chord_Step(cur, 4, dir);
+        Options_Paths[POPT_PATH].val = next & 1;
+        Options_Paths[POPT_BODY].val = next >> 1;
+        Toast(path_set_names[next]);
+    }
+    else if (vert)
+    {
+        // the controller: off, then each look at each size
+        int place = Options_Hud[HOPT_STICK].val;
+        int cur = place == 3 ? 0 : 1 + 3 * Options_Hud[HOPT_LOOK].val + Options_Hud[HOPT_PAD_SIZE].val;
+        if (place != 3)
+            chord_pad_place = place;
+        int next = Chord_Step(cur, countof(pad_set_names), dir);
+        if (next == 0)
+            Options_Hud[HOPT_STICK].val = 3;
+        else
+        {
+            Options_Hud[HOPT_STICK].val = chord_pad_place;
+            Options_Hud[HOPT_LOOK].val = (next - 1) / 3;
+            Options_Hud[HOPT_PAD_SIZE].val = (next - 1) % 3;
+        }
+        Toast(pad_set_names[next]);
+    }
+    else
+    {
+        // the next preset that has settings in it
+        int cur = Options_Presets[PROPT_PICK].val;
+        for (int n = 0; n < PS_COUNT; n++)
+        {
+            cur = Chord_Step(cur, PS_COUNT, dir);
+            if (Preset_Slot(cur)->used)
+                break;
+        }
+        Options_Presets[PROPT_PICK].val = cur;
+        Preset_Apply(Preset_Slot(cur));
+        Preset_Describe(cur);
+        sprintf(buf, "Preset: %s", preset_names[cur]);
+        Toast(buf);
+    }
+    SFX_PlayCommon(2);
+}
+
 void Event_Update(void)
 {
     if (Pause_CheckStatus(1) != 2)
@@ -14016,11 +14952,24 @@ void Event_Update(void)
     // down toggles frame advance, D-pad left plays the chosen script again,
     // or else the D-pad saves and loads position (or puts Falcon back on
     // the ledge, when Reset starts from one)
+    Presets_Update();
+    if (toast_timer > 0)
+        toast_timer--;
     if (Pause_CheckStatus(1) == 2)
         return;
     Assist_Update();
     HSD_Pad *pad = PadGetMaster(Advance_Port());
     int down = pad->down;
+    // quick toggles: L or R held (a light press past 60% counts) or Z held,
+    // with the D-pad, which does nothing else meanwhile
+    int lr = (pad->held & (HSD_TRIGGER_L | HSD_TRIGGER_R)) || pad->ftriggerLeft >= 0.6f || pad->ftriggerRight >= 0.6f;
+    int z = (pad->held & HSD_TRIGGER_Z) != 0;
+    if (lr || z)
+    {
+        Chord(lr, down);
+        save_hold = 0;
+        return;
+    }
     if (down & HSD_BUTTON_DPAD_DOWN)
         Options_Game[GOPT_FRAME_ADV].val ^= 1;
     // a clean frame for mockups, the same frame as the one with cues. Only
@@ -14070,8 +15019,14 @@ void Event_ClearLearned(GOBJ *menu)
     SFX_PlayCommon(1);
 }
 
+static void Presets_KeepUser(void);
+static void Card_Flush(void);
+
 void Event_Exit(GOBJ *menu)
 {
+    // leaving from the menu: it never closes, so keep the settings now
+    Presets_KeepUser();
+    Card_Flush();
     stc_match->state = 3;
     Match_EndVS();
 }

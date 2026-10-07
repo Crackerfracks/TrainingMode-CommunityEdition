@@ -2325,7 +2325,7 @@ typedef struct Prediction
     // touches down the first time it is used
     u8 ai_mask[LL_SIM_FRAMES + 1];     // aerials that interrupt when pressed on frame k
     u8 ai_lag_mask[LL_SIM_FRAMES + 1]; // ... of those, the ones that land with aerial lag
-    u8 ai_delay[LL_SIM_FRAMES + 1];    // frames from k until that touchdown (lock)
+    u32 ai_delay[LL_SIM_FRAMES + 1];   // frames from k until each aerial's touchdown (lock), 4 bits per aerial: Ai_Delay
     u8 ai_show[LL_SIM_FRAMES + 1];     // ... the ones worth showing: no aerial lag, and done
                                        // at least LL_AI_MIN_GAIN frames before holding would be
     u8 ai_unlearned;                   // aerials skipped because their ECB isn't learned yet
@@ -2347,6 +2347,26 @@ typedef struct Prediction
     u8 wl_dirs;                      // directions that work somewhere in that window
     int wl_late;                     // the window lands a frame late
 } Prediction;
+
+// Frames from pressing an aerial (TS_AIR*) on frame k to its touchdown. The
+// aerials touch down at different frames, so each keeps its own, in 4 bits
+// (a press is followed for LL_AI_MAX_STEPS frames at most, under 16).
+static int Ai_Delay(Prediction *p, int k, int aerial)
+{
+    return (p->ai_delay[k] >> (4 * (aerial - TS_AIRN))) & 15;
+}
+
+// The soonest touchdown among the aerials in mask, pressed on frame k.
+static int Ai_FirstDelay(Prediction *p, int k, u8 mask)
+{
+    int first = 99;
+    for (int a = TS_AIRN; a <= TS_AIRLW; a++)
+    {
+        if ((mask & AERIAL_BIT(a)) && Ai_Delay(p, k, a) < first)
+            first = Ai_Delay(p, k, a);
+    }
+    return first == 99 ? 0 : first;
+}
 
 static float common_fastfall_stick;
 static int common_fastfall_window;
@@ -3376,7 +3396,7 @@ static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, P
             if (n < 0)
                 continue;
             p->ai_mask[k] |= AERIAL_BIT(a);
-            p->ai_delay[k] = n;
+            p->ai_delay[k] |= (u32)(n & 15) << (4 * (a - TS_AIRN));
             if (lag)
                 p->ai_lag_mask[k] |= AERIAL_BIT(a);
         }
@@ -3427,16 +3447,22 @@ static void Windows_Summarize(FighterData *fp, Prediction *p)
         if (!ai_show_all)
         {
             m &= ~p->ai_lag_mask[k];
-            if (m && hold_done - (k + p->ai_delay[k] + normal_lag) < LL_AI_MIN_GAIN)
-                m = 0;
-            // falling, an aerial's ECB is at most about a unit lower than
-            // the fall's: a frame sooner at best, and no better than a
-            // NIL. The ones that look like big savings while falling are
-            // platform catches (holding down drops through a platform an
-            // aerial lands on). Only rising ones are worth the press.
-            int t = k + p->ai_delay[k];
-            if (m && t <= p->num && p->pos[t].Y <= p->pos[t - 1].Y)
-                m = 0;
+            for (int a = TS_AIRN; a <= TS_AIRLW; a++)
+            {
+                if (!(m & AERIAL_BIT(a)))
+                    continue;
+                int t = k + Ai_Delay(p, k, a);
+                if (hold_done - (t + normal_lag) < LL_AI_MIN_GAIN)
+                    m &= ~AERIAL_BIT(a);
+                // falling, an aerial's ECB is at most about a unit lower
+                // than the fall's: a frame sooner at best, and no better
+                // than a NIL. The ones that look like big savings while
+                // falling are platform catches (holding down drops through
+                // a platform an aerial lands on). Only rising ones are
+                // worth the press.
+                else if (t <= p->num && p->pos[t].Y <= p->pos[t - 1].Y)
+                    m &= ~AERIAL_BIT(a);
+            }
         }
         p->ai_show[k] = m;
     }
@@ -3766,6 +3792,7 @@ void Event_ChangeCollDisplay(GOBJ *menu, int value);
 void Event_ChangeScript(GOBJ *menu, int value);
 void Event_ChangeCamera(GOBJ *menu, int value);
 void Event_ChangeLedgeStart(GOBJ *menu, int value);
+void Event_ChangeRoutes(GOBJ *menu, int value);
 
 static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
@@ -3786,7 +3813,12 @@ static const float ring_sizes[] = {1.f, 1.25f, 1.5f};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
 static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
 static const char *route_kind_names[] = {"NIL", "AI", "Both"};
-static const char *route_pick_names[] = {"Best", "Second", "Third"};
+static const char *route_sort_names[] = {"GALINT", "Easiest"};
+// The Route option is a number from 1 to the routes found. Its value text
+// ("4 of 23") and the first lines of its description (the chosen route's
+// GALINT and inputs) are rewritten as the list and the choice change.
+static char route_pick_fmt[24] = "%d";
+static char route_desc[3][56];
 static const char *wait_names[] = {"5 s", "3 s", "2 s", "1 s", "0.5 s", "0.25 s", "0.1 s"};
 static const int wait_frames[] = {300, 180, 120, 60, 30, 15, 6};
 static const char *reset_names[] = {"None", "Same Side", "Swap", "Swap on Success", "Random"};
@@ -3870,6 +3902,12 @@ enum route_kind
     ROUTES_BOTH,
 };
 
+enum route_sort
+{
+    ROUTES_SORT_GALINT,
+    ROUTES_SORT_EASIEST,
+};
+
 enum reset_kind
 {
     RESET_NONE,
@@ -3891,6 +3929,7 @@ enum options_ledge
 {
     LOPT_ROUTES,
     LOPT_KIND,
+    LOPT_SORT,
     LOPT_PICK,
     LOPT_ASSIST,
     LOPT_WAIT,
@@ -3910,7 +3949,8 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .desc = {"While Falcon hangs, show the fastest ways from",
                  "the ledge to the stage in the timer, with the",
                  "ledge intangibility (GALINT) each one keeps.",
-                 "The chosen route goes first."},
+                 "The chosen route is on top, the next ones under."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_STRING,
@@ -3920,17 +3960,29 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .values = route_kind_names,
         .desc = {"NIL: land on the stage with no landing lag.",
                  "AI: land with an aerial interrupt.",
-                 "Both: whichever keeps more GALINT."},
+                 "Both: the two lists together."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_STRING,
+        .name = "Route Sort",
+        .value_num = countof(route_sort_names),
+        .values = route_sort_names,
+        .desc = {"How the routes are put in order.",
+                 "GALINT: the most ledge intangibility first.",
+                 "Easiest: widest aerial window, no fastfall and",
+                 "least waiting first, then by GALINT."},
+        .OnChange = Event_ChangeRoutes,
+    },
+    {
+        .kind = OPTKIND_INT,
         .name = "Route",
-        .value_num = countof(route_pick_names),
-        .values = route_pick_names,
-        .desc = {"The route to practice, by GALINT kept: Best,",
-                 "Second or Third. It shows first while you hang",
-                 "and is the one Assist and grading follow.",
-                 "The panel names its inputs."},
+        .value_min = 1,
+        .value_num = 1,
+        .val = 1,
+        .format = route_pick_fmt,
+        .desc = {route_desc[0], route_desc[1], route_desc[2], "Left and right browse. Assist follows it."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -3939,6 +3991,7 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
                  "input of the route and waits for it, then plays",
                  "on at full speed. A slip only misses if it costs",
                  "the landing, or its timing is checked in Sounds."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_STRING,
@@ -8701,10 +8754,10 @@ static void Log_Camera(FighterData *fp)
             if (p->ai_mask[j] & ~p->ai_lag_mask[j])
                 raw = j;
         }
+        u8 raw_mask = raw ? p->ai_mask[raw] & ~p->ai_lag_mask[raw] : 0;
         sprintf(buf, "LLPRED %d land %d kind %d at %.3f %.3f lag %d ai %d w%d wl %d w%d raw %d t%d m%x\n",
                 event_vars->game_timer, k, p->land_kind, p->pos[k].X, p->pos[k].Y + p->bottom[k], p->lag, p->ai_first,
-                p->ai_width, p->wl_first, p->wl_width, raw, raw ? raw + p->ai_delay[raw] : 0,
-                raw ? p->ai_mask[raw] & ~p->ai_lag_mask[raw] : 0);
+                p->ai_width, p->wl_first, p->wl_width, raw, raw ? raw + Ai_FirstDelay(p, raw, raw_mask) : 0, raw_mask);
         Log(buf);
     }
 }
@@ -9902,20 +9955,24 @@ void Event_ChangeScript(GOBJ *menu, int value)
 // wait, fastfall, double jump toward the stage, then land with no lag (NIL)
 // or press an aerial that interrupts the landing (AI). Every combination of
 // up to LR_WAIT frames of waiting and LR_FF of fastfall is simulated once
-// per ledge, a few hundred simulated frames per game frame, and the best of
-// each kind of route kept. The main stage's two ledges are searched as the
-// event starts; any other ledge when Falcon first hangs from it.
+// per ledge, a few hundred simulated frames per game frame, and every
+// distinct route kept (up to LR_ROUTES of each kind), best first. The Route
+// option browses them. The main stage's two ledges are searched as the event
+// starts; any other ledge when Falcon first hangs from it.
 
-#define LR_KEEP 3           // routes shown
+#define LR_KEEP 3           // route rows shown: the chosen route and the next ones
 #define LR_LEDGES 8         // ledges remembered
 #define LR_WAIT 8           // most frames let go before the fastfall or jump
 #define LR_FF 8             // most frames held down before the jump
 #define LR_DJ_X 3           // sticks tried on the double jump
 #define LR_CANDIDATES (2 * 2 * 2 * (LR_WAIT + 1) * (LR_FF + 1) * LR_DJ_X)
-#define LR_SIGS 16          // kind x drop x fastfall x hold
+#define LR_ROUTES 48        // routes kept per ledge and kind (NIL, AI)
+#define LR_WINDOWS 3        // press windows kept per aerial and candidate
+#define LR_TRY (1 + 5 * LR_WINDOWS) // routes one candidate gives: a NIL and the aerials' windows
 #define LR_SIM 45           // frames simulated after the jump
 #define LR_BUDGET 1500      // simulated frames per game frame, on the ground or ledge
 #define LR_BUDGET_AIR 400   // ... and while the live prediction runs too
+#define LR_TIME_US 3000     // the most real time the search takes in a frame
 
 // The stick on the double jump: all the way in, 45 degrees down and in (a
 // partial drift that clears the underside of stages like Battlefield's when
@@ -9958,18 +10015,32 @@ typedef struct LedgeRoute
     s16 ff_at;  // frame the fastfall starts, -1 none
 } LedgeRoute;
 
+// The routes a search found: for each order the Route Sort option can ask
+// for (GALINT, Easiest) and each kind (NIL, AI), the best LR_ROUTES in that
+// order. Each order is kept on its own, so Easiest finds the easy routes
+// that keep little GALINT too, not only the easiest of the best ones.
+typedef struct RouteList
+{
+    int n[2][2];                    // routes kept: [order][kind]
+    LedgeRoute r[2][2][LR_ROUTES];  // ... best first
+} RouteList;
+
 typedef struct LedgeEntry
 {
     u8 used;
-    u8 done;
+    u8 done;     // the search has been through every candidate
+    u8 have;     // a search finished: list holds its routes
     u8 logged;   // its routes went to the log
     s8 facing;   // the way Falcon faces while hanging: toward the stage
     float x, y;  // where he hangs
     int next;    // the next candidate to simulate
-    LedgeRoute sig[LR_SIGS]; // the best route of each kind
+    int version; // finished searches, so what was built from the routes knows they changed
+    RouteList list; // the last finished search's routes; it keeps showing while the next one runs
 } LedgeEntry;
 
 static LedgeEntry *ledges; // [LR_LEDGES], allocated in Event_Init
+static RouteList *route_build;   // the search under way fills this, one ledge at a time
+static int route_build_ledge = -1; // ... the ledge it is for, -1 none
 static Prediction *pred_route;
 static Vec2 *route_path;          // [LR_PATH]
 static float *route_path_bottom;  // [LR_PATH]
@@ -9978,13 +10049,25 @@ static LedgeRoute route_path_of;  // the route the path is for
 static int route_path_ledge = -1;
 static int ledges_found;
 
+// the browser: the routes of one ledge in the order the menu chose
+static LedgeRoute *route_list;    // [2 * LR_ROUTES], allocated in Event_Init
+static int route_list_num;
+static int route_list_ledge = -1; // ledge it was built for
+static int route_list_version;    // ... from which search
+static int route_list_kind = -1;  // ... and with which Route Kind and Route Sort
+static int route_list_sort = -1;
+static int route_browse = -1;     // the ledge the Route option browses: where Falcon hangs, or last did
+
 // while hanging
 static int hang_ledge = -1;   // the ledge Falcon hangs from, -1 none
-static LedgeRoute route_show[LR_KEEP];
+static LedgeRoute route_show[LR_KEEP]; // the chosen route, then the ones after it
 static int route_show_num;
+static int route_show_rank;   // the chosen route's place in the list, 0 first
 
 // after letting go
 static LedgeRoute route_cur;
+static int route_cur_num;     // its place in the browser's list, 1 first
+static int route_cur_total;   // ... of this many
 static int route_ledge;       // ledge it started from
 static int route_drop;        // game frame of the drop (the first frame falling)
 static int route_e;           // frames since the drop
@@ -10012,7 +10095,7 @@ static int drill_side = 1;   // facing on the ledge to start from
 
 static int assist_wait; // real frames Assist has waited
 
-static void Route_Text(LedgeRoute *r, int galint);
+static void Route_Text(LedgeRoute *r, int galint, int num, int total);
 static void Drill_Finish(int success);
 
 static int Routes_On(void)
@@ -10039,13 +10122,15 @@ static int Ledge_Add(float x, float y, int facing)
         LedgeEntry *L = &ledges[i];
         if (fabs(L->x - x) > 0.01f || fabs(L->y - y) > 0.01f)
         {
-            // learned where Falcon really hangs: search again from there
+            // learned where Falcon really hangs: search again from there.
+            // The routes of the search before keep showing until this one
+            // is done.
             L->x = x;
             L->y = y;
             L->done = 0;
-            L->logged = 0;
             L->next = 0;
-            memset(L->sig, 0, sizeof(L->sig));
+            if (route_build_ledge == i)
+                route_build_ledge = -1; // what it found so far is for the old spot
         }
         return i;
     }
@@ -10118,36 +10203,43 @@ static void Ledge_Start(LedgeEntry *L, SimStart *s)
     s->skip_line = -1;
 }
 
-// The order an aerial is offered in when several interrupt: the easiest
-// press first.
-static int Aerial_Pick(u8 mask)
+// The order an aerial is offered in when several interrupt in the same way:
+// the easiest press first.
+static int Aerial_Order(int rank)
 {
     static const u8 order[5] = {TS_AIRN, TS_AIRF, TS_AIRB, TS_AIRLW, TS_AIRHI};
+    return order[rank];
+}
+
+static int Aerial_Rank(int aerial)
+{
     for (int i = 0; i < 5; i++)
     {
-        if (mask & AERIAL_BIT(order[i]))
-            return order[i];
+        if (Aerial_Order(i) == aerial)
+            return i;
     }
-    return -1;
+    return 5;
 }
 
 // One route: the drop, wait frames let go, ff frames held down, the double
 // jump (stick in, down-in or let go), then holding toward the stage or not.
 // With fall_away the stick drifts away from the stage until the jump (down-
-// away for the fastfall), for room under the stage's lip. Fills nil when it
-// lands with no lag and ai with the first aerial interrupt that has no
-// aerial lag; either comes back not valid. With path, also records where
-// Falcon goes, frame by frame from the drop to the touchdown.
+// away for the fastfall), for room under the stage's lip. Gives, in out
+// (up to LR_TRY, n of them), a NIL when it lands with no lag, and for each
+// aerial the first few windows of press frames that touch down together
+// with no aerial lag. Of those the best is the touchdown soonest, then the
+// widest window, then the aerial Aerial_Order offers first (Route_Better
+// sorts them that way). With path, also records where Falcon goes, frame by
+// frame from the drop to the touchdown.
 static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff, int hold, int dj_x, int fall_away,
-                      LedgeRoute *nil, LedgeRoute *ai, Vec2 *path, float *bottom, int *num)
+                      LedgeRoute *out, int *n_out, Vec2 *path, float *bottom, int *num)
 {
     SimStart st;
     SimState s;
     SimStep step;
     Ledge_Start(L, &st);
     Sim_Init(&st, &s);
-    memset(nil, 0, sizeof(*nil));
-    memset(ai, 0, sizeof(*ai));
+    *n_out = 0;
     int dj = 1 + wait + ff;
     int prev_down = 0, ff_at = -1, n = 0;
     float tilt_dz = Common_Float(0xC);
@@ -10238,40 +10330,60 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
     base.press = -1;
     base.ff_at = ff_at;
 
+    int nr = 0;
     if (p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame)
     {
-        *nil = base;
-        nil->valid = 1;
-        nil->kind = LAND_NIL;
-        nil->land = dj + p->land_frame;
-        nil->act = nil->land;
+        LedgeRoute *r = &out[nr++];
+        *r = base;
+        r->valid = 1;
+        r->kind = LAND_NIL;
+        r->land = dj + p->land_frame;
+        r->act = r->land;
     }
 
+    // An aerial pressed on frame k touches down when its own ECB comes into
+    // use, at k + its delay: during the post-jump lock that's when the lock
+    // runs out, so presses on several frames can share one touchdown (a
+    // window). The aerials touch down at different frames, so each is
+    // followed on its own.
     int last = p->land_frame ? p->land_frame - 1 : p->num;
-    for (int k = 1; k <= last && k < p->uncertain_from; k++)
+    for (int a = 0; a < 5; a++)
     {
-        u8 m = p->ai_mask[k] & ~p->ai_lag_mask[k];
-        if (!m)
-            continue;
-        int aerial = Aerial_Pick(m);
-        int touch = k + p->ai_delay[k];
-        int w = 1;
-        while (k + w <= last && (p->ai_mask[k + w] & ~p->ai_lag_mask[k + w] & AERIAL_BIT(aerial)) &&
-               k + w + p->ai_delay[k + w] == touch)
-            w++;
-        *ai = base;
-        ai->valid = 1;
-        ai->kind = LAND_AI;
-        ai->aerial = aerial;
-        ai->press = dj + k;
-        ai->press_w = w;
-        ai->land = dj + touch;
-        ai->act = ai->land + (int)fp->attr.normal_landing_lag;
-        break;
+        int aerial = Aerial_Order(a);
+        u8 bit = AERIAL_BIT(aerial);
+        int windows = 0;
+        for (int k = 1; k <= last && k < p->uncertain_from && windows < LR_WINDOWS; k++)
+        {
+            if (!(p->ai_mask[k] & ~p->ai_lag_mask[k] & bit))
+                continue;
+            int touch = k + Ai_Delay(p, k, aerial);
+            int w = 1;
+            while (k + w <= last && (p->ai_mask[k + w] & ~p->ai_lag_mask[k + w] & bit) &&
+                   k + w + Ai_Delay(p, k + w, aerial) == touch)
+                w++;
+            LedgeRoute *r = &out[nr++];
+            *r = base;
+            r->valid = 1;
+            r->kind = LAND_AI;
+            r->aerial = aerial;
+            r->press = dj + k;
+            r->press_w = w;
+            r->land = dj + touch;
+            r->act = r->land + (int)fp->attr.normal_landing_lag;
+            windows++;
+            k += w - 1;
+        }
     }
+    *n_out = nr;
 }
 
-// Better: acts sooner; then a wider aerial window; then fewer inputs.
+// Better: acts sooner; then a wider aerial window (a NIL has no aerial to
+// time, so it's the widest); then fewer inputs.
+static int Route_Wide(LedgeRoute *r)
+{
+    return r->kind == LAND_NIL ? 99 : r->press_w;
+}
+
 static int Route_Better(LedgeRoute *a, LedgeRoute *b)
 {
     if (!b->valid)
@@ -10280,48 +10392,134 @@ static int Route_Better(LedgeRoute *a, LedgeRoute *b)
         return 0;
     if (a->act != b->act)
         return a->act < b->act;
-    if (a->press_w != b->press_w)
-        return a->press_w > b->press_w;
+    if (Route_Wide(a) != Route_Wide(b))
+        return Route_Wide(a) > Route_Wide(b);
     if ((a->ff > 0) != (b->ff > 0))
         return a->ff == 0;
     if (a->wait + a->ff != b->wait + b->ff)
         return a->wait + a->ff < b->wait + b->ff;
     if (a->fall_away != b->fall_away)
         return !a->fall_away;
-    return a->dj_x < b->dj_x;
+    if (a->dj_x != b->dj_x)
+        return a->dj_x < b->dj_x;
+    // nothing left to tell them apart by, so that the order never depends
+    // on the order they were found in
+    if (a->drop != b->drop)
+        return a->drop < b->drop;
+    if (a->hold != b->hold)
+        return a->hold < b->hold;
+    if (a->kind != b->kind)
+        return a->kind == LAND_NIL;
+    if (a->aerial != b->aerial)
+        return Aerial_Rank(a->aerial) < Aerial_Rank(b->aerial);
+    return a->press < b->press;
 }
 
-static int Route_Sig(LedgeRoute *r)
+// Easier: fewer frame-exact inputs. A wider aerial window first, then no
+// fastfall, then less waiting, then the one that keeps more GALINT.
+static int Route_Easier(LedgeRoute *a, LedgeRoute *b)
 {
-    return (r->kind == LAND_AI) * 8 + r->drop * 4 + (r->ff > 0) * 2 + r->hold;
+    if (Route_Wide(a) != Route_Wide(b))
+        return Route_Wide(a) > Route_Wide(b);
+    if ((a->ff > 0) != (b->ff > 0))
+        return a->ff == 0;
+    if (a->wait + a->ff != b->wait + b->ff)
+        return a->wait + a->ff < b->wait + b->ff;
+    return Route_Better(a, b);
 }
 
-static void Ledge_Keep(LedgeEntry *L, LedgeRoute *r)
+// The same route: the same inputs and the same press. Holding toward the
+// stage after the jump or not doesn't make another one.
+static int Route_Same(LedgeRoute *a, LedgeRoute *b)
 {
-    if (!r->valid)
+    return a->kind == b->kind && a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->dj_x == b->dj_x &&
+           a->fall_away == b->fall_away && a->aerial == b->aerial && a->press == b->press;
+}
+
+static int Route_Galint(LedgeRoute *r, int e, int intang);
+
+// r goes before b in the order Route Sort asked for.
+static int Route_Order(LedgeRoute *a, LedgeRoute *b, int order)
+{
+    return order == ROUTES_SORT_EASIEST ? Route_Easier(a, b) : Route_Better(a, b);
+}
+
+// Put a route in one of the lists, in order. A route already there with the
+// same inputs and press stays, or goes if this one comes before it; past
+// LR_ROUTES the last one falls off.
+static void Route_Insert(LedgeRoute *a, int *count, LedgeRoute *r, int order)
+{
+    int n = *count;
+    for (int i = 0; i < n; i++)
+    {
+        if (!Route_Same(r, &a[i]))
+            continue;
+        if (!Route_Order(r, &a[i], order))
+            return;
+        for (int j = i; j < n - 1; j++)
+            a[j] = a[j + 1];
+        n--;
+        break;
+    }
+    int at = n;
+    while (at > 0 && Route_Order(r, &a[at - 1], order))
+        at--;
+    if (at < LR_ROUTES)
+    {
+        if (n == LR_ROUTES)
+            n--;
+        for (int j = n; j > at; j--)
+            a[j] = a[j - 1];
+        a[at] = *r;
+        n++;
+    }
+    *count = n;
+}
+
+// Add a route the search found to the lists of both orders. One that keeps
+// no GALINT even right after the grab isn't a route.
+static void Ledge_Keep(RouteList *list, LedgeRoute *r)
+{
+    if (!r->valid || Route_Galint(r, -1, (*stc_ftcommon)->cliff_invuln_time) <= 0)
         return;
-    LedgeRoute *best = &L->sig[Route_Sig(r)];
-    if (Route_Better(r, best))
-        *best = *r;
+    int kind = r->kind == LAND_AI;
+    for (int order = 0; order < 2; order++)
+        Route_Insert(list->r[order][kind], &list->n[order][kind], r, order);
 }
 
 // Search on: the first ledge not done yet, until the budget of simulated
-// frames is spent.
+// frames or of real time is spent, whichever comes first. The routes of a
+// finished search take the place of the ones shown before it all at once.
 static void Ledge_Solve(FighterData *fp, int budget)
 {
-    LedgeEntry *L = 0;
+    if (!Routes_On())
+        return;
+    int at = -1;
     if (hang_ledge >= 0 && !ledges[hang_ledge].done)
-        L = &ledges[hang_ledge]; // the ledge Falcon hangs from first
-    for (int i = 0; i < LR_LEDGES && !L; i++)
+        at = hang_ledge; // the ledge Falcon hangs from first
+    for (int i = 0; i < LR_LEDGES && at < 0; i++)
     {
         if (ledges[i].used && !ledges[i].done)
-            L = &ledges[i];
+            at = i;
     }
-    if (!L)
+    if (at < 0)
         return;
+    LedgeEntry *L = &ledges[at];
+
+    // one search is kept at a time: moving to another ledge starts that one
+    // over, and this one again later
+    if (route_build_ledge != at)
+    {
+        if (route_build_ledge >= 0)
+            ledges[route_build_ledge].next = 0;
+        memset(route_build, 0, sizeof(RouteList));
+        route_build_ledge = at;
+        L->next = 0;
+    }
 
     Floor_BuildCache();
     int start = sim_steps;
+    int t0 = OSGetTick();
     while (L->next < LR_CANDIDATES && sim_steps - start < budget)
     {
         int c = L->next++;
@@ -10329,89 +10527,89 @@ static void Ledge_Solve(FighterData *fp, int budget)
         c /= 8;
         int wait = c % (LR_WAIT + 1), ff = (c / (LR_WAIT + 1)) % (LR_FF + 1);
         int dj_x = c / ((LR_WAIT + 1) * (LR_FF + 1));
-        LedgeRoute nil, ai;
-        Ledge_Try(fp, L, drop, wait, ff, hold, dj_x, fall_away, &nil, &ai, 0, 0, 0);
-        Ledge_Keep(L, &nil);
-        Ledge_Keep(L, &ai);
+        LedgeRoute found[LR_TRY];
+        int found_n;
+        Ledge_Try(fp, L, drop, wait, ff, hold, dj_x, fall_away, found, &found_n, 0, 0, 0);
+        for (int i = 0; i < found_n; i++)
+            Ledge_Keep(route_build, &found[i]);
+        if (OSTicksToMicroseconds(OSGetTick() - t0) >= LR_TIME_US)
+            break;
     }
     if (L->next >= LR_CANDIDATES)
+    {
+        memcpy(&L->list, route_build, sizeof(RouteList));
+        route_build_ledge = -1;
         L->done = 1;
+        L->have = 1;
+        L->version++;
+        L->logged = 0;
+    }
 }
 
-static int Route_Same(LedgeRoute *a, LedgeRoute *b)
-{
-    return a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->kind == b->kind && a->press == b->press;
-}
+static void Route_MenuText(void);
 
-static int Route_Galint(LedgeRoute *r, int e, int intang);
-
-// The best routes of the kind chosen in the menu, best first. Routes that
-// only differ in holding toward the stage after the jump count once, and a
-// route that keeps no GALINT even right after the grab isn't one.
-static int Ledge_Top(LedgeEntry *L, LedgeRoute *out, int max)
+// The ledge's routes in the order the Route Sort option chose, of the kind
+// Route Kind chose, for the Route option to browse. Rebuilt when the ledge,
+// its search or either option changes, and then the Route number is held to
+// the routes there are.
+static void Routes_Update(int ledge)
 {
     int kinds = Options_Ledge[LOPT_KIND].val;
-    int full = (*stc_ftcommon)->cliff_invuln_time;
-    int n = 0;
-    LedgeRoute pool[LR_SIGS];
-    int pool_n = 0;
-    for (int i = 0; i < LR_SIGS; i++)
+    int sort = Options_Ledge[LOPT_SORT].val;
+    LedgeEntry *L = ledge >= 0 ? &ledges[ledge] : 0;
+    int have = L && L->have;
+    int version = have ? L->version : -1;
+    if (ledge == route_list_ledge && version == route_list_version && kinds == route_list_kind && sort == route_list_sort)
+        return;
+    route_list_ledge = ledge;
+    route_list_version = version;
+    route_list_kind = kinds;
+    route_list_sort = sort;
+    route_list_num = 0;
+
+    if (have)
     {
-        LedgeRoute *r = &L->sig[i];
-        if (!r->valid)
-            continue;
-        if (kinds == ROUTES_NIL && r->kind != LAND_NIL)
-            continue;
-        if (kinds == ROUTES_AI && r->kind != LAND_AI)
-            continue;
-        if (Route_Galint(r, -1, full) <= 0)
-            continue;
-        pool[pool_n++] = *r;
-    }
-    while (n < max)
-    {
-        int best = -1;
-        for (int i = 0; i < pool_n; i++)
+        // each kind's list is in the chosen order already: merge them
+        RouteList *list = &L->list;
+        int n = 0, i = 0, j = 0;
+        int ni = kinds == ROUTES_AI ? 0 : list->n[sort][0];
+        int nj = kinds == ROUTES_NIL ? 0 : list->n[sort][1];
+        while (i < ni || j < nj)
         {
-            if (!pool[i].valid)
-                continue;
-            int dup = 0;
-            for (int j = 0; j < n; j++)
-                dup |= Route_Same(&pool[i], &out[j]);
-            if (dup)
-            {
-                pool[i].valid = 0;
-                continue;
-            }
-            if (best < 0 || Route_Better(&pool[i], &pool[best]))
-                best = i;
+            if (j >= nj || (i < ni && Route_Order(&list->r[sort][0][i], &list->r[sort][1][j], sort)))
+                route_list[n++] = list->r[sort][0][i++];
+            else
+                route_list[n++] = list->r[sort][1][j++];
         }
-        if (best < 0)
-            break;
-        out[n++] = pool[best];
-        pool[best].valid = 0;
+        route_list_num = n;
+
+        // the Route number is 1 to the routes found
+        EventOption *o = &Options_Ledge[LOPT_PICK];
+        o->value_num = n > 0 ? n : 1;
+        if (o->val > o->value_num)
+            o->val = o->value_num;
+        if (o->val < 1)
+            o->val = 1;
     }
-    return n;
+    Route_MenuText();
 }
 
-// The chosen route first: Best, Second or Third.
-static int Ledge_Routes(LedgeEntry *L, LedgeRoute *out)
+// The routes the rows show: the chosen route, then the ones after it in
+// the list's order.
+static void Routes_Show(void)
 {
-    LedgeRoute top[LR_KEEP];
-    int n = Ledge_Top(L, top, LR_KEEP);
-    int pick = Options_Ledge[LOPT_PICK].val;
-    if (pick >= n)
-        pick = n - 1;
-    if (n == 0)
-        return 0;
-    out[0] = top[pick];
-    int k = 1;
-    for (int i = 0; i < n; i++)
-    {
-        if (i != pick)
-            out[k++] = top[i];
-    }
-    return n;
+    route_show_num = 0;
+    route_show_rank = 0;
+    if (route_list_num == 0)
+        return;
+    int pick = Options_Ledge[LOPT_PICK].val - 1;
+    if (pick >= route_list_num)
+        pick = route_list_num - 1;
+    if (pick < 0)
+        pick = 0;
+    route_show_rank = pick;
+    for (int i = 0; i < LR_KEEP && pick + i < route_list_num; i++)
+        route_show[route_show_num++] = route_list[pick + i];
 }
 
 // GALINT the route keeps if it goes as planned, e frames after the drop
@@ -10427,9 +10625,10 @@ static void Route_Path(FighterData *fp, int ledge, LedgeRoute *r)
     if (route_path_ledge == ledge && o->drop == r->drop && o->wait == r->wait && o->ff == r->ff && o->hold == r->hold &&
         o->dj_x == r->dj_x && o->fall_away == r->fall_away && o->kind == r->kind)
         return;
-    LedgeRoute nil, ai;
+    LedgeRoute found[LR_TRY];
+    int found_n;
     Floor_BuildCache();
-    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, r->dj_x, r->fall_away, &nil, &ai, route_path,
+    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, r->dj_x, r->fall_away, found, &found_n, route_path,
               route_path_bottom, &route_path_num);
     route_path_of = *r;
     route_path_ledge = ledge;
@@ -10516,6 +10715,18 @@ static void Row_Route(MeterRow *row, LedgeRoute *r, int e, int facing, int galin
         sprintf(row->info, "%d GALINT", galint);
 }
 
+// 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st
+static const char *Ordinal(int n)
+{
+    static char text[16];
+    int last = n % 10;
+    const char *suffix = last == 1 ? "st" : last == 2 ? "nd" : last == 3 ? "rd" : "th";
+    if (n % 100 >= 11 && n % 100 <= 13)
+        suffix = "th";
+    sprintf(text, "%d%s", n, suffix);
+    return text;
+}
+
 static void Meter_AddRoutes(void)
 {
     if (!Routes_On())
@@ -10561,9 +10772,8 @@ static void Meter_AddRoutes(void)
         return;
     for (int i = 0; i < route_show_num; i++)
     {
-        static const char *names[LR_KEEP] = {"1st", "2nd", "3rd"};
         LedgeRoute *r = &route_show[i];
-        MeterRow *row = Meter_Add(land_kind_colors[r->kind], names[i]);
+        MeterRow *row = Meter_Add(land_kind_colors[r->kind], Ordinal(route_show_rank + i + 1));
         if (!row)
             return;
         Row_Route(row, r, -1, ledges[hang_ledge].facing, Route_Galint(r, -1, intang));
@@ -10826,18 +11036,19 @@ static void Markers_Draw(void)
     }
 }
 
-// The panel's lines for a route: its kind and GALINT, like "NIL  11
-// GALINT", and its inputs under it, like "away, wait 1, FF 2, DJ in".
-static void Route_Text(LedgeRoute *r, int galint)
+// A route's kind and GALINT, like "NIL  11 GALINT" or "AI Bair  15 GALINT".
+static void Route_Name(char *t, LedgeRoute *r, int galint)
 {
-    char *t = text_next;
     t += sprintf(t, "%s", r->kind == LAND_AI ? "AI " : "NIL");
     if (r->kind == LAND_AI)
         t += sprintf(t, "%s", tracked_state_names[r->aerial]);
     if (galint > 0)
         sprintf(t, "  %d GALINT", galint);
+}
 
-    t = text_steps;
+// Its inputs, like "away, wait 1, FF 2, DJ in".
+static void Route_Steps(char *t, LedgeRoute *r)
+{
     t += sprintf(t, "%s", r->drop == DROP_AWAY ? "away" : "down");
     if (r->fall_away)
         t += sprintf(t, ", drift away");
@@ -10847,6 +11058,66 @@ static void Route_Text(LedgeRoute *r, int galint)
         t += sprintf(t, ", FF %d", r->ff);
     static const char *dj[LR_DJ_X] = {"DJ in", "DJ down-in", "DJ"};
     sprintf(t, ", %s%s", dj[r->dj_x], r->hold ? ", hold in" : "");
+}
+
+// The panel's lines for a route: which of the routes it is, its kind and
+// GALINT, and its inputs under it.
+static void Route_Text(LedgeRoute *r, int galint, int num, int total)
+{
+    char *t = text_next;
+    if (num > 0)
+        t += sprintf(t, "Route %d of %d: ", num, total);
+    Route_Name(t, r, galint);
+    Route_Steps(text_steps, r);
+}
+
+// The Route option, in the menu: its value ("4 of 23") and the chosen
+// route's GALINT and inputs in the lines of its description. The HUD isn't
+// drawn while the menu is open, so this is where browsing shows what each
+// route is.
+static void Route_MenuText(void)
+{
+    EventOption *o = &Options_Ledge[LOPT_PICK];
+    int n = route_list_num;
+    route_desc[0][0] = route_desc[1][0] = route_desc[2][0] = 0;
+    strcpy(route_pick_fmt, "%d");
+    if (route_list_ledge < 0)
+        sprintf(route_desc[0], "Hang from a ledge to browse its routes.");
+    else if (!ledges[route_list_ledge].have)
+        sprintf(route_desc[0], "%s", Routes_On() ? "Still searching this ledge's routes..." : "Turn on Show Routes to find routes.");
+    else if (n == 0)
+    {
+        strcpy(route_pick_fmt, "none");
+        sprintf(route_desc[0], "No route of this kind keeps GALINT.");
+    }
+    else
+    {
+        int pick = o->val - 1;
+        if (pick >= n)
+            pick = n - 1;
+        if (pick < 0)
+            pick = 0;
+        LedgeRoute *r = &route_list[pick];
+        sprintf(route_pick_fmt, "%%d of %d", n);
+        sprintf(route_desc[0], "Route %d of %d: ", pick + 1, n);
+        Route_Name(route_desc[0] + strlen(route_desc[0]), r, Route_Galint(r, -1, (*stc_ftcommon)->cliff_invuln_time));
+        Route_Steps(route_desc[1], r);
+        if (r->kind == LAND_NIL)
+            sprintf(route_desc[2], "No aerial: it lands with no lag.");
+        else if (r->press_w == 1)
+            sprintf(route_desc[2], "%s on frame %d after the jump.", tracked_state_names[r->aerial], r->press - r->dj);
+        else
+            sprintf(route_desc[2], "%s on frames %d to %d after the jump.", tracked_state_names[r->aerial],
+                    r->press - r->dj, r->press - r->dj + r->press_w - 1);
+    }
+}
+
+void Event_ChangeRoutes(GOBJ *menu, int value)
+{
+    Routes_Update(route_browse);
+    if (hang_ledge >= 0 && ledges[hang_ledge].have)
+        Routes_Show(); // the rows follow the choice as soon as the game goes on
+    Route_MenuText();
 }
 
 // The route was lost, or a step whose timing buzzes went wrong: say which
@@ -10941,6 +11212,8 @@ static void Ledge_Think(FighterData *fp, int sid)
     }
     int intang = fp->hurt.intang_frames.ledge;
     galint_now = hanging ? 0 : intang;
+    if (!hanging)
+        Routes_Update(route_browse); // the Route option's text, before the first ledge too
 
     if (hanging)
     {
@@ -10950,21 +11223,32 @@ static void Ledge_Think(FighterData *fp, int sid)
         attempt_active = 0;
         route_active = 0;
         route_show_num = 0;
-        if (hang_ledge >= 0 && ledges[hang_ledge].done)
+        if (hang_ledge >= 0)
+            route_browse = hang_ledge;
+        Routes_Update(hang_ledge);
+        // a ledge's routes show once its first search is done, and the
+        // ones of the search before keep showing while it's searched again
+        if (hang_ledge >= 0 && ledges[hang_ledge].have)
         {
-            route_show_num = Ledge_Routes(&ledges[hang_ledge], route_show);
+            Routes_Show();
             if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
             {
                 LedgeEntry *L = &ledges[hang_ledge];
-                static const char *names[LR_KEEP] = {"1st", "2nd", "3rd"};
-                for (int i = 0; i < route_show_num && !L->logged; i++)
-                    Route_Log(names[i], L, &route_show[i], Route_Galint(&route_show[i], -1, intang));
+                if (!L->logged)
+                {
+                    char buf[96];
+                    sprintf(buf, "LLROUTES ledge %.4f %.4f facing %d found %d nil %d ai %d\n", L->x, L->y, L->facing,
+                            route_list_num, L->list.n[ROUTES_SORT_GALINT][0], L->list.n[ROUTES_SORT_GALINT][1]);
+                    Log(buf);
+                    for (int i = 0; i < LR_KEEP && i < route_list_num; i++)
+                        Route_Log(Ordinal(i + 1), L, &route_list[i], Route_Galint(&route_list[i], -1, intang));
+                }
                 L->logged = 1;
             }
             if (route_show_num > 0 && Routes_On())
             {
                 Route_Path(fp, hang_ledge, &route_show[0]);
-                Route_Text(&route_show[0], Route_Galint(&route_show[0], -1, intang));
+                Route_Text(&route_show[0], Route_Galint(&route_show[0], -1, intang), route_show_rank + 1, route_list_num);
                 next_kind = route_show[0].kind == LAND_AI ? CUE_AI : CUE_NIL;
             }
             else if (Routes_On())
@@ -10993,15 +11277,25 @@ static void Ledge_Think(FighterData *fp, int sid)
         {
             // follow the chosen route, or the best one let go the same way
             int drop = fp->input.lstick.Y <= -Common_Float(0x494) && fabs(fp->input.lstick.X) < -fp->input.lstick.Y ? DROP_DOWN : DROP_AWAY;
-            int pick = -1;
-            for (int i = 0; i < route_show_num && pick < 0; i++)
+            LedgeRoute *pick = 0;
+            route_cur_num = 0;
+            if (route_show[0].drop == drop)
             {
-                if (route_show[i].drop == drop)
-                    pick = i;
+                pick = &route_show[0];
+                route_cur_num = route_show_rank + 1;
             }
-            if (pick >= 0)
+            for (int i = 0; i < route_list_num && !pick; i++)
             {
-                route_cur = route_show[pick];
+                if (route_list[i].drop == drop)
+                {
+                    pick = &route_list[i];
+                    route_cur_num = i + 1;
+                }
+            }
+            if (pick)
+            {
+                route_cur = *pick;
+                route_cur_total = route_list_num;
                 route_ledge = ledge;
                 route_active = 1;
                 route_drop = event_vars->game_timer;
@@ -11045,7 +11339,7 @@ static void Ledge_Think(FighterData *fp, int sid)
             route_active = 0; // hit, or back on a ledge: no longer the route
             return;
         }
-        Route_Text(r, route_galint >= 0 ? route_galint : Route_Galint(r, e, intang));
+        Route_Text(r, route_galint >= 0 ? route_galint : Route_Galint(r, e, intang), route_cur_num, route_cur_total);
         next_kind = r->kind == LAND_AI ? CUE_AI : CUE_NIL;
 
         if (route_landed < 0)
@@ -11766,7 +12060,7 @@ static void Timing_Update(FighterData *fp, Prediction *p, int lead)
     if (ai && ai <= LL_COUNT_FRAMES)
     {
         int k = p->ai_first;
-        int t = k + p->ai_delay[k];
+        int t = k + Ai_FirstDelay(p, k, p->ai_show[k]);
         if (t > p->num)
             t = p->num;
         Cue_Set(CUE_AI, ai, p->ai_width, 0, 0, p->pos[t].X, p->pos[k - 1].Y + p->bottom[k - 1]);
@@ -11862,6 +12156,8 @@ void Event_Init(GOBJ *gobj)
     quads = calloc(sizeof(Quad) * LL_QUADS);
     ledges = calloc(sizeof(LedgeEntry) * LR_LEDGES);
     pred_route = calloc(sizeof(Prediction));
+    route_list = calloc(sizeof(LedgeRoute) * 2 * LR_ROUTES);
+    route_build = calloc(sizeof(RouteList));
     route_path = calloc(sizeof(Vec2) * LR_PATH);
     route_path_bottom = calloc(sizeof(float) * LR_PATH);
     slide_pos = calloc(sizeof(Vec2) * 2 * SLIDE_MAX);

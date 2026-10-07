@@ -4926,6 +4926,7 @@ static PresetFile *preset_file;    // what's on the card, and what gets written 
 static PresetSlot *preset_builtin; // [PS_COUNT - PS_SAVED]
 static u8 preset_dirty;            // preset_file changed since it was last written
 static u8 preset_was_paused;
+static u8 preset_cam_pending; // a preset changed the camera mode
 
 static int Preset_Kept(EventOption *o)
 {
@@ -5015,9 +5016,11 @@ static void Preset_Apply(PresetSlot *s)
             if (p && Preset_Fits(o, p->val))
                 o->val = p->val;
         }
-    // the few settings that act when they change; the rest are read as they're used
+    // the few settings that act when they change; the rest are read as they're
+    // used. The camera waits for the next frame: this can run at start, before
+    // the match's camera is ready.
     if (Options_Camera[CAMOPT_MODE].val != cam)
-        Event_ChangeCamera(0, Options_Camera[CAMOPT_MODE].val);
+        preset_cam_pending = 1;
     if (Options_Ledge[LOPT_START].val != start)
         Event_ChangeLedgeStart(0, Options_Ledge[LOPT_START].val);
     Event_ChangeRoutes(0, 0);
@@ -5584,6 +5587,11 @@ static void Presets_Update(void)
     if (preset_was_paused && !paused)
         Presets_KeepUser();
     preset_was_paused = paused;
+    if (preset_cam_pending)
+    {
+        preset_cam_pending = 0;
+        Event_ChangeCamera(0, Options_Camera[CAMOPT_MODE].val);
+    }
     Card_Update();
 }
 

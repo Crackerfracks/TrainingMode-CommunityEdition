@@ -4878,6 +4878,7 @@ static int stat_exact;
 static char text_predict[32] = "-";
 static char text_ai[32] = "-";
 static char text_last[48] = "-";
+static u8 press_note; // text_last says why the last press stayed in the air: the landing keeps it
 static char text_next[64] = "-"; // the panel's first line: what's coming up
 static char text_steps[64];       // ... and a ledge route's inputs under it
 static char text_frame[32]; // in Frame Advance: the state on screen and its frame
@@ -5402,6 +5403,7 @@ static void Press_CheckMissed(FighterData *fp, int ts)
         else
             sprintf(text_last, "No AI: %s %df %s", tracked_state_names[ts], off < 0 ? -off : off, off < 0 ? "early" : "late");
         last_kind = -1;
+        press_note = 1;
         sprintf(buf, "LandingLab press: %s at %d stayed in the air, %df %s for the window (from %d)\n",
                 tracked_state_names[ts], event_vars->game_timer, off < 0 ? -off : off, off < 0 ? "early" : "late",
                 seg_start_timer);
@@ -5422,6 +5424,7 @@ static void Press_CheckMissed(FighterData *fp, int ts)
         sprintf(text_last, "No AI, predicted");
         last_kind = -1;
     }
+    press_note = 1;
 
     stat_total++;
     Text_Exact();
@@ -5806,7 +5809,24 @@ static void Cues_Clear(void)
 #define LL_GHOST_FRAMES 90
 
 // The fighter left the tracked air states this frame: judge the landing.
+static void Landing_Judge(FighterData *fp);
+
+// The landing's own text ("Lag") would replace why the press before it
+// stayed in the air, which is the part worth reading, so that stays up
+// unless the landing was a hit after all.
 static void Landing_Resolve(FighterData *fp)
+{
+    char note[sizeof(text_last)] = "";
+    int keep = press_note && !route_active;
+    if (keep)
+        strcpy(note, text_last);
+    press_note = 0;
+    Landing_Judge(fp);
+    if (keep && last_kind < 0)
+        strcpy(text_last, note);
+}
+
+static void Landing_Judge(FighterData *fp)
 {
     int sid = fp->state_id;
     int landing_air = sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW;
@@ -8898,7 +8918,7 @@ static void Near_EcbFill(FighterData *fp, NearCue *n)
             return;
     }
     float S = Near_Scale(x, y + v[1].Y);
-    float lw = Near_Clamp(0.45f * S, 0.12f, 0.24f);
+    float lw = Near_Clamp(0.6f * S, 0.18f, 0.32f);
     float mx = (px[0] + px[1] + px[2] + px[3]) / 4.f, my = (py[0] + py[1] + py[2] + py[3]) / 4.f;
 
     if (n->mode == NMODE_COUNT || n->mode == NMODE_WINDOW)
@@ -8918,9 +8938,12 @@ static void Near_EcbFill(FighterData *fp, NearCue *n)
                     cx += ox[i] / m;
                     cy += oy[i] / m;
                 }
-                Hud_Fan(cx, cy, ox, oy, m, Color_Over(window ? Color_Mix(n->col, color_white, n->now ? 0.5f : 0.f) : n->col, 0.55f * a));
+                Hud_Fan(cx, cy, ox, oy, m, Color_Over(window ? Color_Mix(n->col, color_white, n->now ? 0.5f : 0.f) : n->col, 0.72f * a));
             }
         }
+        // a soft glow around the outline: the diamond is small and Falcon's
+        // own colors run through it, so it needs to stand off him
+        Hud_Line(px, py, 4, 1, lw + 0.55f, PX, Color_Over(n->col, 0.22f * a));
         Hud_Line(px, py, 4, 1, lw + 0.12f, PX, Color_Over(color_plate, 0.45f * a));
         Hud_Line(px, py, 4, 1, lw, PX, Color_Over(n->col, 0.8f * a));
 
@@ -13839,6 +13862,8 @@ static void Event_ThinkFrame(GOBJ *event)
         if (prev_tracked_air)
             Window_Feedback(fp, ts);
         Window_Remember(pred_live);
+        if (!prev_tracked_air || (ts != prev_ts && !Tracked_EndedInto(prev_ts, ts)))
+            press_note = 0; // a new jump or press: the old note is stale
         if (prev_tracked_air && ts != prev_ts)
             Press_CheckMissed(fp, ts);
         if (!prev_tracked_air || Segment_InputChanged(fp, ts))

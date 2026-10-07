@@ -5390,6 +5390,11 @@ enum card_step
 };
 
 static u8 *card_buf; // CARD_SIZE, 32-byte aligned for the card's DMA
+// frames left logging a probe line after a write, in test runs: in Dolphin,
+// OSReport lines (EXI UART, which shares EXI channel 0 with slot A) have gone
+// missing for a while after one
+#define CARD_PROBE 180
+static int card_probe;
 static CARDFileInfo card_fi;
 static CARDStat card_stat;
 static volatile s32 card_result;
@@ -5658,6 +5663,7 @@ static void Card_Step(void)
         }
         Card_Stop();
         card_gen_saved = card_gen_writing;
+        card_probe = CARD_PROBE;
         Card_Say("Saved in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
         return;
     }
@@ -12122,6 +12128,7 @@ static int script_shown; // the first ones are listed in the menu
 static int script_autorun;
 
 static int script_cur = -1; // running script, -1 = none
+static char shot_label[48];  // the last shot's label, for the heartbeat
 static int script_pc;       // its current step
 static int script_left;     // frames left in that step
 static int script_wait;     // frames a wl/ai/land step has waited
@@ -12945,6 +12952,11 @@ static int Script_Instant(GOBJ *ft, int pre)
         else if (op->kind == SOP_SHOT)
         {
             Options_Game[GOPT_FRAME_ADV].val = 1;
+            int n = strlen(op->label);
+            if (n > (int)sizeof(shot_label) - 1)
+                n = sizeof(shot_label) - 1;
+            memcpy(shot_label, op->label, n);
+            shot_label[n] = 0;
             sprintf(buf, "LLSHOT %s %s at %d\n", scripts[script_cur].name, op->label, event_vars->game_timer);
             Log(buf);
         }
@@ -15470,6 +15482,12 @@ static void Event_ThinkFrame(GOBJ *event)
 {
     GOBJ *ft = Fighter_GetGObj(0);
     FighterData *fp = ft->userdata;
+    if (card_probe > 0 && script_cur >= 0)
+    {
+        char buf[48];
+        sprintf(buf, "LLPROBE think %d at %d\n", CARD_PROBE - card_probe, event_vars->game_timer);
+        Log(buf);
+    }
 
     if (!attributes_logged)
     {
@@ -15823,15 +15841,28 @@ void Event_Update(void)
     Rumble_Update(Fighter_GetGObj(0)->userdata,
                   Pause_CheckStatus(1) == 2 || Options_Game[GOPT_FRAME_ADV].val || assist_frozen);
     // while a script runs, a line in the log every 5 seconds, frozen or not:
-    // whoever watches the log tells a hang (no lines) from a shot waiting
+    // whoever watches the log tells a hang (no lines) from a shot waiting,
+    // and which shot, should its own line have gone missing
     static int script_beat;
     if (script_cur >= 0 && ++script_beat >= 300)
     {
         script_beat = 0;
-        char buf[80];
-        sprintf(buf, "LLBEAT %d %s\n", event_vars->game_timer,
-                Options_Game[GOPT_FRAME_ADV].val ? "frozen, waiting for D-pad down" : "running");
+        char buf[128];
+        if (Options_Game[GOPT_FRAME_ADV].val)
+            sprintf(buf, "LLBEAT %d frozen at shot \"%s\", waiting for D-pad down\n", event_vars->game_timer, shot_label);
+        else
+            sprintf(buf, "LLBEAT %d running\n", event_vars->game_timer);
         Log(buf);
+    }
+    if (card_probe > 0)
+    {
+        if (script_cur >= 0)
+        {
+            char buf[48];
+            sprintf(buf, "LLPROBE update %d at %d\n", CARD_PROBE - card_probe, event_vars->game_timer);
+            Log(buf);
+        }
+        card_probe--;
     }
     if (Pause_CheckStatus(1) == 2)
         return;

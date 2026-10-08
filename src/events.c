@@ -806,6 +806,9 @@ EventPage *EventPages[] = {
 
 RNGControl rng;
 
+void EventMenu_EnterMenu(GOBJ *gobj); // menu.c
+void EventMenu_ExitMenu(GOBJ *gobj);
+
 EventVars stc_event_vars = {
     .event_desc = 0,
     .menu_assets = 0,
@@ -828,6 +831,8 @@ EventVars stc_event_vars = {
     .HUD_DrawActionLogKey = HUD_DrawActionLogKey,
     .HUD_DrawInfoPanel = HUD_DrawInfoPanel,
     .HUD_DrawInfoPanelAt = HUD_DrawInfoPanelAt,
+    .Menu_Enter = EventMenu_EnterMenu,
+    .Menu_Exit = EventMenu_ExitMenu,
 };
 
 static GOBJ *stc_msgmgr;

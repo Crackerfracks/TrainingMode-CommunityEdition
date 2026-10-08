@@ -177,3 +177,24 @@ set Ledge/Drop Drill = 0
 closemenu
 card flush
 mark done
+
+# Jump timing: Falcon full hops, then falls, under Battlefield's top platform with his double
+# jump left. The search takes its anchor on the first airborne frame, and
+# by frame 14 (he reaches the floor at about 24) has a jump to show: a JUMP
+# row counting down to the frame, the AI row under it with the aerial's
+# window (a NIL row if that lands sooner, with Kind on Both), the route's
+# path up to the platform and the panel line. Expect an LLJUMP line in the
+# log when the search is done.
+script Jump timing
+set Jump/Show = 1
+# a full hop from the floor under the top platform: the search anchors as
+# soon as he is airborne, and the double jump can come while he still rises
+start 0 0 right
+5 X
+8
+shot full hop under the top platform: jump timing row and path for a double jump that AIs or NILs on the top platform
+# then a fall under it
+air 0 40 right 0 0 0
+14
+shot jump timing: JUMP row counting down, pink AI row under it, path up to the top platform, panel "DJ ... in Nf, aerial fN-N: AI"
+set Jump/Show = 0

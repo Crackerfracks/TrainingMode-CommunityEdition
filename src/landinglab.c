@@ -3822,6 +3822,8 @@ static const char *wl_timer_names[] = {"Off", "Ticks", "Rails", "Chevrons"};
 static const char *wd_timer_names[] = {"Off", "Cells", "Pips", "Ring"};
 static const char *stick_names[] = {"By Percent", "Bottom Left", "Bottom Right", "Off"};
 static const char *pad_look_names[] = {"Ring", "Crest", "Classic"};
+static const char *pad_cue_names[] = {"Off", "Closing Ring", "Gauge"};
+enum { PADCUE_OFF, PADCUE_RING, PADCUE_GAUGE };
 static const float ring_sizes[] = {1.f, 1.25f, 1.5f};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
 static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
@@ -4700,6 +4702,7 @@ enum options_hud
     HOPT_LOOK,
     HOPT_PAD_SIZE,
     HOPT_BUTTONS,
+    HOPT_PAD_CUES,
     HOPT_SHIELD_DROP,
     HOPT_PANEL,
     HOPT_PANEL_SIDE,
@@ -4742,6 +4745,16 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .val = 1,
         .desc = {"Show the buttons, triggers and C-stick too, in",
                  "the controller's own colors."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Controller Cues",
+        .value_num = countof(pad_cue_names),
+        .values = pad_cue_names,
+        .desc = {"The button an AI or waveland window wants, timed",
+                 "on the controller: a ring closing in on it, or a",
+                 "gauge going round it. Never filled, so it can't",
+                 "pass for a press. Needs Buttons and Triggers."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -11043,6 +11056,20 @@ enum pad_input
     PIN_COUNT
 };
 
+// Where each input was drawn this frame, for the controller cues: its
+// middle and about how big it is (r 0: not drawn).
+static struct
+{
+    float x, y, r;
+} pin_spot[PIN_COUNT];
+
+static void Pin_Spot(int in, float x, float y, float r)
+{
+    pin_spot[in].x = x;
+    pin_spot[in].y = y;
+    pin_spot[in].r = r;
+}
+
 static Vec2 pad_trail[PAD_TRAIL];   // the last frames' raw stick, newest at pad_trail_pos
 static int pad_trail_pos;
 static Vec2 pad_ctrail[PAD_CTRAIL]; // and the C-stick's
@@ -11247,6 +11274,7 @@ static void Hud_PillRing(float cx, float cy, float w, float h, float rot, float 
 // ring on the frame it goes down.
 static void Pad_Button(float cx, float cy, float r, GXColor c, int in, float glow)
 {
+    Pin_Spot(in, cx, cy, r);
     Hud_Ring(cx, cy, r - 0.035f, 0.07f, Color_Fill(c, 0.5f));
     if (glow > 0)
         Hud_Disc(cx, cy, r - 0.07f, Color_Fill(c, glow));
@@ -11522,6 +11550,15 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
     GXColor plate = Color_Fill(color_plate, 0.55f);
     for (int k = 0; k < RING_SEGS; k++)
         Quad_Add(px[k], py[k], px[k + 1], py[k + 1], px[n - 2 - k], py[n - 2 - k], px[n - 1 - k], py[n - 1 - k], plate);
+    {
+        float mx = 0, my = 0;
+        for (int k = 0; k < n; k++)
+        {
+            mx += px[k];
+            my += py[k];
+        }
+        Pin_Spot(side > 0 ? PIN_R : PIN_L, mx / n, my / n, 0.8f * s);
+    }
     // the outline, under the fill so a light press isn't hidden by it; a
     // lit half has a bright, heavier one
     Hud_Line(px, py, n, 1, (0.05f + 0.04f * lit) * s, PX, Color_Mix(Color_Fill(c, 0.8f), color_white, lit));
@@ -11643,6 +11680,7 @@ static void Ring_Stroke(float cx, float cy, float h, GXColor c, int n, const flo
 // The letter printed on a button, in strokes since there's no text engine.
 static void Ring_Letter(int in, float cx, float cy, float h, GXColor bc, float glow)
 {
+    Pin_Spot(in, cx, cy, h);
     // light in the button's color on the dark well, dark on the lit fill
     GXColor c = Color_Mix(Color_Over(Color_Mix(bc, color_white, 0.5f), 0.95f), Color_Over(color_plate, 0.92f), glow);
     switch (in)
@@ -11940,6 +11978,11 @@ static void Crest_BladeQuads(int i, float u0, float u1, float m, float k, float 
 // One wing: side -1 is L, 1 is R; analog, click, lit and flash as for the Ring.
 static void Crest_Wing(float cx, float cy, float k, int side, float analog, int click, float lit, float flash)
 {
+    {
+        float mx, my;
+        Crest_BladePoint(1, 0.5f, 1, side, k, cx, cy, &mx, &my);
+        Pin_Spot(side > 0 ? PIN_R : PIN_L, mx, my, 0.9f * k);
+    }
     float m = side;
     float a = click ? 1.f : Clamp01(analog);
     int counted = a >= RING_LIGHT;
@@ -12100,6 +12143,63 @@ static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
 
 // The controller display. Reads the pad live; the trails and glows come
 // from what Pad_Record saw.
+// Controller Cues: the input a live AI or waveland window wants, timed
+// around where it's drawn. The Closing Ring shrinks onto it from twice its
+// size over the last frames before the window, and sits snug and thick
+// while the window is open; the Gauge is a ring going round it, closed as
+// the window opens. Either is only an outline in the cue's color, never a
+// fill, so it can't be taken for a press.
+#define PADCUE_LEAD 10 // frames ahead it shows
+static void Pad_CueOne(int in, int kind)
+{
+    Cue *c = &cue_live[kind];
+    if (!pin_spot[in].r || !c->phase || c->dim || c->held)
+        return;
+    float x = pin_spot[in].x, y = pin_spot[in].y, r = pin_spot[in].r;
+    int open = c->phase == PH_WINDOW;
+    int ahead = open ? 0 : c->left - 1;
+    if (ahead > PADCUE_LEAD)
+        return;
+    float t = open ? 0 : (float)ahead / PADCUE_LEAD; // 1 far, 0 at the window
+    GXColor col = Cue_Color(kind);
+    float w = open ? 0.16f : 0.09f;
+    if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_RING)
+    {
+        float rr = r * (1.25f + 1.1f * t);
+        Hud_Ring(x, y, rr, w, Color_Over(col, open ? 1.f : 0.55f + 0.45f * (1.f - t)));
+        return;
+    }
+    // the gauge: an arc from the top, clockwise, as much of the way round
+    // as the window is near
+    float rr = r * 1.35f, frac = open ? 1.f : 1.f - t;
+    int n = 2 + (int)(frac * 22);
+    float px[24], py[24];
+    for (int i = 0; i < n; i++)
+    {
+        float a = 1.5707963f - 6.2831853f * frac * i / (n - 1);
+        px[i] = x + cos(a) * rr;
+        py[i] = y + sin(a) * rr;
+    }
+    Hud_Ring(x, y, rr, 0.05f, Color_Over(col, 0.25f)); // the track
+    Hud_Line(px, py, n, 0, w, PX, Color_Over(col, open ? 1.f : 0.8f));
+}
+
+static void Pad_Cues(void)
+{
+    if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_OFF || route_rows_active)
+        return;
+    float k = vis_k;
+    vis_k = Group_K(VG_TIMERS);
+    if (Cues_Ai())
+        Pad_CueOne(PIN_A, CUE_AI);
+    if (Cues_Waveland())
+    {
+        Pad_CueOne(PIN_L, CUE_WL);
+        Pad_CueOne(PIN_R, CUE_WL);
+    }
+    vis_k = k;
+}
+
 static void Pad_Draw(FighterData *fp)
 {
     if (Options_Hud[HOPT_STICK].val == STICK_OFF)
@@ -12108,15 +12208,18 @@ static void Pad_Draw(FighterData *fp)
     Pad_Box(fp, &bx, &by, &x1, &y1);
     HSD_Pad *pad = Pad_Live(fp);
     int buttons = Options_Hud[HOPT_BUTTONS].val;
+    memset(pin_spot, 0, sizeof(pin_spot));
 
     if (buttons && Options_Hud[HOPT_LOOK].val == LOOK_RING)
     {
         Ring_Draw(fp, pad, bx, by);
+        Pad_Cues();
         return;
     }
     if (buttons && Options_Hud[HOPT_LOOK].val == LOOK_CREST)
     {
         Crest_Draw(fp, pad, bx, by);
+        Pad_Cues();
         return;
     }
     Pad_Stick(fp, pad, buttons ? bx + PAD_STICK_X : bx + PAD_R, by + PAD_R, PAD_R, 1.f);
@@ -12132,6 +12235,8 @@ static void Pad_Draw(FighterData *fp)
 
     Pad_Trigger(bx, by, pad->ftriggerLeft, glow[PIN_L]);
     Pad_Trigger(bx + PAD_W - 0.5f, by, pad->ftriggerRight, glow[PIN_R]);
+    Pin_Spot(PIN_L, bx + 0.25f, by + 2.4f, 0.7f);
+    Pin_Spot(PIN_R, bx + PAD_W - 0.25f, by + 2.4f, 0.7f);
 
     Pad_Button(bx + 8.3f, by + 2.6f, 0.8f, color_btn_a, PIN_A, glow[PIN_A]);
     Pad_Button(bx + 7.0f, by + 1.5f, 0.48f, color_btn_b, PIN_B, glow[PIN_B]);
@@ -12147,6 +12252,7 @@ static void Pad_Draw(FighterData *fp)
         Hud_PillRing(zx, zy, 1.3f, 0.66f, 0, 0.1f, Color_Mix(color_btn_z, color_white, 0.5f));
 
     Pad_CStick(pad, bx + 10.6f, by + 1.3f, glow[PIN_C]);
+    Pad_Cues();
 }
 
 ///////////////////////

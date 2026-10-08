@@ -120,6 +120,26 @@ ai 0 A
 land 120
 set Intensity/Auto Fade = 0
 
+# Controller cues: the A button's timing on the Ring for the nair AI, as a
+# closing ring a few frames out, then as a gauge in the window.
+script Controller cues
+set HUD/Controller Cues = 1
+start 38 0 right
+5 X
+18
+shot closing ring: a ring around A in the AI color, wider than A, not filled
+ai 0
+shot closing ring at the window: snug and thick around A
+1 A
+land 120
+set HUD/Controller Cues = 2
+start 38 0 right
+5 X
+18
+shot gauge: an arc partway round A in the AI color
+land 120
+set HUD/Controller Cues = 0
+
 # Ledge drop drill: which frame of the hang a drop comes out on. Expect no
 # LLDROP frame line for the first try (the stick held from the start
 # never rested), then frames 1, 2, 3 for one, two and three frames of rest

@@ -1,0 +1,124 @@
+# 0.8 checks with no menuing: build with LLSCRIPT=src/landinglab_08_test.txt
+# and start the event on Battlefield. Each "shot" freezes the game until
+# D-pad down.
+autorun
+
+# Views are per stage and named: view 1 saved and named, the card written
+# and read again, and view 1 still there with its name. Each "view show"
+# logs the camera, the view's menu name and the stage id (Battlefield 31).
+script Views and names
+start 0 0 right
+30
+view save 1
+120
+view name 1 TopPlat
+view show 1
+mark named: expect view 1 "TopPlat" on stage 31 matches
+closemenu
+card flush
+set Camera/Camera Mode = 0
+set Camera/View = 0
+card restart
+10
+view show 1
+mark after the card is read again: expect view 1 "TopPlat" (matches), view 2 "View 2 (empty)" below
+view show 2
+set Camera/Camera Mode = 0
+set Camera/View = 0
+closemenu
+card flush
+
+# Effects follow the Advanced camera: the camera slid 40 right and 15 up,
+# then a nair AI onto the right platform. The path, landing spot and timer
+# marks must sit on the stage as drawn, not where the normal camera would put
+# them.
+script Advanced camera effects
+start 38 0 right
+view shift 1 40 15
+10
+5 X
+22
+shot advanced camera: path and spot marks sit on the right platform as drawn
+ai 0 A
+land 120
+set Camera/Camera Mode = 0
+set Camera/View = 0
+10
+
+# Intensity by group, on the same jump: Timers 2 fainter, Paths 2 bolder,
+# controller at 5.
+script Intensity groups
+set Intensity/Timers = 0
+set Intensity/Paths = 4
+set Intensity/Controller = 4
+start 38 0 right
+5 X
+22
+shot groups: timers faint, paths bold, controller boldest
+ai 0 A
+land 120
+set Intensity/Timers = 2
+set Intensity/Paths = 2
+set Intensity/Controller = 2
+10
+
+# Auto Fade on the timers: twelve hit AIs raise the AI hit rate (LLFADE
+# lines), so the timer is fainter on the last one than on the first.
+script Auto fade
+set Intensity/Auto Fade = 1
+start 38 0 right
+5 X
+22
+shot fade first try: timers at full strength
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+ai 0 A
+land 120
+start 38 0 right
+5 X
+22
+shot fade after 11 hits: same timer, clearly fainter
+ai 0 A
+land 120
+set Intensity/Auto Fade = 0
+closemenu
+card flush
+mark done

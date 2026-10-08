@@ -13506,11 +13506,38 @@ static void Script_Cmd(ScriptOp *op)
                 COBJ_GetEyePosition(cobj, &eye);
                 COBJ_GetInterest(cobj, &at);
             }
-            sprintf(buf, "LLVIEW show: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f; view %d %s\n", eye.X, eye.Y, eye.Z,
-                    at.X, at.Y, at.Z, cobj ? cobj->projection_param.perspective.fov : 0.f, v,
+            sprintf(buf, "LLVIEW show: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f; view %d \"%s\" on stage %d %s\n", eye.X,
+                    eye.Y, eye.Z, at.X, at.Y, at.Z, cobj ? cobj->projection_param.perspective.fov : 0.f, v, view_label[v - 1],
+                    Stage_GetExternalID(),
                     !w ? "unsaved"
                     : fabs(eye.X - w->eye.X) + fabs(eye.Y - w->eye.Y) + fabs(eye.Z - w->eye.Z) < 0.5f ? "matches" : "differs");
             Log(buf);
+            break;
+        }
+        if (Script_Is(what, "shift"))
+        {
+            // view shift 1 dx dy: slides the Advanced camera (eye and what
+            // it looks at) by dx dy, to check effects follow it; the number
+            // after shift is ignored
+            char *a = Script_Word(&rest), *b = Script_Word(&rest);
+            ok = a && b;
+            if (ok)
+            {
+                float dx = Script_Number(&a), dy = Script_Number(&b);
+                Options_Camera[CAMOPT_MODE].val = CAM_ADVANCED;
+                Event_ChangeCamera(0, CAM_ADVANCED);
+                COBJ *cobj = View_CObj();
+                if (cobj)
+                {
+                    COBJ_GetEyePosition(cobj, &dev_cam->free_eye_pos);
+                    COBJ_GetInterest(cobj, &dev_cam->free_int_pos);
+                    dev_cam->free_fov = cobj->projection_param.perspective.fov;
+                }
+                dev_cam->free_eye_pos.X += dx;
+                dev_cam->free_eye_pos.Y += dy;
+                dev_cam->free_int_pos.X += dx;
+                dev_cam->free_int_pos.Y += dy;
+            }
             break;
         }
         if (Script_Is(what, "name"))

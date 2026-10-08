@@ -307,7 +307,11 @@ EventDesc LandingLab = {
     },
     .playerKind = -1,
     .cpuKind = -1,
+#ifdef LL_TEST_STAGE
+    .stage = GRKINDEXT_BATTLE, // test builds skip the stage select
+#else
     .stage = -1,
+#endif
     .disable_hazards = true,
     .force_sopo = false,
     .scoreType = SCORETYPE_KO,

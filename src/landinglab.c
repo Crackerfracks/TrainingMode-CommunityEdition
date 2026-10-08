@@ -4128,10 +4128,10 @@ static EventOption Options_Controls[] = {
     {
         .kind = OPTKIND_INFO,
         .name = "Quick: Cues and Paths",
-        .desc = {"Hold L or R (a light press past 60% counts)",
-                 "and press the D-pad. Up and down go round the",
-                 "cue sets, left and right round the paths, with",
-                 "and without frame dots. Best between attempts."},
+        .desc = {"Hold L or R clicked all the way and press the",
+                 "D-pad. Up and down go round the cue sets, left",
+                 "and right round the paths, with and without",
+                 "frame dots. Best between attempts."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -5925,7 +5925,7 @@ static void Cue_Log(int kind, const char *what, int a, int b)
 // queues none, and anything queued already is cleared every frame. A buzz
 // is queued one frame at a time, so the motor can't be left running if the
 // event stops calling this; between buzzes the port's direct setting is a
-// hard stop, which brakes the motor.
+// stop, and a hard stop (which brakes the motor) as the window opens.
 typedef struct PadRumble
 {
     u8 last_status, status, direct_status; // HSD_RumbleData
@@ -5935,9 +5935,11 @@ typedef struct PadRumble
 #define pad_rumble ((PadRumble *)0x804C22E0) // one per port
 #define MOTOR_HARD_STOP 0 // as HSD reads direct_status
 // Buzz on the frames this many frames before the press (bit n: n frames;
-// 1 is the window): 2 on, 4 off, 2 on, 3 off, ... then on for the last four.
-#define RUMBLE_RAMP ((1u << 2) | (1u << 3) | (1u << 4) | (1u << 5) | (1u << 7) | (1u << 8) | (1u << 10) | \
-                     (1u << 11) | (1u << 14) | (1u << 15) | (1u << 19) | (1u << 20) | (1u << 25) | (1u << 26))
+// 1 is the window): four on, gaps of four, three, two, then on for the last
+// five. The motor needs a few frames to spin up, so shorter pulses barely
+// register (Stephen found the first version, two-frame pulses, too weak).
+#define RUMBLE_RAMP ((0xFu << 24) | (0xFu << 16) | (0xFu << 9) | (0x1Fu << 2))
+#define MOTOR_STOP 1 // a soft stop: the motor coasts between pulses, which reads stronger
 
 static s8 rumble_port = -1; // the port taken over, -1 none
 static u8 rumble_ply;       // its player
@@ -5981,6 +5983,7 @@ static void Rumble_Update(FighterData *fp, int frozen)
         rumble_port = port;
     }
     HSD_PadRumbleRemove(port);
+    pad_rumble[port].direct_status = MOTOR_STOP;
 
     // the soonest window of a cue with its rumble on
     int soon = 99;
@@ -5996,6 +5999,8 @@ static void Rumble_Update(FighterData *fp, int frozen)
     }
     if (soon >= 2 && soon < 32 && ((RUMBLE_RAMP >> soon) & 1))
         HSD_PadRumbleAdd(port, 0, 1, 0, (void *)rumble_buzz);
+    else if (soon <= 1)
+        pad_rumble[port].direct_status = MOTOR_HARD_STOP; // it stops dead as the window opens
 }
 
 static int galint_now;        // ledge intangibility left once Falcon has let go of the ledge
@@ -7851,10 +7856,44 @@ static void Hud_Text(const char *text, float x, float y, float size, GXColor col
     Hud_TextAligned(text, x, y, size, color, 0);
 }
 
-// A rough width for a dark plate behind a line of text.
+// A line of text's width, for the dark plate behind it: Melee's font is
+// proportional, so each glyph by its kind (about 6.5 px for an average
+// glyph at size 0.45, as measured in game).
 static float Text_Width(const char *text, float size)
 {
-    return strlen(text) * size * 1.4f; // measured in game: about 6.5 px a glyph at 0.45
+    float w = 0;
+    for (const char *c = text; *c; c++)
+    {
+        char ch = *c;
+        float g;
+        if (ch == ' ')
+            g = 0.9f;
+        else if (strchr("iIl1.,:;'!|", ch))
+            g = 0.7f;
+        else if (strchr("fjrt()[]-/", ch))
+            g = 1.0f;
+        else if (ch == 'm' || ch == 'w')
+            g = 1.9f;
+        else if (ch == 'M' || ch == 'W')
+            g = 2.0f;
+        else if (ch >= 'A' && ch <= 'Z')
+            g = 1.6f;
+        else if (ch >= '0' && ch <= '9')
+            g = 1.35f;
+        else if (ch >= 'a' && ch <= 'z')
+            g = 1.3f;
+        else
+            g = 1.4f;
+        w += g;
+    }
+    return w * size;
+}
+
+// The dark plate behind a line of text whose row starts at y (rows 2.5
+// tall), from x0 to x1: solid enough to read over a light stage.
+static void Text_Plate(float x0, float x1, float y)
+{
+    Hud_Rect(x0, y + 0.15f, x1, y + 2.35f, Color_Over(color_plate, 0.72f));
 }
 
 ///////////////////////
@@ -8356,9 +8395,14 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         if (r->dim)
             tc = Color_Fill(tc, 0.6f);
         tc.a = 255;
+        Text_Plate(gx - 3.4f, gx - 3.2f + Text_Width(r->label, 0.42f) + 0.2f, ty);
         Hud_Text(r->label, gx - 3.2f, ty, 0.42f, tc);
         if (r->info[0])
-            Hud_Text(r->info, x1 + 0.5f * scale, ty, 0.42f, (GXColor){220, 220, 220, 255});
+        {
+            float ix = x1 + 0.5f * scale;
+            Text_Plate(ix - 0.2f, ix + Text_Width(r->info, 0.42f) + 0.2f, ty);
+            Hud_Text(r->info, ix, ty, 0.42f, (GXColor){220, 220, 220, 255});
+        }
     }
 }
 
@@ -8649,7 +8693,9 @@ static void Strip_Label(MeterRow *r, float cx, float y)
     if (r->dim)
         tc = Color_Fill(tc, 0.6f);
     tc.a = 255;
-    Hud_Text(r->label, cx - Text_Width(r->label, 0.42f) / 2, y - 1.25f, 0.42f, tc);
+    float w = Text_Width(r->label, 0.42f);
+    Text_Plate(cx - w / 2 - 0.2f, cx + w / 2 + 0.2f, y - 1.25f);
+    Hud_Text(r->label, cx - w / 2, y - 1.25f, 0.42f, tc);
 }
 
 // The dial's wedge, ring and hand are measured in degrees clockwise from
@@ -11001,7 +11047,9 @@ static void Ring_Backing(float cx, float cy, float s)
 // it's pressed.
 static GXColor Ring_Lit(GXColor c, float glow)
 {
-    return Color_Mix(Color_Over(c, 0.62f), Color_Over(Color_Mix(c, color_white, 0.4f), 1.f), glow);
+    // up: a dark well in the button's color, its rim and letter in the
+    // color; down: filled solid and bright, the way a trigger fills
+    return Color_Mix(Color_Over(Color_Mix(c, color_plate, 0.72f), 0.88f), Color_Over(Color_Mix(c, color_white, 0.3f), 1.f), glow);
 }
 
 // A button's outline, lighter than its fill.
@@ -11040,9 +11088,10 @@ static void Ring_Stroke(float cx, float cy, float h, GXColor c, int n, const flo
 }
 
 // The letter printed on a button, in strokes since there's no text engine.
-static void Ring_Letter(int in, float cx, float cy, float h)
+static void Ring_Letter(int in, float cx, float cy, float h, GXColor bc, float glow)
 {
-    GXColor c = Color_Over(color_plate, 0.92f);
+    // light in the button's color on the dark well, dark on the lit fill
+    GXColor c = Color_Mix(Color_Over(Color_Mix(bc, color_white, 0.5f), 0.95f), Color_Over(color_plate, 0.92f), glow);
     switch (in)
     {
     case PIN_A:
@@ -11100,7 +11149,7 @@ static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in,
     Circle_Points(cx, cy, r, 18, px, py);
     Hud_Fan(cx, cy, px, py, 18, Ring_Lit(c, glow));
     Hud_Line(px, py, 18, 1, 0.07f * s, PX, Ring_Edge(c));
-    Ring_Letter(in, cx, cy, 0.95f * r);
+    Ring_Letter(in, cx, cy, 0.95f * r, c, glow);
 }
 
 // A kidney, the shape of the X and Y buttons (and here Z): an arc rho from
@@ -11181,7 +11230,7 @@ static void Ring_Kidney(float mx, float my, float dir, float rho, float span, fl
     Hud_Line(px, py, KIDNEY_POINTS, 1, 0.07f * s, PX, Ring_Edge(c));
     // Z's bean runs diagonally under its letter, so the letter's corners
     // reach the edges sooner
-    Ring_Letter(in, mx, my, (in == PIN_Z ? 0.64f : 0.85f) * w);
+    Ring_Letter(in, mx, my, (in == PIN_Z ? 0.64f : 0.85f) * w, c, glow);
 }
 
 // The Ring look's C-stick around (cx, cy): the four arrows, lit the way the
@@ -11430,7 +11479,7 @@ static void Gem_Button(const float *px, const float *py, int n, const float *tx,
     Hud_Fan(gx, gy, px, py, n, Ring_Lit(c, glow));
     Hud_Line(px, py, n, 1, 0.07f * k, PX, Ring_Edge(c));
     Hud_Fan(gx, gy, tx, ty, tn, Color_Over(color_white, 0.16f + 0.1f * glow));
-    Ring_Letter(in, gx, gy, letter);
+    Ring_Letter(in, gx, gy, letter, c, glow);
 }
 
 static void Crest_Marquise(float cx, float cy, float k, float gx, float gy, float l, float w, float ang, float letter,
@@ -11561,7 +11610,7 @@ static void Panel_Line(float x, float y, int right, const char *text, int kind)
     float size = 0.45f;
     float w = 1.7f + Text_Width(text, size);
     float x0 = right ? x - w : x;
-    Hud_Rect(x0, y + 0.15f, x0 + w, y + 2.35f, Color_Fill(color_plate, 0.6f));
+    Text_Plate(x0, x0 + w, y);
     GXColor sq = kind >= 0 ? Cue_Color(kind) : Color_Fill(color_white, kind == -2 ? 0 : 0.3f); // -2: no square
     GXColor tc = {235, 235, 235, 255};
     if (right)
@@ -15869,9 +15918,10 @@ void Event_Update(void)
     Assist_Update();
     HSD_Pad *pad = PadGetMaster(Advance_Port());
     int down = pad->down;
-    // quick toggles: L or R held (a light press past 60% counts) or Z held,
-    // with the D-pad, which does nothing else meanwhile
-    int lr = (pad->held & (HSD_TRIGGER_L | HSD_TRIGGER_R)) || pad->ftriggerLeft >= 0.6f || pad->ftriggerRight >= 0.6f;
+    // quick toggles: L or R clicked all the way (a light press doesn't
+    // count, so the D-pad while shielding does nothing) or Z held, with the
+    // D-pad, which does nothing else meanwhile
+    int lr = (pad->held & (HSD_TRIGGER_L | HSD_TRIGGER_R)) != 0;
     int z = (pad->held & HSD_TRIGGER_Z) != 0;
     if (lr || z)
     {

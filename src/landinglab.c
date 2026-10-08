@@ -3796,6 +3796,8 @@ void Event_ChangeScript(GOBJ *menu, int value);
 void Event_ChangeCamera(GOBJ *menu, int value);
 void Event_ChangeView(GOBJ *menu, int value);
 void Event_SaveView(GOBJ *menu);
+void Event_NameView(GOBJ *menu);
+void Event_PresetName(GOBJ *menu);
 void Event_ChangeLedgeStart(GOBJ *menu, int value);
 void Event_ChangeRoutes(GOBJ *menu, int value);
 void Event_ChangePreset(GOBJ *menu, int value);
@@ -3838,7 +3840,10 @@ static const int reset_delay_hit[] = {120, 60, 30, 1};
 static const int reset_delay_miss[] = {60, 20, 1, 1};
 static const char *start_names[] = {"Ledge", "Saved Position"};
 static const char *cam_names[] = {"Normal", "Zoom", "Fixed", "Advanced"};
-static const char *view_names[] = {"None", "View 1", "View 2", "View 3", "View 4"};
+#define VIEW_SLOTS 8 // camera views per stage
+static char view_label[VIEW_SLOTS][20];
+static const char *view_names[VIEW_SLOTS + 1] = {"None", view_label[0], view_label[1], view_label[2], view_label[3],
+                                                 view_label[4], view_label[5], view_label[6], view_label[7]};
 #define LL_SCRIPT_MAX 48 // scripts read from the script file
 static const char *script_names[LL_SCRIPT_MAX + 2] = {"Off"}; // and All
 // Debug Log levels: each one adds to the one before
@@ -4065,6 +4070,7 @@ enum options_camera
     CAMOPT_MODE,
     CAMOPT_VIEW,
     CAMOPT_SAVE,
+    CAMOPT_NAME,
 
     CAMOPT_COUNT
 };
@@ -4087,18 +4093,26 @@ static EventOption Options_Camera[CAMOPT_COUNT] = {
         .name = "View",
         .value_num = countof(view_names),
         .values = view_names,
-        .desc = {"Jump the camera to a saved view and hold it",
-                 "there (Advanced mode, so it can still be moved).",
-                 "Presets keep the view they were saved with."},
+        .desc = {"Jump the camera to a saved view (Advanced mode,",
+                 "so it can still be moved). Each stage has its own",
+                 "8 views. Presets keep which one they were saved",
+                 "with."},
         .OnChange = Event_ChangeView,
     },
     {
         .kind = OPTKIND_FUNC,
         .name = "Save View",
         .desc = {"Keep the camera as it is now as the view picked",
-                 "above (pick View 1 to 4 first). Set it up in",
-                 "Advanced mode, or pause on a moment you like."},
+                 "above, on this stage. Set it up in Advanced",
+                 "mode, or pause on a moment you like."},
         .OnSelect = Event_SaveView,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Name View",
+        .desc = {"Give the view picked above a name (save it",
+                 "first)."},
+        .OnSelect = Event_NameView,
     },
 };
 
@@ -4792,7 +4806,8 @@ enum preset_slot
 
     PS_COUNT
 };
-static const char *preset_names[PS_COUNT] = {"User Custom", "Preset 1", "Preset 2", "Preset 3", "Preset 4",
+static char preset_label[PS_SAVED][20]; // Preset 1 to 4, or their names
+static const char *preset_names[PS_COUNT] = {"User Custom", preset_label[1], preset_label[2], preset_label[3], preset_label[4],
                                              "Defaults", "Minimal", "Everything", "Ledge Drill"};
 static char preset_desc[3][52];      // the chosen preset's settings, in short
 static char preset_card_desc[3][52]; // what the memory card is doing
@@ -4802,6 +4817,7 @@ enum options_presets
     PROPT_PICK,
     PROPT_LOAD,
     PROPT_SAVE,
+    PROPT_NAME,
     PROPT_START,
     PROPT_CARD,
 
@@ -4832,6 +4848,13 @@ static EventOption Options_Presets[PROPT_COUNT] = {
                  "Minimal, Everything and Ledge Drill are built",
                  "in and stay as they are."},
         .OnSelect = Event_PresetSave,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Name Preset",
+        .desc = {"Give the preset above a name: Preset 1 to 4",
+                 "only."},
+        .OnSelect = Event_PresetName,
     },
     {
         .kind = OPTKIND_STRING,
@@ -5000,12 +5023,23 @@ typedef struct PresetSlot
 } PresetSlot;
 
 #define PRESET_MAGIC 0x4C4C5052 // "LLPR"
-#define PRESET_VERSION 2
-#define CAM_VIEWS 4
-typedef struct CamView
+#define PRESET_VERSION 3
+#define NAME_LEN 12   // letters in a view's or preset's name
+#define VIEW_POOL 48  // views kept, all stages together
+typedef struct OldView // version 2's, one set for every stage
 {
     u8 used;
     u8 pad[3];
+    Vec3 eye, interest;
+    float fov;
+} OldView;
+typedef struct CamView
+{
+    u8 used;
+    u8 stage; // external stage id
+    u8 slot;  // 1 to VIEW_SLOTS
+    u8 pad;
+    char name[NAME_LEN + 4];
     Vec3 eye, interest;
     float fov;
 } CamView;
@@ -5016,8 +5050,22 @@ typedef struct PresetFile
     u8 start; // the preset loaded at start
     u8 pad;
     PresetSlot slot[PS_SAVED];
-    CamView view[CAM_VIEWS]; // Camera > View 1 to 4
+    OldView old_view[4];                   // version 2's views: moved to the first stage it's read on
+    char preset_name[PS_SAVED][NAME_LEN + 4]; // [0], User Custom, isn't named
+    CamView view[VIEW_POOL];
 } PresetFile;
+static CamView *View_Find(int v);
+static CamView *View_New(int v);
+
+// a name, cut to NAME_LEN letters
+static void Name_Copy(char *to, const char *from)
+{
+    int i = 0;
+    for (; i < NAME_LEN && from[i]; i++)
+        to[i] = from[i];
+    to[i] = 0;
+}
+static void Labels_Refresh(void);
 
 typedef struct PresetMenu
 {
@@ -5340,6 +5388,7 @@ static void Presets_Init(void)
     Preset_Build(&preset_builtin[PS_EVERYTHING - PS_SAVED], def, preset_everything, countof(preset_everything));
     Preset_Build(&preset_builtin[PS_LEDGE - PS_SAVED], def, preset_ledge, countof(preset_ledge));
     Options_Presets[PROPT_START].val = PS_USER;
+    Labels_Refresh();
     Preset_Describe(Options_Presets[PROPT_PICK].val);
     Card_Load();
 }
@@ -5355,6 +5404,26 @@ static void Presets_Loaded(int ok)
         preset_file->version = PRESET_VERSION;
         preset_file->start = PS_USER;
     }
+    // version 2's views, from before views were per stage, go to this one
+    for (int i = 0; i < 4; i++)
+    {
+        OldView *o = &preset_file->old_view[i];
+        CamView *w = o->used ? View_New(i + 1) : 0;
+        if (w)
+        {
+            w->eye = o->eye;
+            w->interest = o->interest;
+            w->fov = o->fov;
+            w->used = 1;
+            preset_dirty = 1;
+        }
+        memset(o, 0, sizeof(*o));
+    }
+    for (int i = 0; i < PS_SAVED; i++)
+        preset_file->preset_name[i][NAME_LEN] = 0;
+    for (int i = 0; i < VIEW_POOL; i++)
+        preset_file->view[i].name[NAME_LEN] = 0;
+    Labels_Refresh();
     int start = preset_file->start < PS_COUNT ? preset_file->start : PS_USER;
     Options_Presets[PROPT_START].val = start;
     Preset_Apply(Preset_Slot(start));
@@ -5382,6 +5451,7 @@ typedef struct CardImage
     u32 size;
     PresetFile file;
 } CardImage;
+typedef char card_image_fits[sizeof(CardImage) <= 8192 ? 1 : -1]; // one block
 #define CARD_READ_LEN ((sizeof(CardImage) + CARD_READ_SIZE - 1) & ~(CARD_READ_SIZE - 1))
 
 enum card_step
@@ -5488,15 +5558,15 @@ static void Card_Load(void)
                 r = CARDRead(&card_fi, card_buf, CARD_READ_LEN, 0);
                 CARDClose(&card_fi);
                 CardImage *img = (CardImage *)card_buf;
-                // a version 1 file is this one without the views: its
-                // presets are kept
+                // older files are this one cut short: what they have
+                // is kept
                 u32 size = img->size;
-                if (r == CARD_RESULT_READY && size >= __builtin_offsetof(PresetFile, view) && size <= sizeof(PresetFile) &&
+                if (r == CARD_RESULT_READY && size >= __builtin_offsetof(PresetFile, old_view) && size <= sizeof(PresetFile) &&
                     img->sum == Card_Sum(&img->file, size))
                 {
                     memset(preset_file, 0, sizeof(PresetFile));
                     memcpy(preset_file, &img->file, size);
-                    if (preset_file->version == 1)
+                    if (preset_file->version < PRESET_VERSION)
                         preset_file->version = PRESET_VERSION;
                     ok = 1;
                     Card_Say("Kept in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
@@ -5735,6 +5805,60 @@ typedef struct DevCam
 } DevCam;
 #define dev_cam ((DevCam *)0x80453004)
 
+// A view saved on this stage in slot v (1 to VIEW_SLOTS), or 0.
+static CamView *View_Find(int v)
+{
+    int stage = Stage_GetExternalID();
+    for (int i = 0; i < VIEW_POOL; i++)
+    {
+        CamView *w = &preset_file->view[i];
+        if (w->used && w->stage == stage && w->slot == v)
+            return w;
+    }
+    return 0;
+}
+
+// Slot v on this stage to save into: the one there, or a free one (0 when
+// the file has no room left).
+static CamView *View_New(int v)
+{
+    CamView *w = View_Find(v);
+    if (w)
+        return w;
+    for (int i = 0; i < VIEW_POOL; i++)
+    {
+        w = &preset_file->view[i];
+        if (!w->used)
+        {
+            memset(w, 0, sizeof(*w));
+            w->stage = Stage_GetExternalID();
+            w->slot = v;
+            return w;
+        }
+    }
+    return 0;
+}
+
+// The menus' names for the views on this stage and the presets.
+static void Labels_Refresh(void)
+{
+    for (int i = 1; i < PS_SAVED; i++)
+    {
+        if (preset_file->preset_name[i][0])
+            strcpy(preset_label[i], preset_file->preset_name[i]);
+        else
+            sprintf(preset_label[i], "Preset %d", i);
+    }
+    for (int v = 1; v <= VIEW_SLOTS; v++)
+    {
+        CamView *w = View_Find(v);
+        if (w && w->name[0])
+            strcpy(view_label[v - 1], w->name);
+        else
+            sprintf(view_label[v - 1], w ? "View %d" : "View %d (empty)", v);
+    }
+}
+
 // The match camera's COBJ: Match_GetCObj gives its GOBJ, despite the name.
 // It's the one the stage is drawn with in every camera mode; MexTK's
 // stc_matchcam_cobj is a copy the game only keeps up in the normal and fixed
@@ -5747,11 +5871,11 @@ static COBJ *View_CObj(void)
 
 static void View_Apply(int v)
 {
-    if (v <= 0 || !preset_file->view[v - 1].used)
+    CamView *w = View_Find(v);
+    if (!w)
         return;
     Options_Camera[CAMOPT_MODE].val = CAM_ADVANCED;
     Event_ChangeCamera(0, CAM_ADVANCED);
-    CamView *w = &preset_file->view[v - 1];
     dev_cam->free_eye_pos = w->eye;
     dev_cam->free_int_pos = w->interest;
     dev_cam->free_fov = w->fov;
@@ -5759,7 +5883,7 @@ static void View_Apply(int v)
 
 void Event_ChangeView(GOBJ *menu, int value)
 {
-    if (value > 0 && !preset_file->view[value - 1].used)
+    if (value > 0 && !View_Find(value))
     {
         SFX_PlayCommon(3); // nothing saved there yet
         return;
@@ -5770,24 +5894,245 @@ void Event_ChangeView(GOBJ *menu, int value)
 void Event_SaveView(GOBJ *menu)
 {
     int v = Options_Camera[CAMOPT_VIEW].val;
-    if (v <= 0)
+    CamView *w = v > 0 ? View_New(v) : 0;
+    COBJ *cobj = View_CObj();
+    if (!w || !cobj)
     {
-        SFX_PlayCommon(3);
+        SFX_PlayCommon(3); // no view picked, or every view in the file is used
         return;
     }
-    CamView *w = &preset_file->view[v - 1];
-    COBJ *cobj = View_CObj();
-    if (!cobj)
-        return;
     COBJ_GetEyePosition(cobj, &w->eye);
     COBJ_GetInterest(cobj, &w->interest);
     w->fov = cobj->projection_param.perspective.fov;
     w->used = 1;
     preset_dirty = 1;
-    OSReport("LLVIEW saved %d: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f\n", v, w->eye.X, w->eye.Y, w->eye.Z,
-             w->interest.X, w->interest.Y, w->interest.Z, w->fov);
+    Labels_Refresh();
+    OSReport("LLVIEW saved %d on stage %d: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f\n", v, w->stage, w->eye.X, w->eye.Y,
+             w->eye.Z, w->interest.X, w->interest.Y, w->interest.Z, w->fov);
     View_Apply(v);
     SFX_PlayCommon(1);
+}
+
+///////////////////////
+/// Naming          ///
+///////////////////////
+
+// Views and presets are named on a letter grid drawn over the paused game,
+// in place of the menu: the stick or D-pad picks a key, A types it, B
+// deletes (or leaves, with nothing left to delete), Y types a space, X
+// switches case and Start keeps the name.
+enum { NAME_VIEW, NAME_PRESET };
+#define NAMER_COLS 10
+#define NAMER_KEYS 4 // the wide keys on the last row
+#define NAMER_ROWS 5
+#define NAMER_SUBTEXTS (4 * NAMER_COLS + NAMER_KEYS)
+static const char *namer_rows[2][4] = {
+    {"ABCDEFGHIJ", "KLMNOPQRST", "UVWXYZ-.'!", "1234567890"},
+    {"abcdefghij", "klmnopqrst", "uvwxyz-.'!", "1234567890"},
+};
+static struct
+{
+    u8 on, what, slot, lower, dirty;
+    int cx, cy, len;
+    char buf[NAME_LEN + 1];
+    char title[48];
+    Text *text;
+} namer;
+
+static const char *Stage_Name(void)
+{
+    switch (Stage_GetExternalID())
+    {
+    case GRKINDEXT_BATTLE:
+        return "Battlefield";
+    case GRKINDEXT_FD:
+        return "Final Destination";
+    case GRKINDEXT_OLDPU:
+        return "Dream Land";
+    case GRKINDEXT_STORY:
+        return "Yoshi's Story";
+    case GRKINDEXT_IZUMI:
+        return "Fountain of Dreams";
+    case GRKINDEXT_PSTAD:
+        return "Pokemon Stadium";
+    }
+    return "this stage";
+}
+
+static int Namer_Think(GOBJ *g);
+
+static void Namer_Open(int what, int slot, const char *name)
+{
+    MenuData *md = event_vars->menu_gobj->userdata;
+    HUDCamData *hud = event_vars->hudcam_gobj->userdata;
+    memset(&namer, 0, sizeof(namer));
+    namer.what = what;
+    namer.slot = slot;
+    Name_Copy(namer.buf, name);
+    namer.len = strlen(namer.buf);
+    namer.lower = namer.len > 0;
+    if (what == NAME_VIEW)
+        sprintf(namer.title, "Name view %d on %s", slot, Stage_Name());
+    else
+        sprintf(namer.title, "Name preset %d", slot);
+    Text *t = Text_CreateText(2, hud->canvas);
+    t->kerning = 1;
+    t->align = 1;
+    t->use_aspect = 0;
+    t->is_depth_compare = 0;
+    t->viewport_scale.X = 0.1f;
+    t->viewport_scale.Y = 0.1f;
+    for (int i = 0; i < NAMER_SUBTEXTS; i++)
+        Text_AddSubtext(t, 0, 0, "");
+    namer.text = t;
+    namer.dirty = 1;
+    namer.on = 1;
+    md->custom_gobj_think = Namer_Think;
+    SFX_PlayCommon(1);
+}
+
+static void Namer_Close(int keep)
+{
+    MenuData *md = event_vars->menu_gobj->userdata;
+    if (keep)
+    {
+        while (namer.len > 0 && namer.buf[namer.len - 1] == ' ')
+            namer.buf[--namer.len] = 0;
+        char *to = 0;
+        if (namer.what == NAME_VIEW)
+        {
+            CamView *w = View_Find(namer.slot);
+            to = w ? w->name : 0;
+        }
+        else
+            to = preset_file->preset_name[namer.slot];
+        if (to)
+        {
+            memset(to, 0, NAME_LEN + 4);
+            strcpy(to, namer.buf);
+            preset_dirty = 1;
+            Labels_Refresh();
+            OSReport("LLNAME %s %d \"%s\"\n", namer.what == NAME_VIEW ? "view" : "preset", namer.slot, namer.buf);
+        }
+    }
+    if (namer.text)
+        Text_Destroy(namer.text);
+    namer.text = 0;
+    namer.on = 0;
+    md->custom_gobj_think = 0;
+    SFX_PlayCommon(keep ? 1 : 0);
+}
+
+static void Namer_Type(char c)
+{
+    if (namer.len >= NAME_LEN)
+    {
+        SFX_PlayCommon(3);
+        return;
+    }
+    namer.buf[namer.len++] = c;
+    namer.buf[namer.len] = 0;
+    // a capital to start with, then small letters, as names are written
+    if (namer.len == 1 && c >= 'A' && c <= 'Z')
+        namer.lower = 1;
+    SFX_PlayCommon(1);
+}
+
+static int Namer_Think(GOBJ *g)
+{
+    MenuData *md = event_vars->menu_gobj->userdata;
+    HSD_Pad *pad = PadGetMaster(md->controller_index);
+    int rep = pad->repeat, down = pad->down;
+    int cols = namer.cy == NAMER_ROWS - 1 ? NAMER_KEYS : NAMER_COLS;
+    int prev_cx = namer.cx, prev_cy = namer.cy;
+    if (rep & (HSD_BUTTON_LEFT | HSD_BUTTON_DPAD_LEFT))
+        namer.cx = (namer.cx + cols - 1) % cols;
+    else if (rep & (HSD_BUTTON_RIGHT | HSD_BUTTON_DPAD_RIGHT))
+        namer.cx = (namer.cx + 1) % cols;
+    else if (rep & (HSD_BUTTON_UP | HSD_BUTTON_DPAD_UP | HSD_BUTTON_DOWN | HSD_BUTTON_DPAD_DOWN))
+    {
+        int dy = rep & (HSD_BUTTON_UP | HSD_BUTTON_DPAD_UP) ? NAMER_ROWS - 1 : 1;
+        int from_keys = namer.cy == NAMER_ROWS - 1;
+        namer.cy = (namer.cy + dy) % NAMER_ROWS;
+        int to_keys = namer.cy == NAMER_ROWS - 1;
+        // the wide keys sit under the columns they span
+        if (to_keys && !from_keys)
+            namer.cx = namer.cx * NAMER_KEYS / NAMER_COLS;
+        else if (from_keys && !to_keys)
+            namer.cx = namer.cx * NAMER_COLS / NAMER_KEYS + 1;
+    }
+    if (namer.cx != prev_cx || namer.cy != prev_cy)
+    {
+        namer.dirty = 1;
+        SFX_PlayCommon(2);
+    }
+
+    if (down & HSD_BUTTON_START)
+    {
+        Namer_Close(1);
+        return 0;
+    }
+    if (down & HSD_BUTTON_A)
+    {
+        if (namer.cy < NAMER_ROWS - 1)
+            Namer_Type(namer_rows[namer.lower][namer.cy][namer.cx]);
+        else if (namer.cx == 0)
+            Namer_Type(' ');
+        else if (namer.cx == 1 && namer.len > 0)
+        {
+            namer.buf[--namer.len] = 0;
+            SFX_PlayCommon(0);
+        }
+        else if (namer.cx == 2)
+            namer.lower ^= 1;
+        else if (namer.cx == 3)
+        {
+            Namer_Close(1);
+            return 0;
+        }
+        namer.dirty = 1;
+    }
+    else if (down & HSD_BUTTON_B)
+    {
+        if (namer.len == 0)
+        {
+            Namer_Close(0);
+            return 0;
+        }
+        namer.buf[--namer.len] = 0;
+        SFX_PlayCommon(0);
+    }
+    else if (down & HSD_BUTTON_Y)
+        Namer_Type(' ');
+    else if (down & HSD_BUTTON_X)
+    {
+        namer.lower ^= 1;
+        namer.dirty = 1;
+    }
+    return 0; // Start is read above: it keeps the name rather than leaving the menu
+}
+
+void Event_NameView(GOBJ *menu)
+{
+    int v = Options_Camera[CAMOPT_VIEW].val;
+    CamView *w = v > 0 ? View_Find(v) : 0;
+    if (!w)
+    {
+        SFX_PlayCommon(3); // pick a saved view first
+        return;
+    }
+    Namer_Open(NAME_VIEW, v, w->name);
+}
+
+void Event_PresetName(GOBJ *menu)
+{
+    int p = Options_Presets[PROPT_PICK].val;
+    if (p < PS_1 || p >= PS_SAVED)
+    {
+        SFX_PlayCommon(3); // User Custom and the built-in ones keep their names
+        return;
+    }
+    Namer_Open(NAME_PRESET, p, preset_file->preset_name[p]);
 }
 
 // Each frame: closing the menu keeps the settings in User Custom, and the
@@ -11957,6 +12302,73 @@ static void World_GX(GOBJ *gobj, int pass)
     vis_k = 1.f;
 }
 
+// The name picker's grid (Naming above), over everything else.
+#define NAMER_CELL_W 3.2f
+#define NAMER_CELL_H 3.0f
+#define NAMER_TOP 4.6f
+static void Namer_Key(int r, int c, float *x0, float *y0, float *x1, float *y1)
+{
+    float left = -NAMER_COLS * NAMER_CELL_W / 2;
+    float w = r == NAMER_ROWS - 1 ? NAMER_COLS * NAMER_CELL_W / NAMER_KEYS : NAMER_CELL_W;
+    *x0 = left + c * w + 0.15f;
+    *x1 = left + (c + 1) * w - 0.15f;
+    *y1 = NAMER_TOP - r * NAMER_CELL_H;
+    *y0 = *y1 - NAMER_CELL_H + 0.3f;
+}
+
+static void Namer_Draw(void)
+{
+    static const char *keys[NAMER_KEYS] = {"Space", "Delete", 0, "Done"};
+    GXColor ink = {235, 235, 235, 255}, dark = {10, 12, 24, 255}, lit = {120, 150, 255, 255};
+    Hud_Rect(-40.f, -30.f, 40.f, 30.f, Color_Over(color_plate, 0.6f));
+    float px = NAMER_COLS * NAMER_CELL_W / 2 + 1.2f;
+    Hud_Rect(-px, -13.6f, px, 13.f, Color_Over(color_plate, 0.92f));
+    Hud_Frame(-px, -13.6f, px, 13.f, 0.12f, Color_Over(lit, 0.6f));
+    Hud_TextAligned(namer.title, -px + 1.f, 10.f, 0.5f, ink, 0);
+    // the name so far, with the cursor after it
+    Hud_Rect(-px + 1.f, 6.6f, px - 1.f, 9.4f, Color_Over(color_white, 0.08f));
+    Hud_Rect(-px + 1.f, 6.6f, px - 1.f, 6.75f, Color_Over(lit, 0.8f));
+    char line[NAME_LEN + 2];
+    sprintf(line, "%s_", namer.buf);
+    Hud_TextAligned(line, -px + 1.6f, 6.75f, 0.6f, color_white, 0);
+
+    for (int r = 0; r < NAMER_ROWS; r++)
+    {
+        int cols = r == NAMER_ROWS - 1 ? NAMER_KEYS : NAMER_COLS;
+        for (int c = 0; c < cols; c++)
+        {
+            float x0, y0, x1, y1;
+            Namer_Key(r, c, &x0, &y0, &x1, &y1);
+            int on = r == namer.cy && c == namer.cx;
+            Hud_Rect(x0, y0, x1, y1, on ? Color_Over(lit, 1.f) : Color_Over(color_white, 0.1f));
+            if (on)
+                Hud_Frame(x0 - 0.1f, y0 - 0.1f, x1 + 0.1f, y1 + 0.1f, 0.15f, color_white);
+            if (!namer.dirty || !namer.text)
+                continue;
+            int i = r * NAMER_COLS + c;
+            char glyph[2] = {0, 0};
+            const char *label;
+            if (r < NAMER_ROWS - 1)
+            {
+                glyph[0] = namer_rows[namer.lower][r][c];
+                label = glyph;
+            }
+            else
+                label = keys[c] ? keys[c] : namer.lower ? "ABC" : "abc";
+            float size = r < NAMER_ROWS - 1 ? 0.55f : 0.45f;
+            // as Hud_TextAligned places a row 2.5 tall whose bottom is y
+            float y = (y0 + y1) / 2 - 1.25f;
+            Text_SetText(namer.text, i, label);
+            Text_SetScale(namer.text, i, size, size);
+            Text_SetPosition(namer.text, i, (x0 + x1) / 2 * 10.f, y * -10.f - 37.5f);
+            Text_SetColor(namer.text, i, on ? &dark : &ink);
+        }
+    }
+    namer.dirty = 0;
+    Hud_TextAligned("A type   B delete   Y space   X case   Start done", -px + 1.f, -12.9f, 0.4f,
+                    (GXColor){180, 185, 200, 255}, 0);
+}
+
 static void Hud_GX(GOBJ *gobj, int pass)
 {
     if (pass != 2 || capture_clean)
@@ -11969,6 +12381,13 @@ static void Hud_GX(GOBJ *gobj, int pass)
     COBJ *prev = COBJ_GetCurrent();
     CObj_SetCurrent(event_vars->hudcam_gobj->hsd_object);
     quad_num = 0;
+    if (namer.on)
+    {
+        Namer_Draw();
+        Quad_Flush();
+        CObj_SetCurrent(prev);
+        return;
+    }
     if (hide_all)
     {
         Panel_Draw(); // the toast that says so
@@ -12877,14 +13296,14 @@ static void Script_Cmd(ScriptOp *op)
     {
         char *what = Script_Word(&rest), *n = Script_Word(&rest);
         int v = n ? (int)Script_Number(&n) : 0;
-        ok = what && v >= 1 && v <= CAM_VIEWS;
+        ok = what && v >= 1 && v <= VIEW_SLOTS;
         if (!ok)
             break;
         if (Script_Is(what, "show"))
         {
             // where the camera is now, to compare with view v as saved
             COBJ *cobj = View_CObj();
-            CamView *w = &preset_file->view[v - 1];
+            CamView *w = View_Find(v);
             Vec3 eye = {0}, at = {0};
             if (cobj)
             {
@@ -12893,9 +13312,23 @@ static void Script_Cmd(ScriptOp *op)
             }
             sprintf(buf, "LLVIEW show: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f; view %d %s\n", eye.X, eye.Y, eye.Z,
                     at.X, at.Y, at.Z, cobj ? cobj->projection_param.perspective.fov : 0.f, v,
-                    !w->used ? "unsaved"
+                    !w ? "unsaved"
                     : fabs(eye.X - w->eye.X) + fabs(eye.Y - w->eye.Y) + fabs(eye.Z - w->eye.Z) < 0.5f ? "matches" : "differs");
             Log(buf);
+            break;
+        }
+        if (Script_Is(what, "name"))
+        {
+            // view name N Word: names a saved view without the letter grid
+            CamView *w = View_Find(v);
+            char *t = Script_Word(&rest);
+            ok = w && t;
+            if (ok)
+            {
+                Name_Copy(w->name, t);
+                preset_dirty = 1;
+                Labels_Refresh();
+            }
             break;
         }
         Options_Camera[CAMOPT_VIEW].val = v;

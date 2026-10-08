@@ -3958,6 +3958,7 @@ enum options_ledge
     LOPT_RESET,
     LOPT_DELAY,
     LOPT_INV,
+    LOPT_DROP,
 
     LOPT_COUNT
 };
@@ -4055,6 +4056,14 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .name = "Keep Ledge Invincibility",
         .desc = {"Keep the full intangibility while hanging, so",
                  "the routes don't shrink while you get ready."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Drop Drill",
+        .desc = {"Time letting go of the ledge: a DROP row counts",
+                 "down to the first frame you can. The stick has to",
+                 "rest on the hang's first frame, then go down or",
+                 "away. Graded, with how many of your last 10 hit."},
     },
 };
 
@@ -8666,6 +8675,8 @@ static void Meter_FromCue(int kind)
 }
 
 static int route_rows_active; // ledge routes fill the meter; the cues' rows give way
+static int drop_sid; // Falcon's state, for the drop drill's row
+static void Meter_AddDrop(int sid);
 static int route_dj_done;     // ... and its double jump happened
 static void Meter_AddRoutes(void);
 
@@ -8674,6 +8685,7 @@ static void Meter_Build(void)
     meter_rows = 0;
     route_rows_active = 0;
     Meter_AddRoutes();
+    Meter_AddDrop(drop_sid);
     if (route_rows_active)
         return; // a ledge route has the meter to itself
     if (Cues_Ai())
@@ -15162,6 +15174,133 @@ static void Route_Step(void)
 // Each frame: hanging, letting go, and every step of the route after it.
 // A step is judged a frame after it was due, so one frame late reads as
 // late rather than missed.
+// The ledge drop drill. The game lets go of the ledge only after a frame
+// of the hang with the stick at rest (CliffWait clears the flag as it
+// starts and sets it on a frame the stick is in its deadzone), so holding
+// down through the catch drops nothing: the stick rests on the hang's
+// first frame and goes down or away on the second, the first frame a drop
+// can come out. A drop on that frame or the next is a hit.
+#define DROP_HIST 10
+static int drop_w0 = -1;     // game_timer of the hang's first frame, -1 not hanging
+static int drop_catch_left;  // frames of the catch left
+static int drop_rest;        // the stick rested on the hang's first frame
+static u8 drop_hist[DROP_HIST];
+static int drop_hist_n, drop_hist_pos;
+static int drop_age = 99;    // frames since the last graded drop
+static int drop_last;        // its frame: 1 = the first possible
+
+static int Drop_On(void)
+{
+    return Options_Ledge[LOPT_DROP].val;
+}
+
+static void Drop_Think(FighterData *fp, int sid, int prev_sid)
+{
+    drop_sid = sid;
+    if (prev_sid < 0)
+        drop_w0 = -1; // a test script just put Falcon somewhere
+    if (drop_age < 99)
+        drop_age++;
+    if (sid == ASID_CLIFFCATCH)
+    {
+        Figatree *anim = fp->figatree_curr;
+        float rate = fp->state.rate > 0 ? fp->state.rate : 1.f;
+        drop_catch_left = anim ? (int)((anim->frame_num - fp->state.frame) / rate + 0.999f) : 0;
+        if (drop_w0 != -2 && Drop_On() && cue_log)
+            OSReport("LLDROP catch at %d, %d left\n", event_vars->game_timer, drop_catch_left);
+        drop_w0 = -2; // (-2: logged)
+        return;
+    }
+    if (sid == ASID_CLIFFWAIT)
+    {
+        if (drop_w0 < 0)
+        {
+            drop_w0 = event_vars->game_timer;
+            FtCliffCatch *cliff = (void *)&fp->state_var;
+            drop_rest = cliff->timer != 0;
+            if (Drop_On() && cue_log)
+                OSReport("LLDROP hang at %d rest %d\n", drop_w0, drop_rest);
+        }
+        return;
+    }
+    if (prev_sid == ASID_CLIFFWAIT && drop_w0 >= 0 && sid == ASID_FALL && Drop_On())
+    {
+        int k = event_vars->game_timer - drop_w0;
+        int hit = k >= 1 && k <= 2;
+        drop_hist[drop_hist_pos] = hit;
+        drop_hist_pos = (drop_hist_pos + 1) % DROP_HIST;
+        if (drop_hist_n < DROP_HIST)
+            drop_hist_n++;
+        int n = 0;
+        for (int i = 0; i < drop_hist_n; i++)
+            n += drop_hist[i];
+        drop_last = k;
+        drop_age = 0;
+        if (hit)
+            sprintf(text_last, "Drop frame %d, %d of last %d on 1-2", k, n, drop_hist_n);
+        else if (!drop_rest)
+            sprintf(text_last, "Drop f%d: rest stick as the hang starts", k);
+        else
+            sprintf(text_last, "Drop frame %d, %d late", k, k - 2);
+        last_kind = -1;
+        if (hit && Options_Sounds[SOPT_CHIME].val)
+            SFX_PlayRaw(303, 255, 128, 20, 3);
+        else if (!hit && Options_Sounds[SOPT_WINDOW].val)
+            SFX_PlayCommon(3);
+        char buf[96];
+        sprintf(buf, "LLDROP frame %d rest %d hits %d of %d\n", k, drop_rest, n, drop_hist_n);
+        Log(buf);
+    }
+    drop_w0 = -1;
+}
+
+// Its row in the timers: the hang's first frame (stick at rest) and the two
+// drop frames, counting down through the catch, then the result.
+static void Meter_AddDrop(int sid)
+{
+    if (!Drop_On())
+        return;
+    int hanging = sid == ASID_CLIFFWAIT && drop_w0 >= 0;
+    if (sid != ASID_CLIFFCATCH && !hanging && drop_age > 20)
+        return;
+    MeterRow *r = Meter_Add(color_galint, "DROP");
+    if (!r)
+        return;
+    if (sid == ASID_CLIFFCATCH || hanging)
+    {
+        // index 0 is now; the hang's first frame is drop_catch_left away
+        int rest = sid == ASID_CLIFFCATCH ? drop_catch_left : -(event_vars->game_timer - drop_w0);
+        if (rest >= 0)
+            Row_Set(r, rest, CELL_AIR, TONE_CUE, 1);
+        for (int j = 1; j <= 2; j++)
+            if (rest + j >= 0)
+                Row_Set(r, rest + j, CELL_PRESS, TONE_CUE, 1);
+        if (rest + 1 <= 0 && rest + 2 >= 0)
+        {
+            r->hot = rest + 1 == 0 || rest + 2 == 0 ? 2 : 1;
+            r->spent = -(rest + 1);
+        }
+        if (rest > 0)
+            sprintf(r->info, "%df", rest + 1);
+        else if (rest + 2 >= 0)
+            sprintf(r->info, "now");
+        else
+            sprintf(r->info, "late");
+    }
+    else
+    {
+        int hit = drop_last >= 1 && drop_last <= 2;
+        if (hit)
+            r->burst = drop_age;
+        else
+        {
+            r->implode = drop_age;
+            r->implode_tone = TONE_MISS;
+        }
+        sprintf(r->info, "f%d", drop_last);
+    }
+}
+
 static void Ledge_Think(FighterData *fp, int sid)
 {
     if (!ledges_found)
@@ -16372,6 +16511,7 @@ static void Event_ThinkFrame(GOBJ *event)
     Cues_End();
 
     Ledge_Think(fp, sid);
+    Drop_Think(fp, sid, prev_state_id);
     Assist_Think(fp, sid);
     Body_Flash(fp, sid);
     Slide_Update(fp);

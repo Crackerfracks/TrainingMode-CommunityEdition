@@ -119,6 +119,41 @@ shot fade after 11 hits: same timer, clearly fainter
 ai 0 A
 land 120
 set Intensity/Auto Fade = 0
+
+# Ledge drop drill: which frame of the hang a drop comes out on. Expect no
+# LLDROP frame line for the first try (the stick held from the start
+# never rested), then frames 1, 2, 3 for one, two and three frames of rest
+# (or all one higher: then the grading is off by one). The last try catches
+# the ledge for real, to log the catch length against the hang's start.
+script Drop drill
+set Ledge/Drop Drill = 1
+ledge right
+5 s:0,-1
+20
+mark held from the start: expect no LLDROP frame line before this
+ledge right
+1
+5 s:0,-1
+mark one frame of rest
+60
+ledge right
+2
+5 s:0,-1
+mark two frames of rest
+60
+ledge right
+1
+shot drop row: hang's first frame, window next
+3
+5 s:0,-1
+mark three frames of rest
+60
+air 80 20 left 0 0
+45
+mark real catch: compare LLDROP catch and hang lines
+5 s:0,-1
+60
+set Ledge/Drop Drill = 0
 closemenu
 card flush
 mark done

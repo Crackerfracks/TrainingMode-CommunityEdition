@@ -3841,6 +3841,9 @@ static const char *cam_names[] = {"Normal", "Zoom", "Fixed", "Advanced"};
 static const char *view_names[] = {"None", "View 1", "View 2", "View 3", "View 4"};
 #define LL_SCRIPT_MAX 48 // scripts read from the script file
 static const char *script_names[LL_SCRIPT_MAX + 2] = {"Off"}; // and All
+// Debug Log levels: each one adds to the one before
+enum { LOG_OFF, LOG_LANDINGS, LOG_FRAMES, LOG_ALL };
+static const char *log_level_names[] = {"Off", "Landings", "Frames", "Everything"};
 
 // The timers' looks (see the Timers menu). Each draws the same cues.
 enum near_kind
@@ -4206,11 +4209,13 @@ static EventOption Options_Dev[DOPT_COUNT] = {
         .OnChange = Event_ChangeCollDisplay,
     },
     {
-        .kind = OPTKIND_TOGGLE,
+        .kind = OPTKIND_STRING,
         .name = "Debug Log",
-        .desc = {"Write every airborne frame's state, position,",
-                 "speed and ECB to Dolphin's log. Only needed to",
-                 "report a wrong prediction."},
+        .value_num = 4,
+        .values = log_level_names,
+        .desc = {"Extra lines in Dolphin's log. Landings: timer",
+                 "presses and ledge routes. Frames: every airborne",
+                 "frame too. Everything: camera too, slows play."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -5730,11 +5735,14 @@ typedef struct DevCam
 } DevCam;
 #define dev_cam ((DevCam *)0x80453004)
 
-// The match camera's COBJ: Match_GetCObj gives its GOBJ, despite the name
+// The match camera's COBJ: Match_GetCObj gives its GOBJ, despite the name.
+// It's the one the stage is drawn with in every camera mode; MexTK's
+// stc_matchcam_cobj is a copy the game only keeps up in the normal and fixed
+// modes, so it goes stale in Advanced (the develop camera).
 static COBJ *View_CObj(void)
 {
     GOBJ *g = (GOBJ *)Match_GetCObj();
-    return g ? g->hsd_object : 0;
+    return g ? g->hsd_object : *stc_matchcam_cobj;
 }
 
 static void View_Apply(int v)
@@ -7070,9 +7078,9 @@ static void Landing_Judge(FighterData *fp)
             Text_Exact();
         }
 
-        sprintf(buf, "LandingLab landing: %s with %s pressed at %d x %.4f y %.4f, %s (from %d)%s\n",
+        sprintf(buf, "LandingLab landing: %s with %s pressed at %d x %.4f y %.4f line %d, %s (from %d)%s\n",
                 land_kind_names[kind], pressed >= 0 ? tracked_state_names[pressed] : (dodge == DODGE_RIGHT ? "airdodge right" : "airdodge left"),
-                event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y,
+                event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, fp->coll_data.ground_index,
                 predicted ? "predicted" : "not predicted", seg_start_timer, learning ? " learning" : "");
         Log(buf);
         return;
@@ -7116,8 +7124,8 @@ static void Landing_Judge(FighterData *fp)
         Text_Exact();
     }
 
-    sprintf(buf, "LandingLab landing: %s at %d x %.4f, predicted %s at %d x %.4f (from %d)%s%s\n",
-            land_kind_names[kind], event_vars->game_timer, fp->phys.pos.X,
+    sprintf(buf, "LandingLab landing: %s at %d x %.4f y %.4f line %d, predicted %s at %d x %.4f (from %d)%s%s\n",
+            land_kind_names[kind], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, fp->coll_data.ground_index,
             land_kind_names[pred_seg->land_kind], predicted, pred_seg->pos[pred_seg->land_frame].X,
             seg_start_timer, learning ? " learning" : "", late ? " late-input" : "");
     Log(buf);
@@ -7643,7 +7651,7 @@ static int Cue_FlashAge(Cue *e)
 static int Hud_FromWorld(float x, float y, float *hx, float *hy)
 {
     Vec3 in = {x, y, 0}, out;
-    HSD_GXProject(*stc_matchcam_cobj, &in, &out, 1);
+    HSD_GXProject(View_CObj(), &in, &out, 1);
     *hx = (out.X - 320.f) / HUD_PX;
     *hy = (240.f - out.Y) / HUD_PY;
     return *hx > -HUD_W - 10.f && *hx < HUD_W + 10.f && *hy > -HUD_H - 10.f && *hy < HUD_H + 10.f;
@@ -11678,6 +11686,8 @@ static void Panel_Draw(void)
 // exact mapping), and what the timers and the prediction hold. Logged from
 // the draw so the camera is the one this frame is rendered with.
 static int script_cur; // defined with the scripts below
+// test scripts log everything
+static int Log_Level(void) { return script_cur >= 0 ? LOG_ALL : Options_Dev[DOPT_LOG].val; }
 static int capture_clean; // hide everything the event draws (D-pad up in Frame Advance, with the Debug Log on)
 
 static void Log_Camera(FighterData *fp)
@@ -11688,7 +11698,7 @@ static void Log_Camera(FighterData *fp)
         return;
     last = event_vars->game_timer;
 
-    COBJ *cobj = *stc_matchcam_cobj;
+    COBJ *cobj = View_CObj();
     char buf[512];
     int n = sprintf(buf, "LLCAM %d vp %.1f %.1f %.1f %.1f pts", event_vars->game_timer,
                     cobj->viewport_left, cobj->viewport_right, cobj->viewport_top, cobj->viewport_bottom);
@@ -11904,7 +11914,7 @@ static void World_GX(GOBJ *gobj, int pass)
 
     FighterData *fp = Fighter_GetGObj(0)->userdata;
     compass_num = 0;
-    if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+    if (Log_Level() >= LOG_ALL)
         Log_Camera(fp);
     if (capture_clean || hide_all)
         return;
@@ -14532,7 +14542,7 @@ static void Ledge_Think(FighterData *fp, int sid)
         if (hang_ledge >= 0 && ledges[hang_ledge].have)
         {
             Routes_Show();
-            if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+            if (Log_Level())
             {
                 LedgeEntry *L = &ledges[hang_ledge];
                 if (!L->logged)
@@ -14610,7 +14620,7 @@ static void Ledge_Think(FighterData *fp, int sid)
                 route_landed = -1;
                 route_galint = -1;
                 route_pred = Route_Galint(&route_cur, 0, intang);
-                if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+                if (Log_Level())
                     Route_Log("follow", &ledges[ledge], &route_cur, route_pred);
                 route_hit = event_vars->game_timer;
                 prev_fastfall = 0;
@@ -15339,7 +15349,7 @@ static void Panel_UpdateSide(FighterData *fp)
 
     // where Falcon is on screen: the camera turns as well as moves, so
     // comparing with its eye position isn't enough
-    COBJ *cobj = *stc_matchcam_cobj;
+    COBJ *cobj = View_CObj();
     Vec3 pos = {fp->phys.pos.X, fp->phys.pos.Y + body_offset, 0};
     Vec3 screen;
     HSD_GXProject(cobj, &pos, &screen, 1);
@@ -15514,7 +15524,7 @@ void Event_Think(GOBJ *event)
         perf_think = ms;
     if (++perf_frames >= 60)
     {
-        if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+        if (Log_Level())
         {
             char buf[96];
             sprintf(buf, "LLPERF %d think %.2f ms solve %.2f ms quads %d\n", event_vars->game_timer, perf_think, perf_solve, quad_peak);
@@ -15546,8 +15556,8 @@ static void Event_ThinkFrame(GOBJ *event)
 
     ai_show_all = Options_Cues[COPT_AI_FILTER].val == 1;
     ai_only = Options_Cues[COPT_AI_AERIAL].val ? AERIAL_BIT(TS_AIRN + Options_Cues[COPT_AI_AERIAL].val - 1) : 0;
-    int logging = Options_Dev[DOPT_LOG].val || script_cur >= 0;
-    cue_log = logging;
+    int logging = Log_Level() >= LOG_FRAMES;
+    cue_log = Log_Level() >= LOG_LANDINGS;
 
     int sid = fp->state_id;
     int ts = Tracked_Index(sid);
@@ -15934,7 +15944,7 @@ void Event_Update(void)
     // a clean frame for mockups, the same frame as the one with cues. Only
     // for the Developer's captures, and never left on past Frame Advance:
     // pressed by chance, everything the event draws would stay hidden.
-    if ((down & HSD_BUTTON_DPAD_UP) && Options_Game[GOPT_FRAME_ADV].val && (Options_Dev[DOPT_LOG].val || script_cur >= 0))
+    if ((down & HSD_BUTTON_DPAD_UP) && Options_Game[GOPT_FRAME_ADV].val && Log_Level())
         capture_clean ^= 1;
     else if ((down & HSD_BUTTON_DPAD_UP) && hang_ledge >= 0 && route_list_num > 1 && Routes_On())
     {

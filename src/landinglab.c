@@ -4314,6 +4314,98 @@ static EventMenu Menu_Rumble = {
     .options = Options_Rumble,
 };
 
+// Intensity by group: each one fainter or bolder than the main Intensity
+// level, the controller on a level of its own, and Auto Fade.
+enum options_intensity
+{
+    IOPT_CUES,
+    IOPT_PATHS,
+    IOPT_TIMERS,
+    IOPT_LEDGE,
+    IOPT_PAD,
+    IOPT_FADE,
+    IOPT_FADE_RESET,
+
+    IOPT_COUNT
+};
+enum { FADE_OFF, FADE_TIMERS, FADE_CUES, FADE_BOTH };
+static const char *group_offset_names[] = {"2 Fainter", "1 Fainter", "Same", "1 Bolder", "2 Bolder"};
+static const char *fade_names[] = {"Off", "Timers", "Cues", "Both"};
+void Event_FadeReset(GOBJ *menu);
+
+static EventOption Options_Intensity[IOPT_COUNT] = {
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Cues",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"Body Flash and Platform Glow, against the",
+                 "Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Paths",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"The landing and body paths, frame dots, input",
+                 "markers and slide-off line, against the",
+                 "Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Timers",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"Every timer: the strip, near Falcon, the landing",
+                 "spot, waveland and wavedash, against the",
+                 "Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Ledge",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"Ledge routes, their inputs and their timers,",
+                 "against the Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Controller",
+        .val = 2,
+        .value_num = countof(intensity_names),
+        .values = intensity_names,
+        .desc = {"The controller display, on its own level: the",
+                 "main Intensity doesn't change it."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Auto Fade",
+        .value_num = countof(fade_names),
+        .values = fade_names,
+        .desc = {"Fade the timers or cues as you learn a timing:",
+                 "each kind (AI, NIL, waveland) follows how many of",
+                 "your last 10 or so tries hit. A miss brings it",
+                 "back a little, a run of misses all the way."},
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Reset Fade",
+        .desc = {"Forget the hit rates Auto Fade goes by, so",
+                 "everything shows in full again."},
+        .OnSelect = Event_FadeReset,
+    },
+};
+
+static EventMenu Menu_Intensity = {
+    .name = "Intensity by Group",
+    .option_num = countof(Options_Intensity),
+    .options = Options_Intensity,
+};
+
 // What the cues show, and how Falcon and the floor light up with them.
 enum options_cues
 {
@@ -4325,6 +4417,7 @@ enum options_cues
     COPT_FLASH,
     COPT_GLOW,
     COPT_INTENSITY,
+    COPT_GROUPS,
     COPT_RUMBLE,
 
     COPT_COUNT
@@ -4398,8 +4491,15 @@ static EventOption Options_Cues[COPT_COUNT] = {
         .values = intensity_names,
         .desc = {"How strongly the cues, paths and timers show,",
                  "from faint to bold. Standard is the usual look.",
-                 "The controller and the panel stay as they are.",
+                 "Set each group apart from it in the menu below.",
                  "Quick toggle: hold Z, D-pad left or right."},
+    },
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Intensity by Group",
+        .menu = &Menu_Intensity,
+        .desc = {"Cues, paths, timers, ledge info and the",
+                 "controller each fainter or bolder, and Auto Fade."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -5053,7 +5153,9 @@ typedef struct PresetFile
     OldView old_view[4];                   // version 2's views: moved to the first stage it's read on
     char preset_name[PS_SAVED][NAME_LEN + 4]; // [0], User Custom, isn't named
     CamView view[VIEW_POOL];
+    float skill[4]; // Auto Fade's hit rates, by cue kind
 } PresetFile;
+static float skill[4]; // the same, as they go (CUE_NUM used)
 static CamView *View_Find(int v);
 static CamView *View_New(int v);
 
@@ -5078,6 +5180,7 @@ typedef struct PresetMenu
 // chosen ledge route, which belong to the moment.
 static const PresetMenu preset_menus[] = {
     {"Cues", Options_Cues, COPT_COUNT},
+    {"Intensity", Options_Intensity, IOPT_COUNT},
     {"Rumble", Options_Rumble, RUOPT_COUNT},
     {"Timers", Options_Timers, TOPT_COUNT},
     {"Paths", Options_Paths, POPT_COUNT},
@@ -5423,6 +5526,11 @@ static void Presets_Loaded(int ok)
         preset_file->preset_name[i][NAME_LEN] = 0;
     for (int i = 0; i < VIEW_POOL; i++)
         preset_file->view[i].name[NAME_LEN] = 0;
+    for (int i = 0; i < 4; i++)
+    {
+        float k = preset_file->skill[i];
+        skill[i] = k >= 0.f && k <= 1.f ? k : 0.f; // (a NaN fails both)
+    }
     Labels_Refresh();
     int start = preset_file->start < PS_COUNT ? preset_file->start : PS_USER;
     Options_Presets[PROPT_START].val = start;
@@ -6142,6 +6250,17 @@ static void Presets_Update(void)
     int paused = Pause_CheckStatus(1) == 2;
     if (preset_was_paused && !paused)
         Presets_KeepUser();
+    // Auto Fade's hit rates go to the card when the menu opens, not after
+    // every try
+    if (paused && !preset_was_paused)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            if (preset_file->skill[i] != skill[i])
+                preset_dirty = 1;
+            preset_file->skill[i] = skill[i];
+        }
+    }
     preset_was_paused = paused;
     if (preset_cam_pending)
     {
@@ -7075,6 +7194,8 @@ static void Cue_Open(Cue *c)
     c->pulse = 0;
 }
 
+static void Skill_Add(int kind, int hit);
+
 static void Cue_Finish(int kind, int phase, int dim)
 {
     Cue *c = &cue_live[kind];
@@ -7082,6 +7203,8 @@ static void Cue_Finish(int kind, int phase, int dim)
         return;
     Cue_Log(kind, "end", phase, dim);
     Cue *e = &cue_end[kind];
+    if (phase == PH_FADE && dim == DIM_MISS)
+        Skill_Add(kind, 0);
     *e = *c;
     e->phase = phase;
     e->dim = dim;
@@ -7186,6 +7309,7 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
     Cue *c = &cue_live[kind];
     Cue *e = &cue_end[kind];
     Cue_Log(kind, "hit", lag, soft);
+    Skill_Add(kind, 1);
     if (c->phase)
         *e = *c;
     else
@@ -7522,6 +7646,70 @@ static GXColor Vis(GXColor c)
     c.b = c.b * kc;
     c.a = c.a * ka;
     return c;
+}
+
+// Intensity by group (Options_Intensity), and Auto Fade: each cue kind
+// keeps a running hit rate (about the last 10 tries), and a group set to
+// fade dims by the least learned kind on show, so nothing fades while
+// it's still being missed.
+enum { VG_CUES, VG_PATHS, VG_TIMERS, VG_LEDGE, VG_PAD };
+static float fade_k = 1.f; // this frame's
+
+static float Group_K(int g)
+{
+    if (g == VG_PAD)
+        return vis_levels[Options_Intensity[IOPT_PAD].val];
+    int lv = Options_Cues[COPT_INTENSITY].val + Options_Intensity[g].val - 2;
+    lv = lv < 0 ? 0 : lv > 4 ? 4 : lv;
+    float k = vis_levels[lv];
+    int fade = Options_Intensity[IOPT_FADE].val;
+    if ((g == VG_TIMERS && (fade == FADE_TIMERS || fade == FADE_BOTH)) ||
+        (g == VG_CUES && (fade == FADE_CUES || fade == FADE_BOTH)))
+        k *= fade_k;
+    return k;
+}
+
+static void Skill_Add(int kind, int hit)
+{
+    skill[kind] += ((hit ? 1.f : 0.f) - skill[kind]) * 0.15f;
+    if (cue_log)
+        OSReport("LLFADE %d %s rate %.2f\n", kind, hit ? "hit" : "miss", skill[kind]);
+}
+
+// How far Auto Fade dims this frame: a kind's hit rate fades it from
+// half its tries hit (nothing) to 9 in 10 (down to 35%).
+static float Fade_Of(int kind)
+{
+    float t = (skill[kind] - 0.5f) / 0.4f;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return 1.f - 0.65f * t;
+}
+
+static int Cue_KindOn(int kind)
+{
+    return kind == CUE_AI ? Cues_Ai() : kind == CUE_WL ? Cues_Waveland() : Cues_Nil();
+}
+
+static void Fade_Update(void)
+{
+    float shown = 0, on = 0;
+    for (int i = 0; i < CUE_NUM; i++)
+    {
+        if (!Cue_KindOn(i))
+            continue;
+        float f = Fade_Of(i);
+        if (f > on)
+            on = f;
+        if ((cue_live[i].phase || cue_end[i].phase) && f > shown)
+            shown = f;
+    }
+    fade_k = shown > 0 ? shown : on > 0 ? on : 1.f;
+}
+
+void Event_FadeReset(GOBJ *menu)
+{
+    memset(skill, 0, sizeof(skill));
+    SFX_PlayCommon(1);
 }
 
 static void World_Vtx(f32 x, f32 y, f32 z, GXColor c)
@@ -12267,7 +12455,8 @@ static void World_GX(GOBJ *gobj, int pass)
     vis_k = 1.f;
     if (Options_Dev[DOPT_COLL].val)
         Draw_CurrentEcb(fp);
-    vis_k = vis_levels[Options_Cues[COPT_INTENSITY].val];
+    Fade_Update();
+    vis_k = Group_K(VG_PATHS);
     // a ledge route stays on top all the way down
     world_on_top = route_active;
 
@@ -12292,11 +12481,14 @@ static void World_GX(GOBJ *gobj, int pass)
     }
     world_on_top = 0;
     world_add = 1;
+    vis_k = Group_K(VG_CUES);
     Plat_Glow(fp);
     world_add = 0;
     world_on_top = 1;
+    vis_k = Group_K(VG_LEDGE);
     Draw_RoutePath();
     // along the floor, where the depth test can't tell the line from it
+    vis_k = Group_K(VG_PATHS);
     Draw_SlideOff();
     world_on_top = 0;
     vis_k = 1.f;
@@ -12395,9 +12587,9 @@ static void Hud_GX(GOBJ *gobj, int pass)
         CObj_SetCurrent(prev);
         return;
     }
-    vis_k = vis_levels[Options_Cues[COPT_INTENSITY].val];
-
+    Fade_Update();
     Meter_Build();
+    vis_k = Group_K(route_rows_active ? VG_LEDGE : VG_TIMERS);
     Spot_Draw(fp);
     int near = Options_Timers[TOPT_NEAR].val;
     if (meter_rows == 0)
@@ -12412,10 +12604,14 @@ static void Hud_GX(GOBJ *gobj, int pass)
     if (near != NEAR_OFF && near != NEAR_STRIP)
         Near_Draw(fp, near);
     Wd_Draw(fp);
+    int route_marks = (hang_ledge >= 0 && route_show_num > 0) || (route_active && !route_dj_done);
+    vis_k = Group_K(route_marks ? VG_LEDGE : VG_PATHS);
     Markers_Draw();
+    vis_k = Group_K(VG_PATHS);
     Compass_Draw();
-    vis_k = 1.f;
+    vis_k = Group_K(VG_PAD);
     Pad_Draw(fp);
+    vis_k = 1.f;
     Panel_Draw();
     if (quad_num > quad_peak)
         quad_peak = quad_num;
@@ -15693,7 +15889,7 @@ static void Body_Flash(FighterData *fp, int sid)
     }
     if (flash_age < 100)
         flash_age++;
-    a *= hide_all ? 0 : vis_levels[Options_Cues[COPT_INTENSITY].val];
+    a *= hide_all ? 0 : Group_K(VG_CUES);
     if (a > 0.9f)
         a = 0.9f;
 

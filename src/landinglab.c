@@ -15028,6 +15028,8 @@ static void Meter_AddRoutes(void)
 #define JT_STICK_TOL 0.05f  // how far the stick may move before the anchor's fall is wrong
 #define JT_DRIFT_TOL 0.05f  // ... and how far Falcon may be from the simulated fall
 #define JT_HOP_STILL 0.1f   // from the ground, a stick this near the middle is at rest
+#define JT_AHEAD 3          // the search starts this many frames ahead: it does about one frame's jumps per
+                            // frame, so starting at the next frame it would only ever find jumps due now
 #define JT_BUDGET LR_BUDGET // simulated frames per game frame (the time limit LR_TIME_US holds it too)
 #define JT_TRY (1 + 5 * LR_WINDOWS)
 #define JT_PATH (JT_D + 1 + JT_SIM + 10) // + a jumpsquat from the ground
@@ -15909,8 +15911,8 @@ static void Jump_Solve(FighterData *fp)
     int t0 = OSGetTick();
     while (jt_next < total && sim_steps - start < JT_BUDGET)
     {
-        if (!(jt_ground && gt_still) && jt_next < e * JT_STICKS * 2)
-            jt_next = e * JT_STICKS * 2;
+        if (!(jt_ground && gt_still) && jt_next < (e + JT_AHEAD) * JT_STICKS * 2)
+            jt_next = (e + JT_AHEAD) * JT_STICKS * 2;
         if (jt_next >= total)
             break;
         JumpCand c;

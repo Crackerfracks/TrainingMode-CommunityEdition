@@ -15133,11 +15133,11 @@ static int Jump_E(void)
 #define JWHERE_RIGHT 16
 #define JWHERE_SIDE 10.f // how far from the stage's middle a platform's middle is on a side
 
-// What Falcon lands on with his feet at (x, y): the highest floor at x
-// under him. For an AI, (x, y) is where the plain fall has him on the
-// frame the aerial touches down, and a rising one is caught well above
-// the floor its ECB reaches down to, so it looks a long way down. Platforms move on some stages, so this
-// is worked out each time.
+// What Falcon lands on with his feet at (x, y): the floor at x nearest
+// that height. For an AI, (x, y) is where the plain fall has him on the
+// frame the aerial touches down, which for a rising one can be well above
+// the floor or, coming up through a platform, a little under it. Platforms
+// move on some stages, so this is worked out each time.
 static int Jump_Where(float x, float y)
 {
     FloorLine *best = 0;
@@ -15149,7 +15149,7 @@ static int Jump_Where(float x, float y)
         if (r - l < 0.001f || x < l - 0.5f || x > r + 0.5f)
             continue;
         float h = ly + (ry - ly) * (x - l) / (r - l);
-        if (h <= y + 2.f && h >= y - 40.f && (!best || h > best_y))
+        if (h <= y + 15.f && h >= y - 40.f && (!best || fabs(h - y) < fabs(best_y - y)))
         {
             best = f;
             best_y = h;

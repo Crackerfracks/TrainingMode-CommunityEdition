@@ -18161,6 +18161,7 @@ static void Chord(int lr, int z, int down)
 #define DECK_TOP (SAFE_H + 0.5f)
 #define DECK_ROW_H 1.75f
 #define DECK_ROW_W 21.f
+#define DECK_VIEW 8 // settings rows on screen at once, so the list stays clear of the percents
 
 typedef struct DeckRow
 {
@@ -18252,19 +18253,54 @@ static int Deck_Count(void)
     return n;
 }
 
-// The still example: a full hop from where Falcon stands, its path and
-// timers up as if it were happening.
+// The first frame a cue the settings show would count down to in p, or 0.
+static int Deck_DemoFirst(Prediction *p)
+{
+    int first = 0;
+    int k[3] = {Cues_Ai() && p->ai_first < p->uncertain_from ? p->ai_first : 0,
+                Cues_Waveland() && p->wl_first < p->uncertain_from ? p->wl_first : 0,
+                Cues_Nil() && p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame
+                    ? p->land_frame + 1
+                    : 0};
+    for (int i = 0; i < 3; i++)
+        if (k[i] && (!first || k[i] < first))
+            first = k[i];
+    return first;
+}
+
+// The still example: a full hop (or a short one, if only that has a window
+// to show) from where Falcon stands, its path and timers up as if it were
+// happening, held at the moment its first countdown is half run. Done again
+// whenever a setting changes, so it shows the settings as they are.
+#define DECK_DEMO_TO_GO 12
 static void Deck_Demo(FighterData *fp)
 {
+    if (deck.demo)
+    {
+        Cues_Clear();
+        live_visible = 0;
+        deck.demo = 0;
+    }
     if (fp->phys.air_state != 0 || live_visible)
         return;
     SimStart start;
     Floor_BuildCache();
     int lead = Sim_GroundJump(fp, 0, &start);
     Predict(fp, &start, pred_live, BR_ALL);
+    int first = Deck_DemoFirst(pred_live);
+    if (!first)
+    {
+        lead = Sim_GroundJump(fp, 1, &start);
+        Predict(fp, &start, pred_live, BR_ALL);
+        first = Deck_DemoFirst(pred_live);
+    }
     live_visible = 1;
-    Timing_Update(fp, pred_live, lead);
     deck.demo = 1;
+    if (first)
+        lead = DECK_DEMO_TO_GO - first; // the countdown as if partway there
+    Timing_Update(fp, pred_live, lead);
+    OSReport("LLDECK demo first %d lead %d ai %d wl %d land %d\n", first, lead, pred_live->ai_first,
+             pred_live->wl_first, pred_live->land_frame);
 }
 
 static void Deck_Open(void)
@@ -18310,12 +18346,12 @@ static void Deck_Step(EventOption *o, int dir)
     o->val = v + (o->kind == OPTKIND_TOGGLE ? 0 : o->value_min);
 }
 
-// The settings as they are into preset slot which (1 to 4, or a new one
-// when which is 0), and that preset chosen.
+// The settings as they are into preset slot which (User Custom or 1 to 4,
+// or a new one when which is -1 or built in), and that preset chosen.
 static void Deck_Save(int which)
 {
     char buf[48];
-    if (which <= 0 || which >= PS_SAVED)
+    if (which < 0 || which >= PS_SAVED)
     {
         which = 0;
         for (int i = 1; i < PS_SAVED && !which; i++)
@@ -18360,14 +18396,13 @@ static void Deck_Think(void)
     // saving, with the trigger that keeps the deck up
     if (down & HSD_BUTTON_A)
     {
-        int pick = Options_Presets[PROPT_PICK].val;
-        Deck_Save(pick >= 1 && pick < PS_SAVED ? pick : 0);
+        Deck_Save(Options_Presets[PROPT_PICK].val);
         deck.idle = deck.play = 0;
         return;
     }
     if (down & (HSD_BUTTON_X | HSD_BUTTON_Y))
     {
-        Deck_Save(0);
+        Deck_Save(-1);
         deck.idle = deck.play = 0;
         return;
     }
@@ -18411,6 +18446,7 @@ static void Deck_Think(void)
             Preset_Apply(Preset_Slot(cur));
             Preset_Describe(cur);
             deck.changed = 0;
+            Deck_Demo(Fighter_GetGObj(0)->userdata);
             OSReport("LLDECK card %d %s\n", cur, preset_names[cur]);
         }
     }
@@ -18427,6 +18463,7 @@ static void Deck_Think(void)
             if (r->o == &Options_Paths[POPT_PATH] || r->o == &Options_Jump[JOPT_SHOW])
                 Event_ChangeRoutes(0, 0);
             deck.changed = 1;
+            Deck_Demo(Fighter_GetGObj(0)->userdata);
             OSReport("LLDECK set %s = %d\n", r->label, r->o->val);
         }
     }
@@ -18473,13 +18510,15 @@ static void Deck_Draw(void)
         Hud_Frame(x, y0, x + DECK_CARD_W, y1, on ? 0.18f : 0.08f, Color_Over(on ? lit : dim, on ? 1.f : 0.5f));
         char name[20];
         Name_Copy(name, preset_names[i]);
-        if (strlen(name) > 11)
-            strcpy(name + 10, ".");
-        Deck_Line(deck.mid, mi++, name, x + DECK_CARD_W / 2, y1 - 2.0f, 0.3f, Color_Over(on ? color_white : ink, a));
+        // the name fits its card: smaller when long
+        float ns = 0.3f, nw = Text_Width(name, ns), room = DECK_CARD_W - 0.7f;
+        if (nw > room)
+            ns *= room / nw;
+        Deck_Line(deck.mid, mi++, name, x + DECK_CARD_W / 2, y1 - 2.0f, ns, Color_Over(on ? color_white : ink, a));
         if (i > 0 && i < PS_SAVED && preset_file->preset_name[i][0])
             Hud_Disc(x + DECK_CARD_W - 0.45f, y1 - 0.45f, 0.18f, Color_Over(color_in_jump, a)); // one he named
         if (on && deck.changed)
-            Hud_Rect(x + 0.3f, y0 - 0.35f, x + DECK_CARD_W - 0.3f, y0 - 0.15f, Color_Over(lit, 0.9f)); // not saved yet
+            Hud_Rect(x + 0.3f, y0 - 0.75f, x + DECK_CARD_W - 0.3f, y0 - 0.25f, Color_Over(color_in_jump, 1.f)); // not saved yet
         // what the preset has on: a mark each, lit when on
         for (int m = 0; m < (int)countof(deck_marks); m++)
         {
@@ -18502,11 +18541,15 @@ static void Deck_Draw(void)
         x += DECK_CARD_W + DECK_GAP;
     }
 
-    float hy = DECK_TOP - DECK_CARD_H - 0.6f;
+    float hy = DECK_TOP - DECK_CARD_H - 1.0f;
+    // A writes over the chosen preset only when it's on the memory card
+    const char *save_hint = pick < PS_SAVED ? "A: save to this preset    X: save as a new one"
+                                            : "Built in:  A or X saves a new preset";
     if (deck.row < 0)
     {
-        const char *hint = deck.changed ? "A: save to this preset    X: save as a new one    Down: settings"
-                                        : "Left/Right: preset    Down: change its settings";
+        char both[96];
+        sprintf(both, "%s    Down: settings", save_hint);
+        const char *hint = deck.changed ? both : "Left/Right: preset    Down: change its settings";
         float w = Text_Width(hint, 0.32f) / 2 + 0.6f;
         Hud_Rect(-w, hy - 2.0f, w, hy, Color_Over(color_plate, 0.85f));
         Deck_Line(deck.mid, mi++, hint, 0, hy - 2.2f, 0.32f, dim);
@@ -18518,12 +18561,24 @@ static void Deck_Draw(void)
             px = -SAFE_W;
         if (px + DECK_ROW_W > SAFE_W)
             px = SAFE_W - DECK_ROW_W;
-        float y1 = hy, y0 = y1 - DECK_ROWS * DECK_ROW_H - 1.2f;
+        // a window of the rows that keeps the chosen one in it
+        int top = deck.row - DECK_VIEW / 2;
+        if (top > DECK_ROWS - DECK_VIEW)
+            top = DECK_ROWS - DECK_VIEW;
+        if (top < 0)
+            top = 0;
+        int end = top + DECK_VIEW < DECK_ROWS ? top + DECK_VIEW : DECK_ROWS;
+        float y1 = hy, y0 = y1 - (end - top) * DECK_ROW_H - 1.2f;
         Hud_Rect(px, y0, px + DECK_ROW_W, y1, Color_Over(color_plate, 0.9f));
         Hud_Frame(px, y0, px + DECK_ROW_W, y1, 0.08f, Color_Over(dim, 0.5f));
-        for (int r = 0; r < DECK_ROWS; r++)
+        // more above or below: a small bar at that edge
+        if (top > 0)
+            Hud_Rect(px + DECK_ROW_W / 2 - 1.f, y1 - 0.4f, px + DECK_ROW_W / 2 + 1.f, y1 - 0.2f, Color_Over(dim, 0.8f));
+        if (end < DECK_ROWS)
+            Hud_Rect(px + DECK_ROW_W / 2 - 1.f, y0 + 0.2f, px + DECK_ROW_W / 2 + 1.f, y0 + 0.4f, Color_Over(dim, 0.8f));
+        for (int r = top; r < end; r++)
         {
-            float ry = y1 - 0.6f - (r + 1) * DECK_ROW_H;
+            float ry = y1 - 0.6f - (r - top + 1) * DECK_ROW_H;
             int sel = r == deck.row;
             if (sel)
                 Hud_Rect(px + 0.3f, ry, px + DECK_ROW_W - 0.3f, ry + DECK_ROW_H, Color_Over(lit, 0.25f));
@@ -18534,7 +18589,7 @@ static void Deck_Draw(void)
         }
         if (deck.changed)
         {
-            const char *hint = "A: save to this preset    X: save as a new one";
+            const char *hint = save_hint;
             float w = Text_Width(hint, 0.3f) + 1.2f;
             Hud_Rect(px, y0 - 2.1f, px + w, y0 - 0.1f, Color_Over(color_plate, 0.85f));
             Deck_Line(deck.left, li++, hint, px + 0.6f, y0 - 2.3f, 0.3f, dim);

@@ -83,86 +83,89 @@ set Intensity/Controller = 2
 10
 
 # Auto Fade on the timers: twelve hit AIs raise the AI hit rate (LLFADE
-# lines), so the timer is fainter on the last one than on the first.
+# lines), so the AI timer is fainter on the last one than on the first. The
+# AI is a rising one (a double jump up into the top platform): falling AIs
+# are platform catches, which get no timer. Expect LLCUE AI lines for each.
 script Auto fade
 fadereset
 set Intensity/Auto Fade = 1
-start 38 0 right
-5 X
-22
-shot fade first try: timers at full strength
+air 0 40 right 0 0 0
+1 X
+6
+shot fade first try: the AI timer (pink cells in the strip, spot on the top platform) at full strength
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
+air 0 40 right 0 0 0
+1 X
 ai 0 A
 land 120
-start 38 0 right
-5 X
-22
-shot fade after 11 hits: same timer, clearly fainter
+air 0 40 right 0 0 0
+1 X
+6
+shot fade after 11 hits: the same AI timer, clearly fainter
 ai 0 A
 land 120
 set Intensity/Auto Fade = 0
 
-# Controller cues: the A button's timing on the Ring for the nair AI, as a
-# closing ring a few frames out, then as a gauge in the window.
+# Controller cues: the A button's timing on the Ring for the rising nair AI
+# onto the top platform, as a closing ring a few frames out, then as a
+# gauge.
 script Controller cues
 set HUD/Controller Cues = 1
-start 38 0 right
-5 X
-14
-shot closing ring: a ring around A in the AI color, wider than A, not filled
+air 0 40 right 0 0 0
+1 X
+6
+shot closing ring: a pink ring around A, wider than A, not filled
 ai 0 A
 land 120
 set HUD/Controller Cues = 2
-start 38 0 right
-5 X
-14
-shot gauge: an arc partway round A in the AI color
+air 0 40 right 0 0 0
+1 X
+6
+shot gauge: a pink arc partway round A
 ai 0 A
 land 120
 set HUD/Controller Cues = 0
 
 # Ledge drop drill: which frame of the hang a drop comes out on. Expect no
 # LLDROP frame line for the first try (the stick held from the start
-# never rested), then frames 1, 2, 3 for one, two and three frames of rest
+# never rested), then frames 1, 2, 4 for one, two and four frames of rest
 # (or all one higher: then the grading is off by one). The last try catches
 # the ledge for real, to log the catch length against the hang's start.
 script Drop drill
@@ -185,7 +188,7 @@ ledge right
 shot drop row: DRP label clear of its cells, a hollow rest cell, two solid cells after it
 4
 5 s:0,-1
-mark three frames of rest
+mark four frames of rest
 60
 air 80 20 left 0 0
 45
@@ -211,7 +214,14 @@ set Jump/Show = 1
 start 0 0 right
 5 X
 8
-shot full hop under the top platform: jump timing row and path for a double jump that AIs or NILs on the top platform
+shot full hop under the top platform: jump timing row and path for a double jump that AIs or NILs somewhere
+# the same hop with Land On set to the top platform: the route goes there
+set Jump/Land On = 1
+start 0 0 right
+5 X
+8
+shot Land On Top: the jump timing path ends on the top platform
+set Jump/Land On = 0
 # then a fall under it
 air 0 40 right 0 0 0
 14

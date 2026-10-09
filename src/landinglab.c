@@ -4082,9 +4082,24 @@ enum options_jump
 {
     JOPT_SHOW,
     JOPT_KIND,
+    JOPT_TARGET,
 
     JOPT_COUNT
 };
+
+// Where the jump lands: any floor, or one kind of platform. Left and right
+// are of the stage's middle; Top is the highest platform.
+enum jump_target
+{
+    JTGT_ANY,
+    JTGT_TOP,
+    JTGT_LEFT,
+    JTGT_RIGHT,
+    JTGT_PLATFORM,
+    JTGT_FLOOR,
+};
+static const char *jump_target_names[] = {"Any", "Top Platform", "Left Platform", "Right Platform", "Any Platform",
+                                          "Main Floor"};
 
 static EventOption Options_Jump[JOPT_COUNT] = {
     {
@@ -4104,6 +4119,16 @@ static EventOption Options_Jump[JOPT_COUNT] = {
         .desc = {"NIL: land with no landing lag.",
                  "AI: land with an aerial interrupt.",
                  "Both: whichever lets Falcon act sooner."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Land On",
+        .value_num = countof(jump_target_names),
+        .values = jump_target_names,
+        .desc = {"Where the jump should land. Any shows the one",
+                 "that lets Falcon act soonest, wherever it is.",
+                 "Top is the highest platform; left and right",
+                 "are either side of the stage's middle."},
     },
 };
 
@@ -7388,7 +7413,8 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
     Cue *c = &cue_live[kind];
     Cue *e = &cue_end[kind];
     Cue_Log(kind, "hit", lag, soft);
-    Skill_Add(kind, 1);
+    if (c->phase)
+        Skill_Add(kind, 1); // only a timer that was shown counts toward its fade
     if (c->phase)
         *e = *c;
     else
@@ -14996,6 +15022,7 @@ typedef struct JumpRoute
     u8 aerial;  // AI: the aerial (TS_AIR*)
     u8 press_w; // AI: frames the aerial's window lasts
     u8 changes; // stick changes the route asks for
+    u8 where;   // what it lands on: JWHERE_* bits
     u8 d;       // frames of fall before the jump
     s16 dj;     // frame of the double jump
     s16 press;  // AI: first frame of the aerial's window
@@ -15023,6 +15050,66 @@ static float *jt_path_bottom;
 static int jt_path_num;
 static JumpRoute jt_path_of;    // the route the path is for
 static int jt_path_anchor = -1;
+static int jt_target;           // Land On as the search started
+
+// What a floor is, for Land On.
+#define JWHERE_FLOOR 1
+#define JWHERE_PLATFORM 2
+#define JWHERE_TOP 4
+#define JWHERE_LEFT 8
+#define JWHERE_RIGHT 16
+#define JWHERE_SIDE 10.f // how far from the stage's middle a platform's middle is on a side
+
+// What Falcon lands on with his feet at (x, y): the highest floor at x a
+// little under him (an aerial's ECB can touch down a few units above where
+// the fall would have put his feet). Platforms move on some stages, so this
+// is worked out each time.
+static int Jump_Where(float x, float y)
+{
+    FloorLine *best = 0;
+    float best_y = 0, l, ly, r, ry;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        Floor_Ends(f, &l, &ly, &r, &ry);
+        if (r - l < 0.001f || x < l - 0.5f || x > r + 0.5f)
+            continue;
+        float h = ly + (ry - ly) * (x - l) / (r - l);
+        if (h <= y + 2.f && h >= y - 15.f && (!best || h > best_y))
+        {
+            best = f;
+            best_y = h;
+        }
+    }
+    if (!best)
+        return 0;
+    if (!best->is_platform)
+        return JWHERE_FLOOR;
+    int where = JWHERE_PLATFORM;
+    float top = -100000.f;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        float h = f->y0 > f->y1 ? f->y0 : f->y1;
+        if (f->is_platform && h > top)
+            top = h;
+    }
+    if ((best->y0 > best->y1 ? best->y0 : best->y1) >= top - 1.f)
+        where |= JWHERE_TOP;
+    float mid = (best->x0 + best->x1) * 0.5f;
+    if (mid < -JWHERE_SIDE)
+        where |= JWHERE_LEFT;
+    else if (mid > JWHERE_SIDE)
+        where |= JWHERE_RIGHT;
+    return where;
+}
+
+// Does a route land where Land On asks?
+static int Jump_OnTarget(JumpRoute *r)
+{
+    static const u8 need[] = {0, JWHERE_TOP, JWHERE_LEFT, JWHERE_RIGHT, JWHERE_PLATFORM, JWHERE_FLOOR};
+    return jt_target <= JTGT_ANY || jt_target >= (int)countof(need) || (r->where & need[jt_target]);
+}
 
 static int Jump_Showing(void)
 {
@@ -15187,6 +15274,7 @@ static void Jump_Try(FighterData *fp, int d, int stick, int hold, JumpRoute *out
         r->kind = LAND_NIL;
         r->land = base.dj + p->land_frame;
         r->act = r->land;
+        r->where = Jump_Where(p->pos[p->land_frame].X, p->pos[p->land_frame].Y);
     }
 
     int normal_lag = (int)fp->attr.normal_landing_lag;
@@ -15223,6 +15311,8 @@ static void Jump_Try(FighterData *fp, int d, int stick, int hold, JumpRoute *out
                 r->press_w = w;
                 r->land = base.dj + touch;
                 r->act = r->land + normal_lag;
+                int at = touch <= p->num ? touch : p->num;
+                r->where = Jump_Where(p->pos[at].X, p->pos[at].Y);
                 windows++;
             }
             k += w - 1;
@@ -15267,6 +15357,7 @@ static void Jump_Anchor(FighterData *fp, int ts)
 {
     jt_active = 1;
     jt_anchor = event_vars->game_timer;
+    jt_target = Options_Jump[JOPT_TARGET].val;
     Sim_FromFighter(fp, ts, frame_in_state, &jt_start);
     jt_stick_x = fp->input.lstick.X;
     jt_stick_down = Stick_Down(fp->input.lstick.Y);
@@ -15346,6 +15437,43 @@ static int Jump_Drifted(FighterData *fp, int e)
     return fabs(fp->phys.pos.X - jt_cache[e].x) > JT_DRIFT_TOL || fabs(fp->phys.pos.Y - jt_cache[e].y) > JT_DRIFT_TOL;
 }
 
+// Too few of the anchor's jump frames are left, but Falcon is still on its
+// fall: anchor again here to search the frames past it, and keep the jumps
+// already found, counted from the new anchor, so the one shown doesn't
+// drop out while the new search runs.
+static void Jump_Log(void);
+static void Jump_Extend(FighterData *fp, int ts, int e)
+{
+    if (!jt_done && cue_log)
+        Jump_Log();
+    static JumpRoute keep[2][JT_BEST];
+    int keep_n[2];
+    for (int k = 0; k < 2; k++)
+    {
+        keep_n[k] = 0;
+        for (int i = 0; i < jt_best_n[k]; i++)
+        {
+            JumpRoute r = jt_best[k][i];
+            if (r.dj <= e)
+                continue;
+            r.d -= e;
+            r.dj -= e;
+            r.land -= e;
+            r.act -= e;
+            if (r.press >= 0)
+                r.press -= e;
+            keep[k][keep_n[k]++] = r;
+        }
+    }
+    Jump_Anchor(fp, ts);
+    for (int k = 0; k < 2; k++)
+    {
+        for (int i = 0; i < keep_n[k]; i++)
+            jt_best[k][i] = keep[k][i];
+        jt_best_n[k] = keep_n[k];
+    }
+}
+
 // Each frame, before the search: is Falcon in a fall to search, and is the
 // anchor still right for it. It is taken again when he comes back to a fall
 // after leaving one, when the stick or his path leaves what it assumed, and
@@ -15358,8 +15486,11 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
         jt_active = 0;
         jt_have = 0;
     }
-    else if (!jt_active || e < 0 || e >= JT_REANCHOR || Jump_InputChanged(fp, ts) || Jump_Drifted(fp, e))
+    else if (!jt_active || e < 0 || Jump_InputChanged(fp, ts) || Jump_Drifted(fp, e) ||
+             Options_Jump[JOPT_TARGET].val != jt_target)
         Jump_Anchor(fp, ts);
+    else if (e >= JT_REANCHOR)
+        Jump_Extend(fp, ts, e);
     jt_prev_ts = ts;
     jt_prev_tilt = (u8)fp->input.timer_lstick_tilt_y;
 }
@@ -15378,14 +15509,16 @@ static void Jump_Log(void)
 {
     JumpRoute *b = Jump_Pick();
     char buf[200];
-    int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f found %d", jt_anchor, jt_start.pos.X, jt_start.pos.Y, jt_found);
+    int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s target %d found %d", jt_anchor, jt_start.pos.X, jt_start.pos.Y,
+                    jt_done ? "done" : "partial", jt_target, jt_found);
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)
-        sprintf(buf + n, " best d %d stick %d aerial %d press %d-%d land %d kind AI\n", b->d, b->stick, b->aerial, b->press,
-                b->press + b->press_w - 1, b->land);
+        sprintf(buf + n, " best d %d stick %d aerial %d press %d-%d land %d on %d kind AI\n", b->d, b->stick, b->aerial,
+                b->press, b->press + b->press_w - 1, b->land, b->where);
     else
-        sprintf(buf + n, " best d %d stick %d aerial none press none land %d kind NIL\n", b->d, b->stick, b->land);
+        sprintf(buf + n, " best d %d stick %d aerial none press none land %d on %d kind NIL\n", b->d, b->stick, b->land,
+                b->where);
     OSReport("%s", buf);
 }
 
@@ -15420,6 +15553,8 @@ static void Jump_Solve(FighterData *fp)
         for (int i = 0; i < found_n; i++)
         {
             jt_found++;
+            if (!Jump_OnTarget(&found[i]))
+                continue;
             Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
         }
         if (OSTicksToMicroseconds(OSGetTick() - t0) >= LR_TIME_US)

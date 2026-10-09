@@ -87,6 +87,7 @@ set Intensity/Controller = 2
 # AI is a rising one (a double jump up into the top platform): falling AIs
 # are platform catches, which get no timer. Expect LLCUE AI lines for each.
 script Auto fade
+preset load Defaults
 fadereset
 set Intensity/Auto Fade = 1
 air 0 40 right 0 0 0
@@ -147,6 +148,7 @@ set Intensity/Auto Fade = 0
 # onto the top platform, as a closing ring a few frames out, then as a
 # gauge.
 script Controller cues
+preset load Defaults
 set HUD/Controller Cues = 1
 air 0 40 right 0 0 0
 1 X
@@ -208,6 +210,7 @@ mark done
 # path up to the platform and the panel line. Expect an LLJUMP line in the
 # log when the search is done.
 script Jump timing
+preset load Defaults
 set Jump/Show = 1
 # a full hop from the floor under the top platform: the search anchors as
 # soon as he is airborne, and the double jump can come while he still rises
@@ -226,4 +229,21 @@ set Jump/Land On = 0
 air 0 40 right 0 0 0
 14
 shot jump timing: JUMP row counting down, pink AI row under it, path up to the top platform, panel "DJ ... in Nf, aerial fN-N: AI"
+set Jump/Show = 0
+
+# Hop timing from the ground: standing under the left platform, then
+# running right along the floor. With Show on and From the Ground on Both,
+# an SH or FH row counts down to the hop, the path runs along the floor to
+# the hop spot and up, and the panel says "SH in Nf, nair fN: AI" (or FH, or
+# NIL). Expect LLJUMP ground lines.
+script Hop timing
+preset load Defaults
+set Jump/Show = 1
+start -38 0 right
+20
+shot standing under the left platform: an SH or FH row at "now", the hop's path from Falcon
+start -60 0 right
+24 s:1,0
+shot running right: the hop spot ahead on the floor, a row counting down to it
+16 s:1,0
 set Jump/Show = 0

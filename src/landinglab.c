@@ -12214,6 +12214,9 @@ static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
 static void Pad_CueOne(int in, int kind)
 {
     Cue *c = &cue_live[kind];
+    if (cue_log && c->phase && (!pin_spot[in].r || c->dim || c->held))
+        OSReport("LLPADCUE %d pin %d kind %d skipped: r %.2f phase %d dim %d held %d left %d\n", event_vars->game_timer, in,
+                 kind, pin_spot[in].r, c->phase, c->dim, c->held, c->left);
     if (!pin_spot[in].r || !c->phase || c->dim || c->held)
         return;
     float x = pin_spot[in].x, y = pin_spot[in].y, r = pin_spot[in].r;
@@ -12917,8 +12920,11 @@ static int Advance_CheckStep(void)
 //   card restart               as if the event started over: every option
 //                              back to its default, then the card read again
 //   chord lr|z|lrz up|down|left|right  a quick toggle
-//   view save|load|show <1-4>  Camera > Save View, picking that View, or
+//   view save|load|show <1-8>  Camera > Save View, picking that View, or
 //                              logging where the camera is against it
+//   view name <1-8> <word>     name a saved view
+//   view shift 1 <dx> <dy>     slide the Advanced camera
+//   fadereset                  Intensity > Reset Fade
 // Inputs: A B X Y Z L R (L and R fully pressed), s:x,y (stick), c:x,y
 // (C-stick), lt:v (light press, no click), with x, y, v from -1 to 1. A
 // stick value is round(80 v), pulled back onto the rim if it's past it.
@@ -12949,6 +12955,7 @@ enum script_cmd
     SCMD_PRESET,
     SCMD_CARD,
     SCMD_CHORD,
+    SCMD_FADE,
     SCMD_GET,
     SCMD_VIEW,
 };
@@ -13224,10 +13231,10 @@ static void Script_Parse(void)
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
-                 Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view"))
+                 Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset"))
         {
             op->kind = SOP_CMD;
-            op->count = w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
+            op->count = w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
@@ -13784,6 +13791,9 @@ static void Script_Cmd(ScriptOp *op)
         }
         else
             ok = 0;
+        break;
+    case SCMD_FADE:
+        Event_FadeReset(0); // Auto Fade's hit rates from earlier runs
         break;
     case SCMD_CHORD:
     {

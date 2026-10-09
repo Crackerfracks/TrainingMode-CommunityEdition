@@ -85,6 +85,7 @@ set Intensity/Controller = 2
 # Auto Fade on the timers: twelve hit AIs raise the AI hit rate (LLFADE
 # lines), so the timer is fainter on the last one than on the first.
 script Auto fade
+fadereset
 set Intensity/Auto Fade = 1
 start 38 0 right
 5 X
@@ -146,17 +147,16 @@ script Controller cues
 set HUD/Controller Cues = 1
 start 38 0 right
 5 X
-18
+14
 shot closing ring: a ring around A in the AI color, wider than A, not filled
-ai 0
-shot closing ring at the window: snug and thick around A
-1 A
+ai 0 A
 land 120
 set HUD/Controller Cues = 2
 start 38 0 right
 5 X
-18
+14
 shot gauge: an arc partway round A in the AI color
+ai 0 A
 land 120
 set HUD/Controller Cues = 0
 

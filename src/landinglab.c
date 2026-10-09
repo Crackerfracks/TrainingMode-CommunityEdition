@@ -4062,7 +4062,7 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Drop Drill",
-        .desc = {"Time letting go of the ledge: a DROP row counts",
+        .desc = {"Time letting go of the ledge: a DRP row counts",
                  "down to the first frame you can. The stick has to",
                  "rest on the hang's first frame, then go down or",
                  "away. Graded, with how many of your last 10 hit."},
@@ -6110,12 +6110,13 @@ static const char *namer_rows[2][4] = {
 };
 static struct
 {
-    u8 on, what, slot, lower, dirty;
+    u8 on, what, slot, lower, dirty, leave_menu;
     int cx, cy, len;
     char buf[NAME_LEN + 1];
     char title[48];
     Text *text;
 } namer;
+static int namer_port; // the controller that opened the menu
 
 static const char *Stage_Name(void)
 {
@@ -6137,11 +6138,14 @@ static const char *Stage_Name(void)
     return "this stage";
 }
 
-static int Namer_Think(GOBJ *g);
-
+// The grid is drawn on the HUD, which the game doesn't draw while paused:
+// the pause menu closes for it, and the game stays frozen the way Frame
+// Advance freezes it (Advance_CheckPause) until it's done, when the menu
+// opens again.
 static void Namer_Open(int what, int slot, const char *name)
 {
     MenuData *md = event_vars->menu_gobj->userdata;
+    namer_port = md->controller_index;
     HUDCamData *hud = event_vars->hudcam_gobj->userdata;
     memset(&namer, 0, sizeof(namer));
     namer.what = what;
@@ -6165,11 +6169,12 @@ static void Namer_Open(int what, int slot, const char *name)
     namer.text = t;
     namer.dirty = 1;
     namer.on = 1;
-    md->custom_gobj_think = Namer_Think;
+    namer.leave_menu = 1; // next frame: not from inside the menu's own call
     SFX_PlayCommon(1);
 }
 
-static void Namer_Close(int keep)
+// reopen: back to the menu (Start opens it by itself)
+static void Namer_Close(int keep, int reopen)
 {
     MenuData *md = event_vars->menu_gobj->userdata;
     if (keep)
@@ -6197,7 +6202,11 @@ static void Namer_Close(int keep)
         Text_Destroy(namer.text);
     namer.text = 0;
     namer.on = 0;
-    md->custom_gobj_think = 0;
+    if (reopen && Pause_CheckStatus(1) != 2)
+    {
+        event_vars->Menu_Enter(event_vars->menu_gobj);
+        md->controller_index = namer_port;
+    }
     SFX_PlayCommon(keep ? 1 : 0);
 }
 
@@ -6216,10 +6225,10 @@ static void Namer_Type(char c)
     SFX_PlayCommon(1);
 }
 
-static int Namer_Think(GOBJ *g)
+// Each frame while it's up, from Event_Update.
+static void Namer_Think(void)
 {
-    MenuData *md = event_vars->menu_gobj->userdata;
-    HSD_Pad *pad = PadGetMaster(md->controller_index);
+    HSD_Pad *pad = PadGetMaster(namer_port);
     int rep = pad->repeat, down = pad->down;
     int cols = namer.cy == NAMER_ROWS - 1 ? NAMER_KEYS : NAMER_COLS;
     int prev_cx = namer.cx, prev_cy = namer.cy;
@@ -6247,8 +6256,8 @@ static int Namer_Think(GOBJ *g)
 
     if (down & HSD_BUTTON_START)
     {
-        Namer_Close(1);
-        return 0;
+        Namer_Close(1, 0);
+        return;
     }
     if (down & HSD_BUTTON_A)
     {
@@ -6265,8 +6274,8 @@ static int Namer_Think(GOBJ *g)
             namer.lower ^= 1;
         else if (namer.cx == 3)
         {
-            Namer_Close(1);
-            return 0;
+            Namer_Close(1, 1);
+            return;
         }
         namer.dirty = 1;
     }
@@ -6274,8 +6283,8 @@ static int Namer_Think(GOBJ *g)
     {
         if (namer.len == 0)
         {
-            Namer_Close(0);
-            return 0;
+            Namer_Close(0, 1);
+            return;
         }
         namer.buf[--namer.len] = 0;
         SFX_PlayCommon(0);
@@ -6287,7 +6296,6 @@ static int Namer_Think(GOBJ *g)
         namer.lower ^= 1;
         namer.dirty = 1;
     }
-    return 0; // Start is read above: it keeps the name rather than leaving the menu
 }
 
 void Event_NameView(GOBJ *menu)
@@ -7720,11 +7728,9 @@ static GXColor Vis(GXColor c)
 }
 
 // Intensity by group (Options_Intensity), and Auto Fade: each cue kind
-// keeps a running hit rate (about the last 10 tries), and a group set to
-// fade dims by the least learned kind on show, so nothing fades while
-// it's still being missed.
+// keeps a running hit rate (about the last 10 tries), and in a group set
+// to fade, each kind's drawing dims by its own rate (Fade_Factor).
 enum { VG_CUES, VG_PATHS, VG_TIMERS, VG_LEDGE, VG_PAD };
-static float fade_k = 1.f; // this frame's
 
 static float Group_K(int g)
 {
@@ -7732,12 +7738,7 @@ static float Group_K(int g)
         return vis_levels[Options_Intensity[IOPT_PAD].val];
     int lv = Options_Cues[COPT_INTENSITY].val + Options_Intensity[g].val - 2;
     lv = lv < 0 ? 0 : lv > 4 ? 4 : lv;
-    float k = vis_levels[lv];
-    int fade = Options_Intensity[IOPT_FADE].val;
-    if ((g == VG_TIMERS && (fade == FADE_TIMERS || fade == FADE_BOTH)) ||
-        (g == VG_CUES && (fade == FADE_CUES || fade == FADE_BOTH)))
-        k *= fade_k;
-    return k;
+    return vis_levels[lv];
 }
 
 static void Skill_Add(int kind, int hit)
@@ -7756,25 +7757,20 @@ static float Fade_Of(int kind)
     return 1.f - 0.65f * t;
 }
 
-static int Cue_KindOn(int kind)
+// Auto Fade's part of a group's level for one cue kind's drawing (1: none).
+static float Fade_Factor(int g, int kind)
 {
-    return kind == CUE_AI ? Cues_Ai() : kind == CUE_WL ? Cues_Waveland() : Cues_Nil();
+    int fade = Options_Intensity[IOPT_FADE].val;
+    if (kind >= 0 && kind < CUE_NUM &&
+        ((g == VG_TIMERS && (fade == FADE_TIMERS || fade == FADE_BOTH)) ||
+         (g == VG_CUES && (fade == FADE_CUES || fade == FADE_BOTH))))
+        return Fade_Of(kind);
+    return 1.f;
 }
 
-static void Fade_Update(void)
+static float Kind_K(int g, int kind)
 {
-    float shown = 0, on = 0;
-    for (int i = 0; i < CUE_NUM; i++)
-    {
-        if (!Cue_KindOn(i))
-            continue;
-        float f = Fade_Of(i);
-        if (f > on)
-            on = f;
-        if ((cue_live[i].phase || cue_end[i].phase) && f > shown)
-            shown = f;
-    }
-    fade_k = shown > 0 ? shown : on > 0 ? on : 1.f;
+    return Group_K(g) * Fade_Factor(g, kind);
 }
 
 void Event_FadeReset(GOBJ *menu)
@@ -8574,6 +8570,7 @@ typedef struct MeterRow
     s8 implode;   // frames since a miss or skip folded in, -1 none
     u8 implode_tone;
     s8 flash;     // frames since the gate reached the first frame Falcon can act, -1 none
+    float fade;   // Auto Fade: its cells' opacity scaled by this
     char label[8];
     char info[24];
 } MeterRow;
@@ -8588,6 +8585,7 @@ static MeterRow *Meter_Add(GXColor color, const char *label)
     MeterRow *r = &meter[meter_rows++];
     memset(r, 0, sizeof(*r));
     r->color = color;
+    r->fade = 1.f;
     r->burst = -1;
     r->implode = -1;
     r->flash = -1;
@@ -8603,7 +8601,7 @@ static void Row_Set(MeterRow *r, int k, int kind, int tone, float alpha)
         return;
     r->cell[k] = kind;
     r->tone[k] = tone;
-    r->alpha[k] = 255 * Clamp01(alpha);
+    r->alpha[k] = 255 * Clamp01(alpha * r->fade);
     if (k + 1 > r->len)
         r->len = k + 1;
 }
@@ -8671,6 +8669,7 @@ static void Meter_FromCue(int kind)
     MeterRow *r = Meter_Add(Cue_Color(kind), wd ? "WD" : cue_labels[kind]);
     if (!r)
         return;
+    r->fade = Fade_Factor(VG_TIMERS, kind);
 
     switch (e->phase)
     {
@@ -10924,16 +10923,19 @@ static void Near_Draw(FighterData *fp, int look)
     if (route_rows_active)
         return;
 
+    float base = vis_k;
     if (look == NEAR_BUBBLE)
     {
         for (int pass = 0; pass < 2; pass++)
         {
             for (int i = 0; i < CUE_NUM; i++)
             {
+                vis_k = base * Fade_Factor(VG_TIMERS, i);
                 if (Near_Shown(i))
                     Near_Bubble(i, pass ? &cue_live[i] : &cue_end[i]);
             }
         }
+        vis_k = base;
         return;
     }
 
@@ -10967,6 +10969,7 @@ static void Near_Draw(FighterData *fp, int look)
     if (kind < 0)
         return;
 
+    vis_k = base * Fade_Factor(VG_TIMERS, kind);
     for (int pass = 0; pass < 2; pass++)
     {
         if (!Near_Cue(kind, pass ? &cue_live[kind] : &cue_end[kind], &n))
@@ -10987,6 +10990,7 @@ static void Near_Draw(FighterData *fp, int look)
             break;
         }
     }
+    vis_k = base;
 }
 
 // The wavedash timers drawn at Falcon's feet (Pips, Ring); Cells is a row in
@@ -10996,6 +11000,8 @@ static void Wd_Draw(FighterData *fp)
     int look = Options_Timers[TOPT_WD].val;
     if ((look != WDT_PIPS && look != WDT_RING) || !Cues_Waveland())
         return;
+    float base = vis_k;
+    vis_k = base * Fade_Factor(VG_TIMERS, CUE_WL);
     // the last one's ending first, the live one over it
     for (int pass = 0; pass < 2; pass++)
     {
@@ -11007,10 +11013,12 @@ static void Wd_Draw(FighterData *fp)
         else
             Wd_Ring(c, !pass);
     }
+    vis_k = base;
 }
 
 static void Spot_Draw(FighterData *fp)
 {
+    float base = vis_k;
     for (int pass = 0; pass < 2; pass++)
     {
         for (int i = 0; i < CUE_NUM; i++)
@@ -11020,6 +11028,7 @@ static void Spot_Draw(FighterData *fp)
                 continue;
             if (i == CUE_AI ? !Cues_Ai() : i == CUE_WL ? !Cues_Waveland() : !Cues_Nil())
                 continue;
+            vis_k = base * Fade_Factor(VG_TIMERS, i);
             if (i == CUE_WL)
             {
                 if (Options_Timers[TOPT_WL].val != WLT_OFF)
@@ -11029,6 +11038,7 @@ static void Spot_Draw(FighterData *fp)
                 Spot_Brackets(i, c, !pass);
         }
     }
+    vis_k = base;
 }
 
 ///////////////////////
@@ -12200,7 +12210,7 @@ static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
 // while the window is open; the Gauge is a ring going round it, closed as
 // the window opens. Either is only an outline in the cue's color, never a
 // fill, so it can't be taken for a press.
-#define PADCUE_LEAD 10 // frames ahead it shows
+#define PADCUE_LEAD 20 // frames ahead it shows
 static void Pad_CueOne(int in, int kind)
 {
     Cue *c = &cue_live[kind];
@@ -12212,7 +12222,11 @@ static void Pad_CueOne(int in, int kind)
     if (ahead > PADCUE_LEAD)
         return;
     float t = open ? 0 : (float)ahead / PADCUE_LEAD; // 1 far, 0 at the window
+    if (cue_log)
+        OSReport("LLPADCUE %d pin %d kind %d ahead %d open %d at %.2f %.2f r %.2f\n", event_vars->game_timer, in, kind, ahead,
+                 open, x, y, r);
     GXColor col = Cue_Color(kind);
+    vis_k = Kind_K(VG_TIMERS, kind);
     float w = open ? 0.16f : 0.09f;
     if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_RING)
     {
@@ -12240,7 +12254,6 @@ static void Pad_Cues(void)
     if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_OFF || route_rows_active)
         return;
     float k = vis_k;
-    vis_k = Group_K(VG_TIMERS);
     if (Cues_Ai())
         Pad_CueOne(PIN_A, CUE_AI);
     if (Cues_Waveland())
@@ -12626,7 +12639,6 @@ static void World_GX(GOBJ *gobj, int pass)
     vis_k = 1.f;
     if (Options_Dev[DOPT_COLL].val)
         Draw_CurrentEcb(fp);
-    Fade_Update();
     vis_k = Group_K(VG_PATHS);
     // a ledge route stays on top all the way down
     world_on_top = route_active;
@@ -12652,7 +12664,7 @@ static void World_GX(GOBJ *gobj, int pass)
     }
     world_on_top = 0;
     world_add = 1;
-    vis_k = Group_K(VG_CUES);
+    vis_k = Kind_K(VG_CUES, CUE_WL);
     Plat_Glow(fp);
     world_add = 0;
     world_on_top = 1;
@@ -12759,7 +12771,6 @@ static void Hud_GX(GOBJ *gobj, int pass)
         CObj_SetCurrent(prev);
         return;
     }
-    Fade_Update();
     Meter_Build();
     vis_k = Group_K(route_rows_active ? VG_LEDGE : VG_TIMERS);
     Spot_Draw(fp);
@@ -12815,7 +12826,7 @@ static int Advance_CheckPause(void)
 {
     HSD_Update *update = stc_hsd_update;
     int paused = update->pause_kind & 1;
-    return paused != (Options_Game[GOPT_FRAME_ADV].val || assist_frozen);
+    return paused != (Options_Game[GOPT_FRAME_ADV].val || assist_frozen || namer.on);
 }
 
 static int Advance_CheckStep(void)
@@ -12826,6 +12837,8 @@ static int Advance_CheckStep(void)
     HSD_Pad *engine = PadGetEngine(port);
     int button = adv_button_masks[Options_Game[GOPT_ADV_BUTTON].val];
 
+    if (namer.on)
+        return 0; // the name grid has the buttons
     if (assist_advance)
     {
         assist_advance = 0;
@@ -16072,7 +16085,7 @@ static void Meter_AddDrop(int sid)
     int hanging = sid == ASID_CLIFFWAIT && drop_w0 >= 0;
     if (sid != ASID_CLIFFCATCH && !hanging && drop_age > 20)
         return;
-    MeterRow *r = Meter_Add(color_galint, "DROP");
+    MeterRow *r = Meter_Add(color_galint, "DRP");
     if (!r)
         return;
     if (sid == ASID_CLIFFCATCH || hanging)
@@ -16080,7 +16093,7 @@ static void Meter_AddDrop(int sid)
         // index 0 is now; the hang's first frame is drop_catch_left away
         int rest = sid == ASID_CLIFFCATCH ? drop_catch_left : -(event_vars->game_timer - drop_w0);
         if (rest >= 0)
-            Row_Set(r, rest, CELL_AIR, TONE_CUE, 1);
+            Row_Set(r, rest, CELL_LAND, TONE_CUE, 1); // hollow: nothing held
         for (int j = 1; j <= 2; j++)
             if (rest + j >= 0)
                 Row_Set(r, rest + j, CELL_PRESS, TONE_CUE, 1);
@@ -16864,7 +16877,7 @@ static void Body_Flash(FighterData *fp, int sid)
     }
     if (flash_age < 100)
         flash_age++;
-    a *= hide_all ? 0 : Group_K(VG_CUES);
+    a *= hide_all ? 0 : Kind_K(VG_CUES, flash_age < 4 ? flash_kind : -1);
     if (a > 0.9f)
         a = 0.9f;
 
@@ -17533,6 +17546,18 @@ void Event_Update(void)
             Log(buf);
         }
         card_probe--;
+    }
+    if (namer.on)
+    {
+        if (namer.leave_menu)
+        {
+            namer.leave_menu = 0;
+            if (Pause_CheckStatus(1) == 2)
+                event_vars->Menu_Exit(event_vars->menu_gobj);
+            return;
+        }
+        Namer_Think();
+        return;
     }
     if (Pause_CheckStatus(1) == 2)
         return;

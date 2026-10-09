@@ -45,6 +45,26 @@ set Camera/Camera Mode = 0
 set Camera/View = 0
 10
 
+# The Advanced camera moved the way a player moves it: Camera Mode set to
+# Advanced (it resumes where it was last left), then C-stick held with A to
+# pan and with Y to zoom, then Falcon put back in view and the jump run.
+# "view show 1" logs where the camera really is.
+script Advanced camera by hand
+set Camera/Camera Mode = 3
+10
+40 A c:1,0
+30 Y c:0,1
+start 38 0 right
+10
+view show 1
+5 X
+22
+shot advanced camera moved by hand: path and spot marks on the right platform as drawn
+ai 0 A
+land 120
+set Camera/Camera Mode = 0
+10
+
 # Intensity by group, on the same jump: Timers 2 fainter, Paths 2 bolder,
 # controller at 5.
 script Intensity groups
@@ -162,9 +182,8 @@ ledge right
 mark two frames of rest
 60
 ledge right
-1
-shot drop row: hang's first frame, window next
-3
+shot drop row: DRP label clear of its cells, a hollow rest cell, two solid cells after it
+4
 5 s:0,-1
 mark three frames of rest
 60

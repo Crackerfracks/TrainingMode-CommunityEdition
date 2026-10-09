@@ -3562,6 +3562,9 @@ static float sim_bottom_y = -100000.f;
 // aerial interrupts are worth showing (Windows_Summarize), so a search
 // that keeps nothing else skips the rest, most of the work.
 static int sim_rising_only;
+// ... and stop once falling too fast to land as a NIL (Landing_Kind): no
+// NIL or rising AI can come after that.
+static float sim_stop_vy = -100000.f;
 
 // Simulate keeping the stick where it is and pressing nothing. With
 // branches (BR_*), also try aerials and airdodges on the frames along the way.
@@ -3634,6 +3637,8 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
             break;
         }
         if (s.vy < 0 && s.y < sim_bottom_y)
+            break;
+        if (s.vy < sim_stop_vy)
             break;
     }
 
@@ -15394,11 +15399,14 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
     sim_limit = JT_SIM;
     sim_bottom_y = jt_bottom;
     sim_rising_only = !ai_show_all;
+    if (sim_rising_only)
+        sim_stop_vy = Fighter_GetSoftLandVelocity(fp) - 0.001f;
     int steps0 = sim_steps;
     Predict(fp, &ps, pred_route, BR_AI);
     jt_steps += sim_steps - steps0;
     jt_tries++;
     sim_rising_only = 0;
+    sim_stop_vy = -100000.f;
     sim_limit = LL_SIM_FRAMES;
     sim_bottom_y = -100000.f;
 
@@ -15957,6 +15965,8 @@ static void Jump_Path(FighterData *fp)
     int found_n;
     JumpCand c = {r->d, r->stick, r->hold, r->hop, r->hj};
     Jump_Try(fp, &c, found, &found_n, jt_path, jt_path_bottom, &jt_path_num);
+    if (jt_path_num > r->land + 1 && r->land > 0)
+        jt_path_num = r->land + 1; // up to its own touchdown
     jt_path_of = *r;
     jt_path_anchor = jt_anchor;
 }
@@ -16024,6 +16034,10 @@ static void Jump_Publish(FighterData *fp)
     }
     if (!b)
         return;
+    if (Log_Level() >= LOG_ALL && (!Jump_Same(b, &jt_route) || b->dj != jt_route.dj))
+        OSReport("LLJUMPR %d anchor %d hop %d hj %d dj %d stick %d hold %d aerial %d press %d land %d on %d kind %d\n",
+                 event_vars->game_timer, jt_anchor, b->hop, b->hj, b->dj, b->stick, b->hold, b->aerial, b->press, b->land,
+                 b->where, b->kind);
     jt_route = *b;
     Jump_Path(fp);
     Jump_Text(&jt_route, e);

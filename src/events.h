@@ -6,8 +6,8 @@
 #include "savestate.h"
 #include <stdint.h>
 
-#define TM_VERSSHORT "TM-CE LL 0.8.2 dev"
-#define TM_VERSLONG "TM-CE v1.4 + Landing Lab 0.8.2 dev"
+#define TM_VERSSHORT "TM-CE LL 0.8.3 dev"
+#define TM_VERSLONG "TM-CE v1.4 + Landing Lab 0.8.3 dev"
 #define EVENT_DATASIZE 512
 #define TM_FUNC -(50 * 4)
 

@@ -18296,9 +18296,26 @@ static void Deck_Demo(FighterData *fp)
     }
     live_visible = 1;
     deck.demo = 1;
-    if (first)
-        lead = DECK_DEMO_TO_GO - first; // the countdown as if partway there
-    Timing_Update(fp, pred_live, lead);
+    Prediction *p = pred_live;
+    int ref = first ? first : p->land_frame;
+    if (ref)
+    {
+        // the first countdown as if partway there: started full, then run
+        // on to DECK_DEMO_TO_GO
+        Timing_Update(fp, p, LL_COUNT_FRAMES - ref);
+        lead = DECK_DEMO_TO_GO - ref;
+    }
+    Timing_Update(fp, p, lead);
+    // A hop from the ground seldom has a rising AI to show, so with AI cues
+    // on and none here, one is put at the hop's touchdown, to see how it looks.
+    int k = p->land_frame;
+    if (Cues_Ai() && !cue_live[CUE_AI].phase && k > 1)
+    {
+        float x = p->pos[k].X, y = p->pos[k - 1].Y + p->bottom[k - 1];
+        Cue_Set(CUE_AI, LL_COUNT_FRAMES, 3, 0, 0, x, y);
+        Cue_Set(CUE_AI, DECK_DEMO_TO_GO, 3, 0, 0, x, y);
+        Cue_Body(CUE_AI, p, k - 1);
+    }
     OSReport("LLDECK demo first %d lead %d ai %d wl %d land %d\n", first, lead, pred_live->ai_first,
              pred_live->wl_first, pred_live->land_frame);
 }

@@ -269,3 +269,14 @@ start -60 0 right
 shot running right: a hop spot ahead, or nothing
 16 s:1,0
 set Jump/Show = 0
+
+# The quick menu, by hand: Falcon stands still for a long while (the wait
+# stops while the menu has the game frozen) so the controller can open it:
+# R all the way and D-pad up, left and right to flip presets, down for the
+# settings list, A or X to save, R let go to close; L+R with D-pad up hides
+# everything (a small "Effects hidden" line stays at the top left).
+script Quick menu
+preset load Defaults
+start 0 0 right
+mark quick menu by hand now
+1800

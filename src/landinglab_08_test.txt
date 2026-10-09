@@ -84,59 +84,74 @@ set Intensity/Controller = 2
 
 # Auto Fade on the timers: twelve hit AIs raise the AI hit rate (LLFADE
 # lines), so the AI timer is fainter on the last one than on the first. The
-# AI is a rising one (a double jump up into the top platform): falling AIs
-# are platform catches, which get no timer. Expect LLCUE AI lines for each.
+# AI is a rising one: after 14 frames of falling from 40 under the top
+# platform, a double jump comes up to the platform slowly enough for a nair
+# to catch it on the way up (Jump Timing found it: "DJ up now, nair f12").
+# Falling AIs are platform catches, which get no timer. Expect LLFADE lines
+# for each.
 script Auto fade
 preset load Defaults
 fadereset
 set Intensity/Auto Fade = 1
 air 0 40 right 0 0 0
+14
 1 X
 6
 shot fade first try: the AI timer (pink cells in the strip, spot on the top platform) at full strength
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 ai 0 A
 land 120
 air 0 40 right 0 0 0
+14
 1 X
 6
 shot fade after 11 hits: the same AI timer, clearly fainter
@@ -151,6 +166,7 @@ script Controller cues
 preset load Defaults
 set HUD/Controller Cues = 1
 air 0 40 right 0 0 0
+14
 1 X
 6
 shot closing ring: a pink ring around A, wider than A, not filled
@@ -158,6 +174,7 @@ ai 0 A
 land 120
 set HUD/Controller Cues = 2
 air 0 40 right 0 0 0
+14
 1 X
 6
 shot gauge: a pink arc partway round A
@@ -231,19 +248,24 @@ air 0 40 right 0 0 0
 shot jump timing: JUMP row counting down, pink AI row under it, path up to the top platform, panel "DJ ... in Nf, aerial fN-N: AI"
 set Jump/Show = 0
 
-# Hop timing from the ground: standing under the left platform, then
-# running right along the floor. With Show on and From the Ground on Both,
-# an SH or FH row counts down to the hop, the path runs along the floor to
-# the hop spot and up, and the panel says "SH in Nf, nair fN: AI" (or FH, or
-# NIL). Expect LLJUMP ground lines.
+# Hop timing from the ground. Standing under the top platform, the search
+# tries short and full hops with a double jump on each of their frames:
+# expect an LLJUMP ground still line, an FH or SH row, a DJ row and an AI or
+# NIL row, and a path from Falcon. Then the full hop is done: the plan's
+# double jump carries into the air (an LLJUMP seed line). Then running
+# right: single hops only, which rarely land a rising AI on Battlefield.
 script Hop timing
 preset load Defaults
 set Jump/Show = 1
-start -38 0 right
-20
-shot standing under the left platform: an SH or FH row at "now", the hop's path from Falcon
+start 0 0 right
+120
+shot standing under the top platform: FH or SH row, DJ row, AI or NIL row, path from Falcon to a platform
+5 X
+6
+shot after the hop: the JUMP row counting down to the same double jump, path from Falcon
+land 120
 start -60 0 right
 24 s:1,0
-shot running right: the hop spot ahead on the floor, a row counting down to it
+shot running right: a hop spot ahead, or nothing
 16 s:1,0
 set Jump/Show = 0

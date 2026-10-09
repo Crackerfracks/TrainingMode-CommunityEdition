@@ -3558,6 +3558,10 @@ static u8 WL_Mask(Prediction *p, int k)
 // sim_bottom_y. The ledge route search looks less far.
 static int sim_limit = LL_SIM_FRAMES;
 static float sim_bottom_y = -100000.f;
+// Only branch actions off frames where the fighter rises: only rising
+// aerial interrupts are worth showing (Windows_Summarize), so a search
+// that keeps nothing else skips the rest, most of the work.
+static int sim_rising_only;
 
 // Simulate keeping the stick where it is and pressing nothing. With
 // branches (BR_*), also try aerials and airdodges on the frames along the way.
@@ -3613,7 +3617,8 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
         p->wl_ground[k] = 0;
         p->num = k;
 
-        if (branches && (((branches & BR_LOCK) && before.lock > 0) || Floor_Near(s.x, s.y + s.bottom)))
+        if (branches && (!sim_rising_only || s.vy > 0 || before.vy > 0) &&
+            (((branches & BR_LOCK) && before.lock > 0) || Floor_Near(s.x, s.y + s.bottom)))
             Branch_Actions(fp, start, &before, p, k, step.landed, branches);
 
         if (step.landed)
@@ -15051,7 +15056,9 @@ typedef struct JumpRoute
     u8 press_w; // AI: frames the aerial's window lasts
     u8 changes; // stick changes the route asks for
     u8 where;   // what it lands on: JWHERE_* bits
-    u8 hop;     // from the ground: GT_SH or GT_FH (stick is then the hop), 0 for a double jump
+    u8 hop;     // from the ground: GT_SH or GT_FH, 0 for a double jump from the air
+    s8 hj;      // ... with a double jump hj frames after the takeoff, -1 for the hop alone
+    s16 hp;     // ... the frame the hop is pressed on
     u8 d;       // frames of fall before the jump
     s16 dj;     // frame of the double jump
     s16 press;  // AI: first frame of the aerial's window
@@ -15081,6 +15088,10 @@ static JumpRoute jt_path_of;    // the route the path is for
 static int jt_path_anchor = -1;
 static int jt_target;           // Land On as the search started
 static int jt_hop;              // From the Ground as the search started
+static int jt_steps, jt_tries;  // the search's cost, for the log
+static JumpRoute gt_plan;       // the standstill plan shown last, with its double jump
+static u8 gt_plan_ok;
+static u8 gt_squat_short;       // the jumpsquat is a short hop's
 
 // From the ground (Hop Timing): the anchor is on the ground, and a
 // candidate's d is the frames Falcon keeps moving before the jump is
@@ -15217,7 +15228,14 @@ static int Jump_Better(JumpRoute *a, JumpRoute *b)
 // jump or not doesn't make another one.
 static int Jump_Same(JumpRoute *a, JumpRoute *b)
 {
-    return a->kind == b->kind && a->d == b->d && a->stick == b->stick && a->aerial == b->aerial && a->press == b->press;
+    return a->kind == b->kind && a->d == b->d && a->stick == b->stick && a->aerial == b->aerial && a->press == b->press &&
+           a->hop == b->hop && a->hj == b->hj;
+}
+
+// The first input a route asks for: the hop, or the double jump.
+static int Jump_First(JumpRoute *r)
+{
+    return r->hop ? r->hp : r->dj;
 }
 
 // Put a route in a kind's list, in order, as Route_Insert does.
@@ -15259,9 +15277,18 @@ static void Jump_Insert(JumpRoute *a, int *count, JumpRoute *r)
 // them, so are the ones that are not worth the press (Windows_Summarize).
 // With path, also records where Falcon goes, frame by frame from the
 // anchor to the touchdown.
-static void Jump_Try(FighterData *fp, int d, int stick, int hold, JumpRoute *out, int *n_out, Vec2 *path, float *bottom,
-                     int *num)
+typedef struct JumpCand
 {
+    int d;     // frames before the jump (in the air) or the hop (on the ground)
+    int stick; // the double jump's stick, JT_*
+    int hold;  // after the double jump (or the hop): keep its x
+    int hop;   // on the ground: GT_SH or GT_FH
+    int hj;    // ... a double jump this many frames after the takeoff, or -1
+} JumpCand;
+
+static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, Vec2 *path, float *bottom, int *num)
+{
+    int d = c->d, stick = c->stick, hold = c->hold;
     SimStart ps;
     int n = 0, off;
     *n_out = 0;
@@ -15272,11 +15299,10 @@ static void Jump_Try(FighterData *fp, int d, int stick, int hold, JumpRoute *out
         // d frames on the ground, the press, the squat, the takeoff
         GroundStep *g = &gt_steps[d];
         float slide[12];
-        float sx = hold ? jt_stick_x : 0;
-        int until = Sim_GroundJumpAt(fp, stick == GT_SH, g->x, g->y, g->v, jt_stick_x, 1, &ps, slide);
+        int until = Sim_GroundJumpAt(fp, c->hop == GT_SH, g->x, g->y, g->v, jt_stick_x, 1, &ps, slide);
         if (until - 1 > (int)countof(slide))
             return;
-        ps.stick_x = sx;
+        ps.stick_x = hold ? jt_stick_x : 0;
         ps.stick_y = 0;
         off = d + until;
         if (path)
@@ -15293,6 +15319,41 @@ static void Jump_Try(FighterData *fp, int d, int stick, int hold, JumpRoute *out
             }
             path[n] = ps.pos;
             bottom[n++] = 0;
+        }
+        if (c->hj >= 0)
+        {
+            // the hop with the stick as on the ground, then the double jump
+            SimStart st = ps;
+            SimState s;
+            SimStep step;
+            st.stick_x = jt_stick_x;
+            Sim_Init(&st, &s);
+            for (int i = 0; i < c->hj; i++)
+            {
+                Sim_Step(fp, &st, &s, -1, 0, &step);
+                if (step.landed || step.ceiling)
+                    return;
+                if (path)
+                {
+                    path[n] = (Vec2){s.x, s.y};
+                    bottom[n++] = s.bottom;
+                }
+            }
+            st.skip_line = -1;
+            st.stick_x = jt_stick_xy[stick][0];
+            st.stick_y = jt_stick_xy[stick][1];
+            Sim_DoubleJump(fp, &st, &s, &step);
+            if (path)
+            {
+                path[n] = (Vec2){s.x, s.y};
+                bottom[n++] = s.bottom;
+            }
+            if (step.landed || step.ceiling)
+                return;
+            st.stick_x = hold ? jt_stick_xy[stick][0] : 0;
+            st.stick_y = 0;
+            Sim_ToStart(&s, &st, &ps);
+            off += c->hj + 1;
         }
     }
     else
@@ -15329,7 +15390,12 @@ static void Jump_Try(FighterData *fp, int d, int stick, int hold, JumpRoute *out
     }
     sim_limit = JT_SIM;
     sim_bottom_y = jt_bottom;
+    sim_rising_only = !ai_show_all;
+    int steps0 = sim_steps;
     Predict(fp, &ps, pred_route, BR_AI);
+    jt_steps += sim_steps - steps0;
+    jt_tries++;
+    sim_rising_only = 0;
     sim_limit = LL_SIM_FRAMES;
     sim_bottom_y = -100000.f;
 
@@ -15348,11 +15414,13 @@ static void Jump_Try(FighterData *fp, int d, int stick, int hold, JumpRoute *out
     JumpRoute base = {0};
     base.stick = stick;
     base.hold = hold;
-    base.hop = jt_ground ? stick : 0;
+    base.hop = jt_ground ? c->hop : 0;
+    base.hj = jt_ground ? c->hj : -1;
+    base.hp = jt_ground ? d + 1 : 0;
     base.d = d;
-    base.dj = d + 1;
+    base.dj = jt_ground && c->hj >= 0 ? off : d + 1;
     base.press = -1;
-    base.changes = jt_ground ? 1 + !hold : Jump_Changes(stick, hold);
+    base.changes = !jt_ground ? Jump_Changes(stick, hold) : c->hj >= 0 ? 1 + Jump_Changes(stick, hold) : 1 + !hold;
 
     int nr = 0;
     if (p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame)
@@ -15418,7 +15486,7 @@ static void Jump_Prune(int e)
         int n = 0;
         for (int i = 0; i < jt_best_n[k]; i++)
         {
-            if (jt_best[k][i].dj > e)
+            if (Jump_First(&jt_best[k][i]) > e)
                 jt_best[k][n++] = jt_best[k][i];
         }
         jt_best_n[k] = n;
@@ -15481,6 +15549,8 @@ static void Jump_Anchor(FighterData *fp, int ts)
     jt_next = 0;
     jt_done = 0;
     jt_found = 0;
+    jt_steps = 0;
+    jt_tries = 0;
     jt_best_n[0] = 0;
     jt_best_n[1] = 0;
     jt_have = 0;
@@ -15543,6 +15613,8 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
     jt_next = 0;
     jt_done = 0;
     jt_found = 0;
+    jt_steps = 0;
+    jt_tries = 0;
     jt_best_n[0] = 0;
     jt_best_n[1] = 0;
     jt_have = 0;
@@ -15622,6 +15694,8 @@ static void Jump_Extend(FighterData *fp, int ts, int e)
                 continue;
             r.d -= e;
             r.dj -= e;
+            if (r.hop)
+                r.hp -= e;
             r.land -= e;
             r.act -= e;
             if (r.press >= 0)
@@ -15641,6 +15715,29 @@ static void Jump_Extend(FighterData *fp, int ts, int e)
     }
 }
 
+// A standstill plan with a double jump, carried into the air: on the
+// hop's first frames the search hasn't got to its jump yet, so the plan's
+// jump is tried first, as the air search counts it.
+static void Jump_Seed(FighterData *fp, int ts)
+{
+    if (!gt_plan_ok || (ts != TS_JUMPF && ts != TS_JUMPB))
+        return;
+    gt_plan_ok = 0;
+    if (gt_plan.hop != (gt_squat_short ? GT_SH : GT_FH))
+        return;
+    JumpCand c = {gt_plan.hj - frame_in_state, gt_plan.stick, gt_plan.hold, 0, -1};
+    if (c.d < 0 || c.d >= jt_cache_n)
+        return;
+    JumpRoute found[JT_TRY];
+    int found_n;
+    Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+    for (int i = 0; i < found_n; i++)
+        if (Jump_OnTarget(&found[i]))
+            Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+    if (cue_log)
+        OSReport("LLJUMP seed %d d %d stick %d found %d\n", event_vars->game_timer, c.d, c.stick, found_n);
+}
+
 // Each frame, before the search: is Falcon in a fall to search, and is the
 // anchor still right for it. It is taken again when he comes back to a fall
 // after leaving one, when the stick or his path leaves what it assumed, and
@@ -15648,8 +15745,15 @@ static void Jump_Extend(FighterData *fp, int ts, int e)
 static void Jump_Update(FighterData *fp, int ts, int tracked_air)
 {
     int e = event_vars->game_timer - jt_anchor;
+    if (fp->state_id == ASID_KNEEBEND)
+        gt_squat_short = fp->state_var.state_var1 != 0; // let go of the jump: a short hop
     if (!Jump_Eligible(fp, ts, tracked_air))
     {
+        // why not, once a second, while it's on and Falcon is in the air
+        if (Options_Jump[JOPT_SHOW].val && fp->phys.air_state == 1 && cue_log && event_vars->game_timer % 60 == 0)
+            OSReport("LLJUMPX %d not searching: tracked %d ts %d jumps %d of %d route %d ledge %d assist %d\n",
+                     event_vars->game_timer, tracked_air, ts, fp->jump.jumps_used, fp->attr.max_jumps, route_active,
+                     hang_ledge, Options_Ledge[LOPT_ASSIST].val);
         jt_active = 0;
         jt_have = 0;
     }
@@ -15673,7 +15777,21 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
     }
     else if (!jt_active || jt_ground || e < 0 || Jump_InputChanged(fp, ts) || Jump_Drifted(fp, e) ||
              Options_Jump[JOPT_TARGET].val != jt_target)
+    {
+        if (Log_Level() >= LOG_ALL)
+        {
+            const char *why = !jt_active ? "new" : jt_ground ? "takeoff" : e < 0 ? "time" : Jump_InputChanged(fp, ts) ? "input"
+                              : Jump_Drifted(fp, e) ? "drift" : "target";
+            float dx = !jt_ground && e >= 0 && e < jt_cache_n ? fp->phys.pos.X - jt_cache[e].x : 0;
+            float dy = !jt_ground && e >= 0 && e < jt_cache_n ? fp->phys.pos.Y - jt_cache[e].y : 0;
+            OSReport("LLJUMPA %d air %s e %d tried %d dx %.4f dy %.4f ts %d prev %d\n", event_vars->game_timer, why, e,
+                     jt_tries, dx, dy, ts, jt_prev_ts);
+        }
+        int seed = jt_ground || !jt_active;
         Jump_Anchor(fp, ts);
+        if (seed)
+            Jump_Seed(fp, ts);
+    }
     else if (e >= JT_REANCHOR)
         Jump_Extend(fp, ts, e);
     jt_prev_ts = ts;
@@ -15685,7 +15803,7 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
 static float Jump_Facing(JumpRoute *r)
 {
     float face = jt_start.facing > 0 ? 1.f : -1.f;
-    if (r->hop)
+    if (r->hop && r->hj < 0)
         return face; // a hop keeps the facing it has on the ground
     return jt_stick_xy[r->stick][0] * face > -common_jump_back_stick ? face : -face;
 }
@@ -15695,9 +15813,10 @@ static float Jump_Facing(JumpRoute *r)
 static void Jump_Log(void)
 {
     JumpRoute *b = Jump_Pick();
-    char buf[200];
-    int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s target %d found %d", jt_anchor, jt_start.pos.X, jt_start.pos.Y,
-                    jt_ground ? "ground " : "", jt_done ? "done" : "partial", jt_target, jt_found);
+    char buf[320];
+    int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d", jt_anchor,
+                    jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
+                    jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found);
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)
@@ -15712,41 +15831,100 @@ static void Jump_Log(void)
 // Search on: the candidates in the order of the jump frame, the soonest
 // first, until the budget of simulated frames or of real time is spent. A
 // jump whose frame has gone by is not tried.
+// The candidates, in the order they're tried. In the air: by the frame of
+// the jump, then its stick and whether its x is kept. On the ground while
+// moving: by the frame of the hop, then short or full, and whether the
+// stick is kept. Standing still, every frame's hop is the same, so the
+// hops alone come first, then each hop with a double jump on each of its
+// frames (the stick of the double jump, and keeping its x or not).
+#define GT_STILL_CANDIDATES (4 + 2 * JT_D * JT_STICKS * 2)
+
+static int Jump_Total(void)
+{
+    return jt_ground && gt_still ? GT_STILL_CANDIDATES : JT_CANDIDATES;
+}
+
+// Candidate i: 1 to try it, 0 to skip it, -1 when none after it can work.
+static int Jump_Cand(int i, JumpCand *c)
+{
+    int want = Options_Jump[JOPT_HOP].val;
+    c->hj = -1;
+    c->stick = JT_UP;
+    if (jt_ground && gt_still)
+    {
+        c->d = 0;
+        if (i < 4)
+        {
+            c->hop = i < 2 ? GT_SH : GT_FH;
+            c->hold = i % 2;
+            if (c->hold && fabs(jt_stick_x) < JT_HOP_STILL)
+                return 0; // no stick to keep holding
+        }
+        else
+        {
+            i -= 4;
+            c->hj = i / (2 * JT_STICKS * 2); // the double jump's frame first, both hops at each
+            i %= 2 * JT_STICKS * 2;
+            c->hop = i < JT_STICKS * 2 ? GT_SH : GT_FH;
+            i %= JT_STICKS * 2;
+            c->stick = i / 2;
+            c->hold = i % 2;
+            if (c->stick == JT_UP && c->hold)
+                return 0;
+        }
+        return !((c->hop == GT_SH && want == HOP_FULL) || (c->hop == GT_FH && want == HOP_SHORT));
+    }
+    c->d = i / (JT_STICKS * 2);
+    c->stick = (i / 2) % JT_STICKS;
+    c->hold = i % 2;
+    if (c->d >= jt_cache_n)
+        return -1; // he lands (or the floor ends) before this frame
+    if (jt_ground)
+    {
+        // the slots of the first two sticks are the hops
+        if (c->stick != JT_UPLEFT && c->stick != JT_UPRIGHT)
+            return 0;
+        c->hop = c->stick == JT_UPLEFT ? GT_SH : GT_FH;
+        c->stick = JT_UP;
+        if ((c->hop == GT_SH && want == HOP_FULL) || (c->hop == GT_FH && want == HOP_SHORT))
+            return 0;
+        if (c->hold && fabs(jt_stick_x) < JT_HOP_STILL)
+            return 0;
+        return 1;
+    }
+    c->hop = 0;
+    return !(c->stick == JT_UP && c->hold); // up has no x to keep
+}
+
+// Search on: the candidates in order, the soonest first, until the budget
+// of simulated frames or of real time is spent. A jump whose frame has
+// gone by is not tried.
 static void Jump_Solve(FighterData *fp)
 {
     if (!jt_active || jt_done)
         return;
     int e = Jump_E();
+    int total = Jump_Total();
     int start = sim_steps;
     int t0 = OSGetTick();
-    while (jt_next < JT_CANDIDATES && sim_steps - start < JT_BUDGET)
+    while (jt_next < total && sim_steps - start < JT_BUDGET)
     {
-        if (jt_next < e * JT_STICKS * 2)
+        if (!(jt_ground && gt_still) && jt_next < e * JT_STICKS * 2)
             jt_next = e * JT_STICKS * 2;
-        if (jt_next >= JT_CANDIDATES)
+        if (jt_next >= total)
             break;
-        int c = jt_next++;
-        int d = c / (JT_STICKS * 2), stick = (c / 2) % JT_STICKS, hold = c % 2;
-        if (d >= jt_cache_n)
+        JumpCand c;
+        int ok = Jump_Cand(jt_next++, &c);
+        if (ok < 0)
         {
-            jt_next = JT_CANDIDATES; // he lands before this frame
+            jt_next = total;
             break;
         }
-        if (jt_ground)
-        {
-            int want = Options_Jump[JOPT_HOP].val;
-            if (stick != GT_SH && stick != GT_FH)
-                continue; // the hops: short and full
-            if ((stick == GT_SH && want == HOP_FULL) || (stick == GT_FH && want == HOP_SHORT))
-                continue;
-            if (hold && fabs(jt_stick_x) < JT_HOP_STILL)
-                continue; // no stick to keep holding
-        }
-        else if (stick == JT_UP && hold)
-            continue; // up has no x to keep
+        if (!ok)
+            continue;
         JumpRoute found[JT_TRY];
         int found_n;
-        Jump_Try(fp, d, stick, hold, found, &found_n, 0, 0, 0);
+        Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
         for (int i = 0; i < found_n; i++)
         {
             jt_found++;
@@ -15757,7 +15935,7 @@ static void Jump_Solve(FighterData *fp)
         if (OSTicksToMicroseconds(OSGetTick() - t0) >= LR_TIME_US)
             break;
     }
-    if (jt_next >= JT_CANDIDATES)
+    if (jt_next >= total)
     {
         jt_done = 1;
         if (cue_log)
@@ -15770,11 +15948,12 @@ static void Jump_Path(FighterData *fp)
 {
     JumpRoute *o = &jt_path_of, *r = &jt_route;
     if (jt_path_anchor == jt_anchor && jt_path_num > 0 && o->d == r->d && o->stick == r->stick && o->hold == r->hold &&
-        o->hop == r->hop)
+        o->hop == r->hop && o->hj == r->hj)
         return;
     JumpRoute found[JT_TRY];
     int found_n;
-    Jump_Try(fp, r->d, r->stick, r->hold, found, &found_n, jt_path, jt_path_bottom, &jt_path_num);
+    JumpCand c = {r->d, r->stick, r->hold, r->hop, r->hj};
+    Jump_Try(fp, &c, found, &found_n, jt_path, jt_path_bottom, &jt_path_num);
     jt_path_of = *r;
     jt_path_anchor = jt_anchor;
 }
@@ -15787,10 +15966,15 @@ static void Jump_Text(JumpRoute *r, int e)
     int until = r->dj - e - 1;
     char *t = text_next;
     const char *hop = r->hop == GT_SH ? "SH" : "FH";
-    if (r->hop && until > 0)
-        t += sprintf(t, "%s in %df", hop, until);
+    int hop_in = r->hp - e - 1;
+    if (r->hop && hop_in > 0)
+        t += sprintf(t, "%s in %df", hop, hop_in);
     else if (r->hop)
         t += sprintf(t, "%s now", hop);
+    if (r->hop && r->hj >= 0)
+        t += sprintf(t, ", DJ %s f%d", jt_stick_names[r->stick], until);
+    else if (r->hop)
+        ;
     else if (until > 0)
         t += sprintf(t, "DJ %s in %df", jt_stick_names[r->stick], until);
     else
@@ -15807,7 +15991,7 @@ static void Jump_Text(JumpRoute *r, int e)
     }
     else
         sprintf(t, ": NIL");
-    if (r->hop)
+    if (r->hop && r->hj < 0)
         sprintf(text_steps, r->hold ? "keep the stick as it is" : "then let the stick go");
     else if (r->hold && r->stick != JT_UP)
         sprintf(text_steps, "then hold %s", r->stick == JT_LEFT || r->stick == JT_UPLEFT ? "left" : "right");
@@ -15829,6 +16013,12 @@ static void Jump_Publish(FighterData *fp)
     Jump_Prune(e);
     JumpRoute *b = Jump_Pick();
     jt_have = b != 0;
+    if (jt_ground)
+    {
+        gt_plan_ok = b && gt_still && b->hop && b->hj >= 0;
+        if (gt_plan_ok)
+            gt_plan = *b;
+    }
     if (!b)
         return;
     jt_route = *b;
@@ -15885,20 +16075,27 @@ static void Meter_AddJump(void)
         return;
     JumpRoute *r = &jt_route;
     int e = Jump_E();
-    int until = r->dj - e - 1; // cells to the jump: 0 is the next frame
-
-    MeterRow *row = Meter_Add(color_in_jump, r->hop == GT_SH ? "SH" : r->hop == GT_FH ? "FH" : "JUMP");
-    if (!row)
-        return;
-    for (int n = e + 1; n < r->dj; n++)
-        Route_Cell(row, -e - 1, n, CELL_AIR, 0);
-    Route_Cell(row, -e - 1, r->dj, CELL_PRESS, GLYPH_JUMP);
-    if (until == 0)
-        row->hot = 2;
-    if (until > 0)
-        sprintf(row->info, "%df", until);
-    else
-        sprintf(row->info, "now");
+    MeterRow *row;
+    // from the ground: the hop's row, then (with a double jump) the jump's
+    for (int step = r->hop ? 0 : 1; step < 2; step++)
+    {
+        if (step == 1 && r->hop && r->hj < 0)
+            break;
+        int at = step == 0 ? r->hp : r->dj;
+        int until = at - e - 1; // cells to the press: 0 is the next frame
+        row = Meter_Add(color_in_jump, step == 0 ? (r->hop == GT_SH ? "SH" : "FH") : r->hop ? "DJ" : "JUMP");
+        if (!row)
+            return;
+        for (int n = e + 1; n < at; n++)
+            Route_Cell(row, -e - 1, n, CELL_AIR, 0);
+        Route_Cell(row, -e - 1, at, CELL_PRESS, GLYPH_JUMP);
+        if (until == 0)
+            row->hot = 2;
+        if (until > 0)
+            sprintf(row->info, "%df", until);
+        else
+            sprintf(row->info, "now");
+    }
     route_rows_active = 1;
 
     row = Meter_Add(land_kind_colors[r->kind], r->kind == LAND_AI ? "AI" : "NIL");
@@ -16145,15 +16342,22 @@ static void Markers_Draw(void)
     {
         JumpRoute *r = &jt_route;
         int e = Jump_E();
-        int i = r->dj < jt_path_num ? r->dj : jt_path_num - 1;
-        Marker *m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
-        Marker_Glyph(m, GLYPH_JUMP, color_in_jump);
-        if (r->hop == GT_FH)
-            Marker_Glyph(m, GLYPH_UP, color_white); // a full hop: the jump held
-        else if (r->hop)
-            ; // a short hop: the jump alone
-        else
+        int i;
+        Marker *m;
+        if (r->hop && r->hp > e)
         {
+            // the hop: the jump alone for a short hop, held (up) for a full one
+            i = r->hp < jt_path_num ? r->hp : jt_path_num - 1;
+            m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
+            Marker_Glyph(m, GLYPH_JUMP, color_in_jump);
+            if (r->hop == GT_FH)
+                Marker_Glyph(m, GLYPH_UP, color_white);
+        }
+        if (!r->hop || r->hj >= 0)
+        {
+            i = r->dj < jt_path_num ? r->dj : jt_path_num - 1;
+            m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
+            Marker_Glyph(m, GLYPH_JUMP, color_in_jump);
             if (r->stick <= JT_UPRIGHT)
                 Marker_Glyph(m, GLYPH_UP, color_white);
             if (r->stick == JT_LEFT || r->stick == JT_UPLEFT)

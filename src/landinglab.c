@@ -4149,8 +4149,10 @@ enum options_jump
     JOPT_SHOW,
     JOPT_KIND,
     JOPT_TARGET,
+#ifdef LL_GROUND_GUIDE
     JOPT_BANDS,
     JOPT_MARKS,
+#endif
 
     JOPT_COUNT
 };
@@ -4204,6 +4206,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
                  "Top is the highest platform; left and right",
                  "are either side of the stage's middle."},
     },
+#ifdef LL_GROUND_GUIDE
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Takeoff Bands",
@@ -4221,6 +4224,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
                  "hop from here can land on, brighter where more",
                  "timings work. Short hop nearer the surface."},
     },
+#endif
 };
 
 static EventMenu Menu_Jump = {
@@ -12912,7 +12916,10 @@ static void Draw_JumpPath(void);
 static int Jump_Showing(void);
 static void Markers_Draw(void);
 static void Compass_Draw(void);
+#ifdef LL_GROUND_GUIDE
 static void Guide_Draw(FighterData *fp);
+static int gd_bake = -1; // the ground guide height being baked, -1 none, -2 asked for by the script
+#endif
 
 // Platform Glow: the floor a waveland or wavedash slides along lights up
 // in the stage, at Falcon's depth. A faint glow marks the slide while the
@@ -13078,7 +13085,9 @@ static void World_GX(GOBJ *gobj, int pass)
     Plat_Glow(fp);
     world_add = 0;
     world_on_top = 1;
+#ifdef LL_GROUND_GUIDE
     Guide_Draw(fp); // sets each kind's own level
+#endif
     vis_k = Group_K(VG_LEDGE);
     vis_k = Group_K(VG_LEDGE);
     Draw_RoutePath();
@@ -13381,6 +13390,7 @@ enum script_cmd
     SCMD_FADE,
     SCMD_GET,
     SCMD_VIEW,
+    SCMD_BAKE,
 };
 
 typedef struct ScriptInput
@@ -13654,10 +13664,11 @@ static void Script_Parse(void)
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
-                 Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset"))
+                 Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset") ||
+                 Script_Is(w, "bake"))
         {
             op->kind = SOP_CMD;
-            op->count = w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
+            op->count = w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
@@ -14217,6 +14228,13 @@ static void Script_Cmd(ScriptOp *op)
         break;
     case SCMD_FADE:
         Event_FadeReset(0); // Auto Fade's hit rates from earlier runs
+        break;
+    case SCMD_BAKE:
+#ifdef LL_GROUND_GUIDE
+        gd_bake = -2; // the ground guide's tables, from the next frame
+#else
+        ok = 0;
+#endif
         break;
     case SCMD_CHORD:
     {
@@ -15865,6 +15883,7 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
 }
 
 
+#ifdef LL_GROUND_GUIDE // shelved until after 1.0 (Stephen, 2026-10-10): see docs/ground-guide.md
 ///////////////////////
 /// Ground guide    ///
 ///////////////////////
@@ -15881,7 +15900,14 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
 // platform's own stretch (Takeoff Bands), and a spot on the platform the
 // ones that land there from where Falcon is (Reach Marks). Nothing waits on
 // a search, and nothing picks one route: brightness is how many work.
-#define GD_HEIGHTS 4
+//
+// The tables never change for a character, so they can be baked: the script
+// command "bake" works them out for every height from GD_LO to GD_HI and
+// logs them (LLGB lines), tools/guide_bake.py turns the log into
+// TM/llgdNN.bin (NN the character's kind), and a disc that has the file
+// reads each height's table from it when a platform needs it, Fountain's
+// moving ones too. Without the file they're worked out here, as before.
+#define GD_SLOTS 8
 #define GD_SPEEDS 5 // facing right: run back, walk back, still, walk, run; mirrored facing left
 #define GD_HJ 24    // double jumps 1 to 24 frames after the takeoff
 #define GD_DX 80    // distances -80 to 80
@@ -15889,23 +15915,49 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
 #define GD_COMBOS 9 // the double jump's stick and hold: up; the other four let go or held
 #define GD_WAYS (2 + GD_HJ * GD_COMBOS) // the hop alone (stick kept or let go), then the double jumps
 #define GD_PER_HEIGHT (2 * GD_SPEEDS * GD_WAYS)
+#define GD_KINDS 7 // the AI with each aerial (Aerial_Order), then waveland, then NIL
+#define GD_WL 5
+#define GD_NIL 6
 #define GD_BUDGET 1500
 #define GD_TIME_US 1500
+#define GD_BAKE_US 12000
+#define GD_LO 10.f
+#define GD_STEP 0.5f
+#define GD_NUM 121 // 10 to 70
+#define GD_MAGIC 0x4C4C4744 // "LLGD"
+#define GD_VERSION 1
+#define GD_DIMS (GD_SPEEDS | GD_KINDS << 8 | GD_DX << 16 | GD_HJ << 24)
 typedef struct GuideTable
 {
-    u8 n[2][GD_SPEEDS][CUE_NUM][GD_BINS]; // [short 0 / full 1][speed][CUE_AI, CUE_WL, CUE_NIL][distance]
+    u8 n[2][GD_SPEEDS][GD_KINDS][GD_BINS]; // [short 0 / full 1][speed][kind][distance]
 } GuideTable;
-static GuideTable *gd_table; // [GD_HEIGHTS]
-static float gd_height[GD_HEIGHTS];
-static int gd_heights = -1; // -1: not looked at the stage yet
+#define GD_STRIDE ((sizeof(GuideTable) + 31) & ~31)
+typedef struct GuideHead // the baked file's first 32 bytes; its tables follow, GD_STRIDE apart
+{
+    u32 magic, version, kind, num;
+    float lo, step;
+    u32 stride, dims;
+} GuideHead;
+static u8 *gd_mem;           // GD_SLOTS tables GD_STRIDE apart, 32-byte aligned for the disc
+static float gd_height[GD_SLOTS];
+static int gd_slice[GD_SLOTS]; // the baked height a slot holds, -1 none
+static u32 gd_used[GD_SLOTS];  // the frame a slot was last drawn from
+static int gd_heights = -1;    // -1: not looked at the stage yet
 static int gd_next, gd_done;
+static int gd_file = -1;       // the baked file's entry, -1 none (worked out here)
+static GuideHead gd_head;
 
-static void Guide_Add(int h, int hop, int sp, int kind, float x, int count)
+static GuideTable *Guide_Slot(int s)
+{
+    return (GuideTable *)(gd_mem + s * GD_STRIDE);
+}
+
+static void Guide_Add(GuideTable *t, int hop, int sp, int kind, float x, int count)
 {
     int b = (int)(x + (x < 0 ? -0.5f : 0.5f)) + GD_DX;
     if (b < 0 || b >= GD_BINS)
         return;
-    u8 *c = &gd_table[h].n[hop][sp][kind][b];
+    u8 *c = &t->n[hop][sp][kind][b];
     *c = *c + count > 255 ? 255 : *c + count;
 }
 
@@ -15931,7 +15983,7 @@ static void Guide_Heights(void)
             for (int k = 0; k < gd_heights; k++)
                 if (fabs(gd_height[k] - h) < 1.f)
                     have = 1;
-            if (!have && gd_heights < GD_HEIGHTS)
+            if (!have && gd_heights < GD_SLOTS)
                 gd_height[gd_heights++] = h;
         }
     }
@@ -15948,13 +16000,14 @@ static float Guide_Speed(FighterData *fp, int sp, float *stick)
     return v[sp];
 }
 
-// One way on: index i of a height's GD_PER_HEIGHT.
-static void Guide_Try(FighterData *fp, int h, int i)
+// One way on, index i of a height's GD_PER_HEIGHT, counted into t. Every
+// aerial is counted on its own, so the table doesn't depend on AI Aerial.
+static void Guide_Try(FighterData *fp, GuideTable *t, float H, int i)
 {
     int hop = i / (GD_SPEEDS * GD_WAYS);
     int sp = (i / GD_WAYS) % GD_SPEEDS;
     int way = i % GD_WAYS;
-    float H = gd_height[h], stick_x;
+    float stick_x;
     float v = Guide_Speed(fp, sp, &stick_x);
 
     // the world: a floor at 0 and a platform at H, both all the way across
@@ -15965,6 +16018,8 @@ static void Guide_Try(FighterData *fp, int h, int i)
     wall_num[0] = wall_num[1] = 0;
 
     float facing = fp->facing_direction;
+    u8 only = ai_only;
+    ai_only = 0;
     fp->facing_direction = 1.f;
     SimStart ps;
     float slide[12];
@@ -15985,20 +16040,14 @@ static void Guide_Try(FighterData *fp, int h, int i)
         {
             Sim_Step(fp, &st, &s, -1, 0, &step);
             if (step.landed || step.ceiling)
-            {
-                fp->facing_direction = facing;
-                return;
-            }
+                goto done;
         }
         st.skip_line = -1;
         st.stick_x = jt_stick_xy[stick][0];
         st.stick_y = jt_stick_xy[stick][1];
         Sim_DoubleJump(fp, &st, &s, &step);
         if (step.landed || step.ceiling)
-        {
-            fp->facing_direction = facing;
-            return;
-        }
+            goto done;
         st.stick_x = hold ? jt_stick_xy[stick][0] : 0;
         st.stick_y = 0;
         Sim_ToStart(&s, &st, &ps);
@@ -16016,14 +16065,13 @@ static void Guide_Try(FighterData *fp, int h, int i)
     sim_stop_vy = -100000.f;
     sim_limit = LL_SIM_FRAMES;
     sim_bottom_y = -100000.f;
-    fp->facing_direction = facing;
 
     Prediction *p = pred_route;
     float half = H * 0.5f;
     if (p->land_frame && p->land_kind == LAND_NIL && p->pos[p->land_frame].Y > half)
-        Guide_Add(h, hop, sp, CUE_NIL, p->pos[p->land_frame].X, 1);
+        Guide_Add(t, hop, sp, GD_NIL, p->pos[p->land_frame].X, 1);
     if (alone && p->wl_first && p->wl_first <= p->num && p->pos[p->wl_first].Y > half)
-        Guide_Add(h, hop, sp, CUE_WL, p->pos[p->wl_first].X, p->wl_width);
+        Guide_Add(t, hop, sp, GD_WL, p->pos[p->wl_first].X, p->wl_width);
 
     int normal_lag = (int)fp->attr.normal_landing_lag;
     int hold_done = p->land_frame ? p->land_frame + p->lag : 2 * LL_SIM_FRAMES;
@@ -16031,8 +16079,6 @@ static void Guide_Try(FighterData *fp, int h, int i)
     for (int a = 0; a < 5; a++)
     {
         u8 bit = AERIAL_BIT(Aerial_Order(a));
-        if (ai_only && !(ai_only & bit))
-            continue;
         for (int k = 1; k <= last && k < p->uncertain_from; k++)
         {
             if (!(p->ai_mask[k] & ~p->ai_lag_mask[k] & bit))
@@ -16045,23 +16091,165 @@ static void Guide_Try(FighterData *fp, int h, int i)
             int at = touch <= p->num ? touch : p->num;
             int rising = !(touch <= p->num && p->pos[touch].Y <= p->pos[touch - 1].Y);
             if (rising && hold_done - (touch + normal_lag) >= LL_AI_MIN_GAIN && p->pos[at].Y > half)
-                Guide_Add(h, hop, sp, CUE_AI, p->pos[at].X, w);
+                Guide_Add(t, hop, sp, a, p->pos[at].X, w);
             k += w - 1;
         }
     }
+done:
+    fp->facing_direction = facing;
+    ai_only = only;
+}
+
+// The baked file for this character, if the disc has one that fits.
+static void Guide_Open(FighterData *fp)
+{
+    char path[32];
+    sprintf(path, "TM/llgd%02d.bin", fp->kind);
+    int entry = DVDConvertPathToEntrynum(path);
+    if (entry < 0)
+    {
+        OSReport("LLGUIDE no %s, working them out here\n", path);
+        return;
+    }
+    GuideHead *h = (GuideHead *)gd_mem; // slot 0 for now, 32-byte aligned
+    DCFlushRange(h, 32);
+    File_ReadSync(entry, 0, h, 32, 0x21, 1);
+    DCInvalidateRange(h, 32);
+    gd_head = *h;
+    if (gd_head.magic != GD_MAGIC || gd_head.version != GD_VERSION || gd_head.kind != (u32)fp->kind ||
+        gd_head.stride != GD_STRIDE || gd_head.dims != GD_DIMS || gd_head.num == 0 || gd_head.step <= 0)
+    {
+        OSReport("LLGUIDE %s doesn't fit this build, working them out here\n", path);
+        return;
+    }
+    gd_file = entry;
+    OSReport("LLGUIDE baked %s: %d heights from %.1f\n", path, gd_head.num, gd_head.lo);
+}
+
+// The slot with the table for a platform H over the floor, or -1.
+static int Guide_Find(float H)
+{
+    if (gd_file < 0)
+    {
+        int h = -1;
+        for (int j = 0; j < gd_heights; j++)
+            if (fabs(gd_height[j] - H) < 3.f)
+                h = j;
+        return h;
+    }
+    float f = (H - gd_head.lo) / gd_head.step + 0.5f;
+    if (f < 0)
+        return -1;
+    int s = (int)f;
+    if (s >= (int)gd_head.num)
+        return -1;
+    int old = 0;
+    for (int j = 0; j < GD_SLOTS; j++)
+    {
+        if (gd_slice[j] == s)
+        {
+            gd_used[j] = event_vars->game_timer;
+            return j;
+        }
+        if (gd_slice[j] < 0 || (gd_slice[old] >= 0 && gd_used[j] < gd_used[old]))
+            old = j;
+    }
+    u8 *t = (u8 *)Guide_Slot(old);
+    DCFlushRange(t, GD_STRIDE);
+    File_ReadSync(gd_file, sizeof(GuideHead) + s * GD_STRIDE, t, GD_STRIDE, 0x21, 1);
+    DCInvalidateRange(t, GD_STRIDE);
+    gd_slice[old] = s;
+    gd_used[old] = event_vars->game_timer;
+    OSReport("LLGUIDE read %.1f into %d\n", gd_head.lo + s * gd_head.step, old);
+    return old;
+}
+
+// One baked table into the log, the rows that aren't all 0.
+static void Guide_Dump(int slice)
+{
+    static const char hex[] = "0123456789abcdef";
+    const u8 *t = (const u8 *)Guide_Slot(0);
+    char line[48 * 2 + 1];
+    for (int off = 0; off < (int)sizeof(GuideTable); off += 48)
+    {
+        int n = sizeof(GuideTable) - off < 48 ? sizeof(GuideTable) - off : 48, any = 0;
+        for (int i = 0; i < n; i++)
+        {
+            any |= t[off + i];
+            line[2 * i] = hex[t[off + i] >> 4];
+            line[2 * i + 1] = hex[t[off + i] & 15];
+        }
+        line[2 * n] = 0;
+        if (any)
+            OSReport("LLGB %d %d %s\n", slice, off, line);
+    }
+}
+
+static void Guide_BakeStart(FighterData *fp)
+{
+    gd_bake = 0;
+    gd_next = 0;
+    memset(gd_mem, 0, GD_STRIDE);
+    OSReport("LLGBH %d %d %.2f %.2f %d %d\n", fp->kind, GD_NUM, GD_LO, GD_STEP, (int)GD_STRIDE, GD_DIMS);
+}
+
+// Bakes one table after another as fast as the frames allow.
+static void Guide_Bake(FighterData *fp)
+{
+    int t0 = OSGetTick();
+    while (OSTicksToMicroseconds(OSGetTick() - t0) < GD_BAKE_US)
+    {
+        Guide_Try(fp, Guide_Slot(0), GD_LO + gd_bake * GD_STEP, gd_next++);
+        if (gd_next < GD_PER_HEIGHT)
+            continue;
+        Guide_Dump(gd_bake);
+        memset(gd_mem, 0, GD_STRIDE);
+        gd_next = 0;
+        if (++gd_bake >= GD_NUM)
+        {
+            OSReport("LLGB end %d at %d\n", GD_NUM, event_vars->game_timer);
+            gd_bake = -1;
+            // what slot 0 held is gone: start over
+            for (int j = 0; j < GD_SLOTS; j++)
+                gd_slice[j] = -1;
+            gd_heights = -1;
+            gd_done = 0;
+            break;
+        }
+    }
+    Floor_BuildCache(); // the stage's own again
 }
 
 static void Guide_Solve(FighterData *fp)
 {
-    if (gd_done || !gd_table || !(Options_Jump[JOPT_BANDS].val || Options_Jump[JOPT_MARKS].val))
+    if (!gd_mem)
         return;
-    Floor_BuildCache();
+    if (gd_bake == -2)
+        Guide_BakeStart(fp);
+    if (gd_bake >= 0)
+    {
+        Guide_Bake(fp);
+        return;
+    }
+    if (gd_done || !(Options_Jump[JOPT_BANDS].val || Options_Jump[JOPT_MARKS].val))
+        return;
     if (gd_heights < 0)
+    {
+        Guide_Open(fp);
+        if (gd_file >= 0)
+        {
+            gd_heights = 0;
+            gd_done = 1;
+            return;
+        }
+        Floor_BuildCache();
         Guide_Heights();
+    }
+    Floor_BuildCache();
     int total = gd_heights * GD_PER_HEIGHT, start = sim_steps, t0 = OSGetTick();
     while (gd_next < total && sim_steps - start < GD_BUDGET && OSTicksToMicroseconds(OSGetTick() - t0) < GD_TIME_US)
     {
-        Guide_Try(fp, gd_next / GD_PER_HEIGHT, gd_next % GD_PER_HEIGHT);
+        Guide_Try(fp, Guide_Slot(gd_next / GD_PER_HEIGHT), gd_height[gd_next / GD_PER_HEIGHT], gd_next % GD_PER_HEIGHT);
         gd_next++;
     }
     Floor_BuildCache(); // the stage's own again
@@ -16072,7 +16260,8 @@ static void Guide_Solve(FighterData *fp)
     }
 }
 
-// The count for a distance, facing either way (the table faces right).
+// The count for a distance, facing either way (the table faces right). The
+// AI counts the aerials AI Aerial lets through.
 static int Guide_N(int h, int hop, int sp, int kind, int face, int dx)
 {
     if (face < 0)
@@ -16081,7 +16270,18 @@ static int Guide_N(int h, int hop, int sp, int kind, int face, int dx)
         dx = -dx;
     }
     dx += GD_DX;
-    return dx >= 0 && dx < GD_BINS ? gd_table[h].n[hop][sp][kind][dx] : 0;
+    if (dx < 0 || dx >= GD_BINS)
+        return 0;
+    GuideTable *t = Guide_Slot(h);
+    if (kind == CUE_NIL)
+        return t->n[hop][sp][GD_NIL][dx];
+    if (kind == CUE_WL)
+        return t->n[hop][sp][GD_WL][dx];
+    int n = 0;
+    for (int a = 0; a < 5; a++)
+        if (!ai_only || (ai_only & AERIAL_BIT(Aerial_Order(a))))
+            n += t->n[hop][sp][a][dx];
+    return n;
 }
 
 // Falcon's speed bucket, as the table counts it facing his way.
@@ -16135,7 +16335,7 @@ static int Guide_Floor(float x)
 static void Guide_Draw(FighterData *fp)
 {
     int bands = Options_Jump[JOPT_BANDS].val, marks = Options_Jump[JOPT_MARKS].val;
-    if (!gd_table || gd_heights <= 0 || (!bands && !marks) ||
+    if (!gd_mem || !gd_done || gd_bake >= 0 || (!bands && !marks) ||
         fp->phys.air_state != 0 || fp->state_id < ASID_WAIT || fp->state_id > ASID_RUNBRAKE || hang_ledge >= 0 || route_active)
         return;
     // the floor under him
@@ -16167,10 +16367,7 @@ static void Guide_Draw(FighterData *fp)
             if (!P->is_platform || P == S)
                 continue;
             float H = (P->y0 + P->y1) * 0.5f - fy;
-            int h = -1;
-            for (int j = 0; j < gd_heights; j++)
-                if (fabs(gd_height[j] - H) < 3.f)
-                    h = j;
+            int h = Guide_Find(H);
             if (h < 0)
                 continue;
             int p0 = Guide_Floor(P->x0) + 1, p1 = Guide_Floor(P->x1);
@@ -16246,6 +16443,8 @@ static void Guide_Draw(FighterData *fp)
     }
     vis_k = k_was;
 }
+
+#endif
 
 // The jumps still ahead, and the best of them of the kind Kind asks for.
 static void Jump_Prune(int e)
@@ -18472,7 +18671,11 @@ void Event_Init(GOBJ *gobj)
     route_path_bottom = calloc(sizeof(float) * LR_PATH);
     jt_cache = calloc(sizeof(SimState) * JT_D);
     gt_steps = calloc(sizeof(GroundStep) * JT_D);
-    gd_table = calloc(sizeof(GuideTable) * GD_HEIGHTS);
+#ifdef LL_GROUND_GUIDE
+    gd_mem = (u8 *)(((u32)calloc(GD_STRIDE * GD_SLOTS + 32) + 31) & ~31);
+    for (int j = 0; j < GD_SLOTS; j++)
+        gd_slice[j] = -1;
+#endif
     jt_path = calloc(sizeof(Vec2) * JT_PATH);
     jt_path_bottom = calloc(sizeof(float) * JT_PATH);
     slide_pos = calloc(sizeof(Vec2) * 2 * SLIDE_MAX);
@@ -18723,8 +18926,10 @@ static void Event_ThinkFrame(GOBJ *event)
     int t_solve = OSGetTick();
     Jump_Solve(fp);
     Jump_Publish(fp);
+#ifdef LL_GROUND_GUIDE
     if (!jt_active || jt_done)
         Guide_Solve(fp); // worked out once, in the frames the jump search leaves
+#endif
     Ledge_Solve(fp, tracked_air ? LR_BUDGET_AIR : LR_BUDGET);
     float solve_ms = OSTicksToMicroseconds(OSGetTick() - t_solve) / 1000.f;
     if (solve_ms > perf_solve)

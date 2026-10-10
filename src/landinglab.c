@@ -4147,7 +4147,6 @@ static EventMenu Menu_Ledge = {
 enum options_jump
 {
     JOPT_SHOW,
-    JOPT_HOP,
     JOPT_KIND,
     JOPT_TARGET,
 
@@ -4165,9 +4164,11 @@ enum jump_target
     JTGT_PLATFORM,
     JTGT_FLOOR,
 };
-// From the ground: which hops to look at.
+// From the ground: which hops to look at. The live search from the ground
+// is off (Stephen, 0.8.3 notes: it made him stand still and wait, then sent
+// him to a platform's edge); a guide worked out ahead of time replaces it.
 enum { HOP_OFF, HOP_SHORT, HOP_FULL, HOP_BOTH };
-static const char *hop_names[] = {"Off", "Short Hop", "Full Hop", "Both"};
+#define JT_HOP_SETTING HOP_OFF
 
 static const char *jump_target_names[] = {"Any", "Top Platform", "Left Platform", "Right Platform", "Any Platform",
                                           "Main Floor"};
@@ -4180,17 +4181,6 @@ static EventOption Options_Jump[JOPT_COUNT] = {
                  "show when to jump, with which stick, and which",
                  "aerial to press when, to land as an aerial",
                  "interrupt or a NIL on a platform or the floor."},
-    },
-    {
-        .kind = OPTKIND_STRING,
-        .name = "From the Ground",
-        .val = HOP_BOTH,
-        .value_num = countof(hop_names),
-        .values = hop_names,
-        .desc = {"Standing, walking or running: the spot to hop",
-                 "from, and when, so the hop lands as a NIL or",
-                 "an AI. The stick is assumed held as it is.",
-                 "Needs Show on."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -15861,6 +15851,29 @@ static void Jump_Prune(int e)
     }
 }
 
+// The route r (its frames counted from anchor) among the ones found now
+// that are shown, or 0.
+#define JT_SWITCH 3
+#define JT_SETTLE 6
+static int jt_route_abs; // the anchor the shown route's frames count from
+static JumpRoute *Jump_Find(JumpRoute *r, int anchor)
+{
+    int kinds = Options_Jump[JOPT_KIND].val, shift = anchor - jt_anchor;
+    for (int k = 0; k < 2; k++)
+    {
+        if ((k == 0 && kinds == ROUTES_AI) || (k == 1 && kinds == ROUTES_NIL))
+            continue;
+        for (int i = 0; i < jt_best_n[k]; i++)
+        {
+            JumpRoute *x = &jt_best[k][i];
+            if (x->kind == r->kind && x->stick == r->stick && x->aerial == r->aerial && x->hop == r->hop &&
+                x->dj == r->dj + shift && (r->kind != LAND_AI || x->press == r->press + shift))
+                return x;
+        }
+    }
+    return 0;
+}
+
 static JumpRoute *Jump_Pick(void)
 {
     int kinds = Options_Jump[JOPT_KIND].val;
@@ -16003,7 +16016,7 @@ static int Jump_Eligible(FighterData *fp, int ts, int tracked_air)
     if (!Options_Jump[JOPT_SHOW].val)
         return 0;
     if (fp->phys.air_state == 0)
-        return Options_Jump[JOPT_HOP].val != HOP_OFF && Jump_GroundState(fp->state_id) && hang_ledge < 0 &&
+        return JT_HOP_SETTING != HOP_OFF && Jump_GroundState(fp->state_id) && hang_ledge < 0 &&
                !route_active && !Options_Ledge[LOPT_ASSIST].val;
     if (!tracked_air)
         return 0;
@@ -16136,12 +16149,12 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
                    (sid == gt_sid || (gt_sid == ASID_DASH && sid == ASID_RUN)) &&
                    fabs(fp->phys.pos.X - gt_steps[at].x) <= JT_DRIFT_TOL &&
                    fabs(fp->phys.pos.Y - gt_steps[at].y) <= 1.f && Options_Jump[JOPT_TARGET].val == jt_target &&
-                   Options_Jump[JOPT_HOP].val == jt_hop;
+                   JT_HOP_SETTING == jt_hop;
         if (!same)
             Jump_AnchorGround(fp, sid);
         else if (!gt_still && e >= JT_REANCHOR)
             Jump_Extend(fp, ts, e);
-        jt_hop = Options_Jump[JOPT_HOP].val;
+        jt_hop = JT_HOP_SETTING;
     }
     else if (!jt_active || jt_ground || e < 0 || Jump_InputChanged(fp, ts) || Jump_Drifted(fp, e) ||
              Options_Jump[JOPT_TARGET].val != jt_target)
@@ -16215,7 +16228,7 @@ static int Jump_Total(void)
 // Candidate i: 1 to try it, 0 to skip it, -1 when none after it can work.
 static int Jump_Cand(int i, JumpCand *c)
 {
-    int want = Options_Jump[JOPT_HOP].val;
+    int want = JT_HOP_SETTING;
     c->hj = -1;
     c->stick = JT_UP;
     if (jt_ground && gt_still)
@@ -16382,6 +16395,13 @@ static void Jump_Publish(FighterData *fp)
     int e = Jump_E();
     Jump_Prune(e);
     JumpRoute *b = Jump_Pick();
+    // The one up stays up while the search goes on: another takes its place
+    // only when it acts JT_SWITCH frames sooner and the jump is still
+    // JT_SETTLE frames off, or when it no longer works. (Stephen, 0.8.3: the
+    // route changed every frame as the search found slightly better ones.)
+    JumpRoute *cur = jt_have ? Jump_Find(&jt_route, jt_route_abs) : 0;
+    if (b && cur && b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= JT_SETTLE))
+        b = cur;
     jt_have = b != 0;
     if (jt_ground)
     {
@@ -16396,6 +16416,7 @@ static void Jump_Publish(FighterData *fp)
                  event_vars->game_timer, jt_anchor, b->hop, b->hj, b->dj, b->stick, b->hold, b->aerial, b->press, b->land,
                  b->where, b->kind);
     jt_route = *b;
+    jt_route_abs = jt_anchor;
     Jump_Path(fp);
     Jump_Text(&jt_route, e);
 }
@@ -18278,7 +18299,12 @@ static void Event_ThinkFrame(GOBJ *event)
     Ledge_Think(fp, sid);
     Drop_Think(fp, sid, prev_state_id);
     Assist_Think(fp, sid);
-    Jump_Update(fp, ts, tracked_air);
+    // dropping through a platform (Pass) falls as a fall does: Jump Timing
+    // takes it as one, so its jumps show from the drop on
+    if (sid == ASID_PASS && airborne && !disturbed)
+        Jump_Update(fp, TS_FALL, 1);
+    else
+        Jump_Update(fp, ts, tracked_air);
     Body_Flash(fp, sid);
     Slide_Update(fp);
     Pad_Record(PadGetEngine(fp->pad_index));

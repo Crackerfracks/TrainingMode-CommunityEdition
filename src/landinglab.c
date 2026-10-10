@@ -19717,6 +19717,14 @@ void Event_Update(void)
         save_hold = 0;
         return;
     }
+    // a trigger partway in (shielding, or on its way to the click that
+    // opens the quick menu): the D-pad does nothing, so it can't toggle
+    // Frame Advance or load a position by chance
+    if (pad->ftriggerLeft > 0.3f || pad->ftriggerRight > 0.3f)
+    {
+        save_hold = 0;
+        return;
+    }
     if (down & HSD_BUTTON_DPAD_DOWN)
         Options_Game[GOPT_FRAME_ADV].val ^= 1;
     // a clean frame for mockups, the same frame as the one with cues. Only

@@ -1,6 +1,7 @@
 # 0.8.4 checks with no menuing: build with LLSCRIPT=src/landinglab_084_test.txt
 # and start the event on Battlefield. Each "shot" freezes the game until
 # D-pad down.
+autorun
 
 # Lanes keep their places. The highway with AI and NIL cues on, through the
 # rising nair AI onto the top platform (a double jump after 14 frames of

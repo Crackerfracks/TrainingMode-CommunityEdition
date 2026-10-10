@@ -1,0 +1,76 @@
+# Controller looks, with no menuing: build with
+# LLSCRIPT=src/landinglab_pad_test.txt and start the event. Each shot freezes
+# the game; the controller then shows the real pad, so hold the inputs the
+# shot's label asks for on the real pad while capturing.
+autorun
+script Crest sheet
+set HUD/Controller = 2
+set HUD/Controller Look = 1
+set HUD/Controller Size = 0
+start 0 0 right
+10
+shot crest small: nothing held
+set HUD/Controller Size = 1
+10
+shot crest medium: L about 20 percent, R about 60 percent, stick down right
+set HUD/Controller Size = 2
+10
+shot crest large: L clicked, A and Y held, C-stick up
+set HUD/Controller Look = 0
+set HUD/Controller Size = 1
+10
+shot ring medium for comparison: same as the crest medium shot
+set HUD/Controller = 0
+set HUD/Controller Look = 0
+set HUD/Controller Size = 1
+mark done
+
+# Camera views: save the camera as it is, hold it while Falcon runs a few
+# steps (staying on stage), then bring it back after the card is read again.
+# Each "view show" logs where the camera is and whether that's view 1.
+script Camera views
+start 0 0 right
+30
+view save 1
+mark view 1 saved: expect an LLVIEW saved line with real numbers
+# the card write that follows can swallow log lines for a while: wait it out
+120
+15 s:1,0
+view show 1
+shot view held: the camera stayed put while Falcon ran right (show: matches)
+set Camera/Camera Mode = 0
+set Camera/View = 0
+30 s:-1,0
+view show 1
+shot normal camera again: following Falcon (show: differs)
+view load 1
+5
+view show 1
+shot view 1 back: the same framing as the first view shot (show: matches)
+closemenu
+card flush
+set Camera/Camera Mode = 0
+set Camera/View = 0
+card restart
+10
+view show 1
+shot after the card is read again: view 1 framing once more (show: matches)
+set Camera/Camera Mode = 0
+set Camera/View = 0
+closemenu
+card flush
+mark views done
+
+# Rumble cues on through a waveland countdown and back off: a crash check
+# (a pipe pad can't buzz, so feel is Stephen's call on a real controller)
+script Rumble run
+set Rumble/AI Rumble = 1
+set Rumble/Waveland Rumble = 1
+start 38 0 right
+5 X
+60
+mark rumble ran: expect no crash or freeze
+set Rumble/AI Rumble = 0
+set Rumble/Waveland Rumble = 0
+30
+mark rumble off

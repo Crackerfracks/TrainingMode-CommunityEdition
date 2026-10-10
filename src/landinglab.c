@@ -66,6 +66,10 @@
 #define COMMON_FALL_LEAN_RATE 0x448     // float: how fast the lean moves to its target each frame
 #define COMMON_AIR_FRICTION_OOB 0x1FC   // float: air friction while faster than the drift max
 #define COMMON_UPB_DRIFT_STICK 0x258    // float: |stick x| below this stops a Falcon Dive's drift
+#define COMMON_DROP_STICK 0x464         // float: stick y <= -this drops through a platform out of shield
+#define COMMON_DROP_WINDOW 0x468        // frames the flick may take to get there (the decomp types it float)
+#define COMMON_SPOT_STICK 0x314         // float: stick y <= this is a spotdodge
+#define COMMON_SPOT_WINDOW 0x318        // int: frames the flick may take for that
 
 // Runtime collision line flags (decomp mp/forward.h)
 #define LINEFLAG_FLOOR (1u << 0)
@@ -141,6 +145,47 @@ static const char *tracked_state_names[TS_COUNT] = {
     "Nair", "Fair", "Bair", "Uair", "Dair", "Airdodge",
     "FallSpecial", "UpB", "UpBAir",
 };
+
+// The panel's name for a state the event doesn't track, or 0 for its number.
+typedef struct StateName
+{
+    short sid;
+    const char *name;
+} StateName;
+static const StateName state_names[] = {
+    {ASID_WAIT, "Standing"},       {ASID_WALKSLOW, "Walk"},         {ASID_WALKMIDDLE, "Walk"},
+    {ASID_WALKFAST, "Walk"},       {ASID_TURN, "Turn"},             {ASID_TURNRUN, "Run turn"},
+    {ASID_DASH, "Dash"},           {ASID_RUN, "Run"},               {ASID_RUNDIRECT, "Run"},
+    {ASID_RUNBRAKE, "Run brake"},  {ASID_KNEEBEND, "Jumpsquat"},    {ASID_FALLSPECIAL, "Helpless"},
+    {ASID_FALLSPECIALF, "Helpless"}, {ASID_FALLSPECIALB, "Helpless"}, {ASID_DAMAGEFALL, "Tumble"},
+    {ASID_SQUAT, "Crouch"},        {ASID_SQUATWAIT, "Crouch"},      {ASID_SQUATRV, "Stand up"},
+    {ASID_LANDING, "Landing"},     {ASID_LANDINGFALLSPECIAL, "Special landing"},
+    {ASID_LANDINGAIRN, "Nair lag"}, {ASID_LANDINGAIRF, "Fair lag"}, {ASID_LANDINGAIRB, "Bair lag"},
+    {ASID_LANDINGAIRHI, "Uair lag"}, {ASID_LANDINGAIRLW, "Dair lag"}, {ASID_GUARDON, "Shield on"},
+    {ASID_GUARD, "Shield"},        {ASID_GUARDOFF, "Shield off"},   {ASID_GUARDSETOFF, "Shield stun"},
+    {ASID_GUARDREFLECT, "Powershield"}, {ASID_PASS, "Platform drop"}, {ASID_OTTOTTO, "Teeter"},
+    {ASID_OTTOTTOWAIT, "Teeter"},  {ASID_ESCAPE, "Spotdodge"},     {ASID_ESCAPEF, "Roll"},
+    {ASID_ESCAPEB, "Roll"},        {ASID_ESCAPEAIR, "Airdodge"},    {ASID_CLIFFCATCH, "Ledge grab"},
+    {ASID_CLIFFWAIT, "Ledge"},     {ASID_CLIFFCLIMBQUICK, "Getup"}, {ASID_CLIFFCLIMBSLOW, "Getup"},
+    {ASID_CLIFFATTACKQUICK, "Ledge attack"}, {ASID_CLIFFATTACKSLOW, "Ledge attack"},
+    {ASID_CLIFFESCAPEQUICK, "Ledge roll"}, {ASID_CLIFFESCAPESLOW, "Ledge roll"},
+    {ASID_CLIFFJUMPQUICK1, "Ledge jump"}, {ASID_CLIFFJUMPQUICK2, "Ledge jump"},
+    {ASID_CLIFFJUMPSLOW1, "Ledge jump"}, {ASID_CLIFFJUMPSLOW2, "Ledge jump"},
+    {ASID_ATTACKAIRN, "Nair"},     {ASID_ATTACKAIRF, "Fair"},       {ASID_ATTACKAIRB, "Bair"},
+    {ASID_ATTACKAIRHI, "Uair"},    {ASID_ATTACKAIRLW, "Dair"},      {ASID_ATTACK11, "Jab"},
+    {ASID_ATTACKDASH, "Dash attack"}, {ASID_DOWNWAITU, "Down"},     {ASID_DOWNWAITD, "Down"},
+    {ASID_DOWNBOUNDU, "Missed tech"}, {ASID_DOWNBOUNDD, "Missed tech"}, {ASID_PASSIVE, "Tech"},
+    {ASID_REBIRTHWAIT, "Platform"},
+};
+
+static const char *State_Name(int sid)
+{
+    for (int i = 0; i < (int)countof(state_names); i++)
+        if (state_names[i].sid == sid)
+            return state_names[i].name;
+    return 0;
+}
+
 
 static int Tracked_Index(int state_id)
 {
@@ -2321,7 +2366,7 @@ typedef struct Prediction
     // touches down the first time it is used
     u8 ai_mask[LL_SIM_FRAMES + 1];     // aerials that interrupt when pressed on frame k
     u8 ai_lag_mask[LL_SIM_FRAMES + 1]; // ... of those, the ones that land with aerial lag
-    u8 ai_delay[LL_SIM_FRAMES + 1];    // frames from k until that touchdown (lock)
+    u32 ai_delay[LL_SIM_FRAMES + 1];   // frames from k until each aerial's touchdown (lock), 4 bits per aerial: Ai_Delay
     u8 ai_show[LL_SIM_FRAMES + 1];     // ... the ones worth showing: no aerial lag, and done
                                        // at least LL_AI_MIN_GAIN frames before holding would be
     u8 ai_unlearned;                   // aerials skipped because their ECB isn't learned yet
@@ -2344,6 +2389,26 @@ typedef struct Prediction
     int wl_late;                     // the window lands a frame late
 } Prediction;
 
+// Frames from pressing an aerial (TS_AIR*) on frame k to its touchdown. The
+// aerials touch down at different frames, so each keeps its own, in 4 bits
+// (a press is followed for LL_AI_MAX_STEPS frames at most, under 16).
+static int Ai_Delay(Prediction *p, int k, int aerial)
+{
+    return (p->ai_delay[k] >> (4 * (aerial - TS_AIRN))) & 15;
+}
+
+// The soonest touchdown among the aerials in mask, pressed on frame k.
+static int Ai_FirstDelay(Prediction *p, int k, u8 mask)
+{
+    int first = 99;
+    for (int a = TS_AIRN; a <= TS_AIRLW; a++)
+    {
+        if ((mask & AERIAL_BIT(a)) && Ai_Delay(p, k, a) < first)
+            first = Ai_Delay(p, k, a);
+    }
+    return first == 99 ? 0 : first;
+}
+
 static float common_fastfall_stick;
 static int common_fastfall_window;
 static int common_lcancel_window;
@@ -2362,8 +2427,13 @@ static float common_fall_lean_deadzone;
 static float common_fall_lean_rate;
 static float common_air_friction_oob;
 static float common_upb_drift_stick;
+static float common_drop_stick;  // as a positive number: stick y <= -this
+static int common_drop_window;
+static float common_spot_stick;  // as a negative number: stick y <= this
+static int common_spot_window;
 
 static int ai_show_all; // the AI Filter option is on All
+static u8 ai_only;      // the AI Aerial option: the one aerial to count down to, 0 = any
 
 static float Common_Float(int offset)
 {
@@ -2373,6 +2443,14 @@ static float Common_Float(int offset)
 static int Common_Int(int offset)
 {
     return *(int *)((u8 *)*stc_ftcommon + offset);
+}
+
+// A frame count the decomp may type as a float (the shield drop's): a word
+// that isn't a small int is read as a float.
+static int Common_Frames(int offset)
+{
+    int n = Common_Int(offset);
+    return n >= 0 && n < 256 ? n : (int)Common_Float(offset);
 }
 
 // ftCommon_CalcSelfAccel_DriftFrom with the stick held at stick_x
@@ -3360,7 +3438,7 @@ static void Branch_Actions(FighterData *fp, SimStart *start, SimState *before, P
             if (n < 0)
                 continue;
             p->ai_mask[k] |= AERIAL_BIT(a);
-            p->ai_delay[k] = n;
+            p->ai_delay[k] |= (u32)(n & 15) << (4 * (a - TS_AIRN));
             if (lag)
                 p->ai_lag_mask[k] |= AERIAL_BIT(a);
         }
@@ -3408,19 +3486,27 @@ static void Windows_Summarize(FighterData *fp, Prediction *p)
     for (int k = 1; k <= last_ai; k++)
     {
         u8 m = p->ai_mask[k];
+        if (ai_only)
+            m &= ai_only;
         if (!ai_show_all)
         {
             m &= ~p->ai_lag_mask[k];
-            if (m && hold_done - (k + p->ai_delay[k] + normal_lag) < LL_AI_MIN_GAIN)
-                m = 0;
-            // falling, an aerial's ECB is at most about a unit lower than
-            // the fall's: a frame sooner at best, and no better than a
-            // NIL. The ones that look like big savings while falling are
-            // platform catches (holding down drops through a platform an
-            // aerial lands on). Only rising ones are worth the press.
-            int t = k + p->ai_delay[k];
-            if (m && t <= p->num && p->pos[t].Y <= p->pos[t - 1].Y)
-                m = 0;
+            for (int a = TS_AIRN; a <= TS_AIRLW; a++)
+            {
+                if (!(m & AERIAL_BIT(a)))
+                    continue;
+                int t = k + Ai_Delay(p, k, a);
+                if (hold_done - (t + normal_lag) < LL_AI_MIN_GAIN)
+                    m &= ~AERIAL_BIT(a);
+                // falling, an aerial's ECB is at most about a unit lower
+                // than the fall's: a frame sooner at best, and no better
+                // than a NIL. The ones that look like big savings while
+                // falling are platform catches (holding down drops through
+                // a platform an aerial lands on). Only rising ones are
+                // worth the press.
+                else if (t <= p->num && p->pos[t].Y <= p->pos[t - 1].Y)
+                    m &= ~AERIAL_BIT(a);
+            }
         }
         p->ai_show[k] = m;
     }
@@ -3513,6 +3599,13 @@ static u8 WL_Mask(Prediction *p, int k)
 // sim_bottom_y. The ledge route search looks less far.
 static int sim_limit = LL_SIM_FRAMES;
 static float sim_bottom_y = -100000.f;
+// Only branch actions off frames where the fighter rises: only rising
+// aerial interrupts are worth showing (Windows_Summarize), so a search
+// that keeps nothing else skips the rest, most of the work.
+static int sim_rising_only;
+// ... and stop once falling too fast to land as a NIL (Landing_Kind): no
+// NIL or rising AI can come after that.
+static float sim_stop_vy = -100000.f;
 
 // Simulate keeping the stick where it is and pressing nothing. With
 // branches (BR_*), also try aerials and airdodges on the frames along the way.
@@ -3568,7 +3661,8 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
         p->wl_ground[k] = 0;
         p->num = k;
 
-        if (branches && (((branches & BR_LOCK) && before.lock > 0) || Floor_Near(s.x, s.y + s.bottom)))
+        if (branches && (!sim_rising_only || s.vy > 0 || before.vy > 0) &&
+            (((branches & BR_LOCK) && before.lock > 0) || Floor_Near(s.x, s.y + s.bottom)))
             Branch_Actions(fp, start, &before, p, k, step.landed, branches);
 
         if (step.landed)
@@ -3585,6 +3679,8 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
         }
         if (s.vy < 0 && s.y < sim_bottom_y)
             break;
+        if (s.vy < sim_stop_vy)
+            break;
     }
 
     Windows_Summarize(fp, p);
@@ -3598,19 +3694,28 @@ static void Predict(FighterData *fp, SimStart *start, Prediction *p, int branche
 // fighter without gravity on that frame (ftCo_Jump_Phys skips its first
 // frame). s is the state at the end of the takeoff frame. Assumes a flat
 // floor. Returns the frames until takeoff.
+// Sim_GroundJumpAt does it from a given spot and ground speed, as if the
+// jump were pressed on the frame after (Hop Timing's hops further on); with
+// slide_x, also gives where the squat frames slide to.
+static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, float gr_vel, float stick_x, int fresh,
+                            SimStart *s, float *slide_x);
+
 static int Sim_GroundJump(FighterData *fp, int short_hop, SimStart *s)
 {
-    float x = fp->phys.pos.X;
-    float y = fp->phys.pos.Y;
-    float gr_vel = fp->phys.self_vel_ground.X;
-    float stick_x = fp->input.lstick.X;
+    return Sim_GroundJumpAt(fp, short_hop, fp->phys.pos.X, fp->phys.pos.Y, fp->phys.self_vel_ground.X,
+                            fp->input.lstick.X, fp->state_id != ASID_KNEEBEND, s, 0);
+}
+
+static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, float gr_vel, float stick_x, int fresh,
+                            SimStart *s, float *slide_x)
+{
     float startup = fp->attr.jump_startup_time;
 
     // KneeBend_Anim takes off once the animation frame reaches the startup
     // time; a new press starts the squat at frame 0 on the next frame
     float squat_left = startup;
     int until = 1;
-    if (fp->state_id == ASID_KNEEBEND)
+    if (!fresh)
     {
         squat_left = startup - fp->state.frame;
         until = 0;
@@ -3636,6 +3741,8 @@ static int Sim_GroundJump(FighterData *fp, int short_hop, SimStart *s)
             accel = gr_vel > 0 ? -friction : friction;
         gr_vel += accel;
         x += gr_vel;
+        if (slide_x)
+            slide_x[i] = x;
     }
 
     float vx = gr_vel * fp->attr.ground_to_air_jump_momentum_multiplier + stick_x * fp->attr.jump_h_initial_velocity;
@@ -3749,25 +3856,50 @@ void Event_ClearLearned(GOBJ *menu);
 void Event_ChangeCollDisplay(GOBJ *menu, int value);
 void Event_ChangeScript(GOBJ *menu, int value);
 void Event_ChangeCamera(GOBJ *menu, int value);
+void Event_ChangeView(GOBJ *menu, int value);
+void Event_SaveView(GOBJ *menu);
+void Event_NameView(GOBJ *menu);
+void Event_PresetName(GOBJ *menu);
 void Event_ChangeLedgeStart(GOBJ *menu, int value);
+void Event_ChangeRoutes(GOBJ *menu, int value);
+void Event_ChangePreset(GOBJ *menu, int value);
+void Event_ChangePresetStart(GOBJ *menu, int value);
+void Event_PresetLoad(GOBJ *menu);
+void Event_PresetSave(GOBJ *menu);
 
 static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
 static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
 static const char *tick_names[] = {"Frame Advance", "Always", "Off"};
+static const char *intensity_names[] = {"1 Faint", "2 Soft", "3 Standard", "4 Bold", "5 Boldest"};
 static const char *mark_size_names[] = {"Small", "Medium", "Large"};
 static const float mark_sizes[] = {0.9f, 1.25f, 1.6f};
 static const char *ai_filter_names[] = {"Useful", "All"};
+static const char *ai_aerial_names[] = {"Any", "Nair", "Fair", "Bair", "Uair", "Dair"}; // after Any, in TS_AIRN order
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
-static const char *timer_names[] = {"Near Falcon", "Fixed Strip", "Both", "Off"};
+static const char *near_names[] = {"Off", "Bubble", "Halo", "Pincers", "ECB Fill", "Lights", "Old Strip"};
+static const char *strip_names[] = {"Off", "Cells", "Highway", "Dial"};
+static const char *wl_timer_names[] = {"Off", "Ticks", "Rails", "Chevrons"};
+static const char *wd_timer_names[] = {"Off", "Cells", "Pips", "Ring"};
+enum { TRAVEL_FIXED, TRAVEL_CATCH };
+static const char *travel_names[] = {"Fixed Speed", "Catch Up"};
 static const char *stick_names[] = {"By Percent", "Bottom Left", "Bottom Right", "Off"};
-static const char *pad_look_names[] = {"Ring", "Classic"};
+static const char *pad_look_names[] = {"Ring", "Crest", "Classic"};
+static const char *pad_cue_names[] = {"Off", "Closing Ring", "Gauge"};
+static const char *deck_idle_names[] = {"3 s", "5 s", "8 s", "Never"};
+static const char *deck_play_names[] = {"1 s", "2 s", "3 s", "Never"};
+enum { PADCUE_OFF, PADCUE_RING, PADCUE_GAUGE };
 static const float ring_sizes[] = {1.f, 1.25f, 1.5f};
 static const char *adv_button_names[] = {"L", "Z", "X", "Y", "R"};
 static const int adv_button_masks[] = {HSD_TRIGGER_L, HSD_TRIGGER_Z, HSD_BUTTON_X, HSD_BUTTON_Y, HSD_TRIGGER_R};
 static const char *route_kind_names[] = {"NIL", "AI", "Both"};
-static const char *route_pick_names[] = {"Best", "Second", "Third"};
+static const char *route_sort_names[] = {"GALINT", "Easiest"};
+// The Route option is a number from 1 to the routes found. Its value text
+// ("4 of 23") and the first lines of its description (the chosen route's
+// GALINT and inputs) are rewritten as the list and the choice change.
+static char route_pick_fmt[24] = "%d";
+static char route_desc[3][56];
 static const char *wait_names[] = {"5 s", "3 s", "2 s", "1 s", "0.5 s", "0.25 s", "0.1 s"};
 static const int wait_frames[] = {300, 180, 120, 60, 30, 15, 6};
 static const char *reset_names[] = {"None", "Same Side", "Swap", "Swap on Success", "Random"};
@@ -3776,15 +3908,50 @@ static const int reset_delay_hit[] = {120, 60, 30, 1};
 static const int reset_delay_miss[] = {60, 20, 1, 1};
 static const char *start_names[] = {"Ledge", "Saved Position"};
 static const char *cam_names[] = {"Normal", "Zoom", "Fixed", "Advanced"};
+#define VIEW_SLOTS 8 // camera views per stage
+static char view_label[VIEW_SLOTS][20];
+static const char *view_names[VIEW_SLOTS + 1] = {"None", view_label[0], view_label[1], view_label[2], view_label[3],
+                                                 view_label[4], view_label[5], view_label[6], view_label[7]};
 #define LL_SCRIPT_MAX 48 // scripts read from the script file
 static const char *script_names[LL_SCRIPT_MAX + 2] = {"Off"}; // and All
+// Debug Log levels: each one adds to the one before
+enum { LOG_OFF, LOG_LANDINGS, LOG_FRAMES, LOG_ALL };
+static const char *log_level_names[] = {"Off", "Landings", "Frames", "Everything"};
 
-enum timer_kind
+// The timers' looks (see the Timers menu). Each draws the same cues.
+enum near_kind
 {
-    TIMER_FALCON,
-    TIMER_FIXED,
-    TIMER_BOTH,
-    TIMER_OFF,
+    NEAR_OFF,
+    NEAR_BUBBLE,  // a ring closes on a bubble where his body will be at the press
+    NEAR_HALO,    // a bead runs around a ring on him into the window's notch
+    NEAR_PINCERS, // brackets as tall as him close in from both sides
+    NEAR_ECB,     // his ECB diamond fills, then spikes onto the floor
+    NEAR_LIGHTS,  // a fuse, then one light a frame over his head
+    NEAR_STRIP,   // the old cell strip that finds room around him
+};
+
+enum strip_kind
+{
+    STRIP_OFF,
+    STRIP_CELLS,   // cells slide into a gate
+    STRIP_HIGHWAY, // notes fall onto a line, one lane per cue
+    STRIP_DIAL,    // a hand sweeps into the window's wedge
+};
+
+enum wl_timer_kind
+{
+    WLT_OFF,
+    WLT_TICKS,    // ticks slide in from the slide's ends and spike where they meet
+    WLT_RAILS,    // the rails fill in from the ends
+    WLT_CHEVRONS, // arrowheads hop in a notch a frame
+};
+
+enum wd_timer_kind
+{
+    WDT_OFF,
+    WDT_CELLS, // a row in the strips
+    WDT_PIPS,  // a pip a jumpsquat frame under his feet
+    WDT_RING,  // a ring on the floor tightens each frame
 };
 
 enum stick_place
@@ -3798,6 +3965,7 @@ enum stick_place
 enum pad_look
 {
     LOOK_RING,
+    LOOK_CREST,
     LOOK_CLASSIC,
 };
 
@@ -3823,6 +3991,12 @@ enum route_kind
     ROUTES_BOTH,
 };
 
+enum route_sort
+{
+    ROUTES_SORT_GALINT,
+    ROUTES_SORT_EASIEST,
+};
+
 enum reset_kind
 {
     RESET_NONE,
@@ -3844,6 +4018,7 @@ enum options_ledge
 {
     LOPT_ROUTES,
     LOPT_KIND,
+    LOPT_SORT,
     LOPT_PICK,
     LOPT_ASSIST,
     LOPT_WAIT,
@@ -3851,7 +4026,7 @@ enum options_ledge
     LOPT_RESET,
     LOPT_DELAY,
     LOPT_INV,
-    LOPT_CAM,
+    LOPT_DROP,
 
     LOPT_COUNT
 };
@@ -3864,26 +4039,40 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .desc = {"While Falcon hangs, show the fastest ways from",
                  "the ledge to the stage in the timer, with the",
                  "ledge intangibility (GALINT) each one keeps.",
-                 "The chosen route goes first."},
+                 "The chosen route is on top, the next ones under."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_STRING,
         .name = "Route Kind",
+        .val = ROUTES_AI,
         .value_num = countof(route_kind_names),
         .values = route_kind_names,
         .desc = {"NIL: land on the stage with no landing lag.",
                  "AI: land with an aerial interrupt.",
-                 "Both: whichever keeps more GALINT."},
+                 "Both: the two lists together."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_STRING,
+        .name = "Route Sort",
+        .value_num = countof(route_sort_names),
+        .values = route_sort_names,
+        .desc = {"How the routes are put in order.",
+                 "GALINT: the most ledge intangibility first.",
+                 "Easiest: widest aerial window, no fastfall and",
+                 "least waiting first, then by GALINT."},
+        .OnChange = Event_ChangeRoutes,
+    },
+    {
+        .kind = OPTKIND_INT,
         .name = "Route",
-        .value_num = countof(route_pick_names),
-        .values = route_pick_names,
-        .desc = {"The route to practice, by GALINT kept: Best,",
-                 "Second or Third. It shows first while you hang",
-                 "and is the one Assist and grading follow.",
-                 "The panel names its inputs."},
+        .value_min = 1,
+        .value_num = 1,
+        .val = 1,
+        .format = route_pick_fmt,
+        .desc = {route_desc[0], route_desc[1], route_desc[2], "Left/right browse, or D-pad up on the ledge."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -3892,6 +4081,7 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
                  "input of the route and waits for it, then plays",
                  "on at full speed. A slip only misses if it costs",
                  "the landing, or its timing is checked in Sounds."},
+        .OnChange = Event_ChangeRoutes,
     },
     {
         .kind = OPTKIND_STRING,
@@ -3936,6 +4126,128 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
                  "the routes don't shrink while you get ready."},
     },
     {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Drop Drill",
+        .desc = {"Time letting go of the ledge: a DRP row counts",
+                 "down to the first frame you can. The stick has to",
+                 "rest on the hang's first frame, then go down or",
+                 "away. Graded, with how many of your last 10 hit."},
+    },
+};
+
+static EventMenu Menu_Ledge = {
+    .name = "Ledge Practice",
+    .option_num = countof(Options_Ledge),
+    .options = Options_Ledge,
+};
+
+// Jump timing: in a fall with the double jump left, when to jump, with which
+// stick, and which aerial to press when, to land as an aerial interrupt or
+// a NIL on a platform or the floor.
+enum options_jump
+{
+    JOPT_SHOW,
+    JOPT_KIND,
+    JOPT_TARGET,
+#ifdef LL_GROUND_GUIDE
+    JOPT_BANDS,
+    JOPT_MARKS,
+#endif
+
+    JOPT_COUNT
+};
+
+// Where the jump lands: any floor, or one kind of platform. Left and right
+// are of the stage's middle; Top is the highest platform.
+enum jump_target
+{
+    JTGT_ANY,
+    JTGT_TOP,
+    JTGT_LEFT,
+    JTGT_RIGHT,
+    JTGT_PLATFORM,
+    JTGT_FLOOR,
+};
+// From the ground: which hops to look at. The live search from the ground
+// is off (Stephen, 0.8.3 notes: it made him stand still and wait, then sent
+// him to a platform's edge); a guide worked out ahead of time replaces it.
+enum { HOP_OFF, HOP_SHORT, HOP_FULL, HOP_BOTH };
+#define JT_HOP_SETTING HOP_OFF
+
+static const char *jump_target_names[] = {"Any", "Top Platform", "Left Platform", "Right Platform", "Any Platform",
+                                          "Main Floor"};
+
+static EventOption Options_Jump[JOPT_COUNT] = {
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Show",
+        .desc = {"While Falcon falls with his double jump left,",
+                 "show when to jump, with which stick, and which",
+                 "aerial to press when, to land as an aerial",
+                 "interrupt or a NIL on a platform or the floor."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Kind",
+        .val = ROUTES_AI,
+        .value_num = countof(route_kind_names),
+        .values = route_kind_names,
+        .desc = {"NIL: land with no landing lag.",
+                 "AI: land with an aerial interrupt.",
+                 "Both: whichever lets Falcon act sooner."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Land On",
+        .value_num = countof(jump_target_names),
+        .values = jump_target_names,
+        .desc = {"Where the jump should land. Any shows the one",
+                 "that lets Falcon act soonest, wherever it is.",
+                 "Top is the highest platform; left and right",
+                 "are either side of the stage's middle."},
+    },
+#ifdef LL_GROUND_GUIDE
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Takeoff Bands",
+        .val = 1,
+        .desc = {"On the ground: strips under the floor where a",
+                 "hop (and a double jump) can start and still land",
+                 "an AI, NIL or waveland on the platform above.",
+                 "Nearer strip short hop, farther full hop."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Reach Marks",
+        .val = 1,
+        .desc = {"On the ground: each platform lights the stretch a",
+                 "hop from here can land on, brighter where more",
+                 "timings work. Short hop nearer the surface."},
+    },
+#endif
+};
+
+static EventMenu Menu_Jump = {
+    .name = "Jump Timing",
+    .option_num = countof(Options_Jump),
+    .options = Options_Jump,
+};
+
+// The Training Lab's camera modes. Presets come with saved settings.
+enum options_camera
+{
+    CAMOPT_MODE,
+    CAMOPT_VIEW,
+    CAMOPT_SAVE,
+    CAMOPT_NAME,
+
+    CAMOPT_COUNT
+};
+
+#define CAM_ADVANCED 3 // cam_names
+
+static EventOption Options_Camera[CAMOPT_COUNT] = {
+    {
         .kind = OPTKIND_STRING,
         .name = "Camera Mode",
         .value_num = countof(cam_names),
@@ -3945,12 +4257,102 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
                  "A/B/Y to pan, rotate and zoom, respectively."},
         .OnChange = Event_ChangeCamera,
     },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "View",
+        .value_num = countof(view_names),
+        .values = view_names,
+        .desc = {"Jump the camera to a saved view (Advanced mode,",
+                 "so it can still be moved). Each stage has its own",
+                 "8 views. Presets keep which one they were saved",
+                 "with."},
+        .OnChange = Event_ChangeView,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Save View",
+        .desc = {"Keep the camera as it is now as the view picked",
+                 "above, on this stage. Set it up in Advanced",
+                 "mode, or pause on a moment you like."},
+        .OnSelect = Event_SaveView,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Name View",
+        .desc = {"Give the view picked above a name (save it",
+                 "first)."},
+        .OnSelect = Event_NameView,
+    },
 };
 
-static EventMenu Menu_Ledge = {
-    .name = "Ledge Practice",
-    .option_num = countof(Options_Ledge),
-    .options = Options_Ledge,
+static EventMenu Menu_Camera = {
+    .name = "Camera",
+    .option_num = countof(Options_Camera),
+    .options = Options_Camera,
+};
+
+// Every button the event uses outside the menu.
+static EventOption Options_Controls[] = {
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Menu",
+        .desc = {"Start opens this menu."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Save Position",
+        .desc = {"Hold D-pad right to save where Falcon is."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Load Position",
+        .desc = {"D-pad left puts Falcon back where you saved.",
+                 "When Reset starts from the ledge, it starts a",
+                 "new attempt instead, and with a test script",
+                 "chosen it plays the script again."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Quick Menu",
+        .desc = {"Click L or R all the way and press D-pad up or",
+                 "down: your presets and main settings, over a",
+                 "frozen game. The stick plays on, B closes it.",
+                 "Trigger + A saves, trigger + X or Y saves new."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Hide Everything",
+        .desc = {"Click L and R both all the way and press D-pad",
+                 "up or down: everything Landing Lab draws hides,",
+                 "or comes back. With a trigger only partway in,",
+                 "the D-pad does nothing."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Next Route",
+        .desc = {"While hanging from a ledge, D-pad up shows the",
+                 "next ledge route in the list, and the first",
+                 "again after the last. Ledge Practice > Route",
+                 "picks any route directly."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Frame Advance",
+        .desc = {"D-pad down freezes the game, or lets it run."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Step a Frame",
+        .desc = {"While frozen, the Advance button steps one",
+                 "frame; hold it to step slowly. It's Z unless",
+                 "you change it in Speed."},
+    },
+};
+
+static EventMenu Menu_Controls = {
+    .name = "Controls",
+    .option_num = countof(Options_Controls),
+    .options = Options_Controls,
 };
 
 // Things only needed to test the event or report a wrong prediction.
@@ -3982,11 +4384,13 @@ static EventOption Options_Dev[DOPT_COUNT] = {
         .OnChange = Event_ChangeCollDisplay,
     },
     {
-        .kind = OPTKIND_TOGGLE,
+        .kind = OPTKIND_STRING,
         .name = "Debug Log",
-        .desc = {"Write every airborne frame's state, position,",
-                 "speed and ECB to Dolphin's log. Only needed to",
-                 "report a wrong prediction."},
+        .value_num = 4,
+        .values = log_level_names,
+        .desc = {"Extra lines in Dolphin's log. Landings: timer",
+                 "presses and ledge routes. Frames: every airborne",
+                 "frame too. Everything: camera too, slows play."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -4011,9 +4415,9 @@ static EventOption Options_Dev[DOPT_COUNT] = {
         .kind = OPTKIND_INFO,
         .name = "About",
         .desc = {"Gray paths rely on ECB frames the event hasn't",
-                 "seen yet; it learns them as you play. D-pad up",
-                 "during Frame Advance hides everything the event",
-                 "draws, for screenshots."},
+                 "seen yet; it learns them as you play. With the",
+                 "Debug Log on, D-pad up during Frame Advance hides",
+                 "everything the event draws, for screenshots."},
     },
 };
 
@@ -4025,6 +4429,144 @@ static EventMenu Menu_Dev = {
 
 // The main menu is a short list of groups, each its own page.
 
+// A buzz that speeds up toward a window, per cue.
+enum options_rumble
+{
+    RUOPT_AI,
+    RUOPT_NIL,
+    RUOPT_WL,
+    RUOPT_NOTE,
+
+    RUOPT_COUNT
+};
+
+static EventOption Options_Rumble[RUOPT_COUNT] = {
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "AI Rumble",
+        .desc = {"Buzz the controller faster and faster up to an",
+                 "AI window, stopping dead as it opens. Needs AI",
+                 "Cues on."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "NIL Rumble",
+        .desc = {"The same for NIL windows. Needs NIL Cues on."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Waveland Rumble",
+        .desc = {"The same for perfect waveland and wavedash",
+                 "windows. Needs Waveland Cues on."},
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Game Rumble",
+        .desc = {"While any of these is on, the game's own rumble",
+                 "is off for your controller, so only the cues",
+                 "buzz. Dolphin passes rumble only to a real",
+                 "controller with rumble on in its settings."},
+    },
+};
+
+static EventMenu Menu_Rumble = {
+    .name = "Rumble",
+    .option_num = countof(Options_Rumble),
+    .options = Options_Rumble,
+};
+
+// Intensity by group: each one fainter or bolder than the main Intensity
+// level, the controller on a level of its own, and Auto Fade.
+enum options_intensity
+{
+    IOPT_CUES,
+    IOPT_PATHS,
+    IOPT_TIMERS,
+    IOPT_LEDGE,
+    IOPT_PAD,
+    IOPT_FADE,
+    IOPT_FADE_RESET,
+
+    IOPT_COUNT
+};
+enum { FADE_OFF, FADE_TIMERS, FADE_CUES, FADE_BOTH };
+static const char *group_offset_names[] = {"2 Fainter", "1 Fainter", "Same", "1 Bolder", "2 Bolder"};
+static const char *fade_names[] = {"Off", "Timers", "Cues", "Both"};
+void Event_FadeReset(GOBJ *menu);
+
+static EventOption Options_Intensity[IOPT_COUNT] = {
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Cues",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"Body Flash and Platform Glow, against the",
+                 "Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Paths",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"The landing and body paths, frame dots, input",
+                 "markers and slide-off line, against the",
+                 "Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Timers",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"Every timer: the strip, near Falcon, the landing",
+                 "spot, waveland and wavedash, against the",
+                 "Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Ledge",
+        .val = 2,
+        .value_num = countof(group_offset_names),
+        .values = group_offset_names,
+        .desc = {"Ledge routes, their inputs and their timers,",
+                 "against the Intensity level."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Controller",
+        .val = 2,
+        .value_num = countof(intensity_names),
+        .values = intensity_names,
+        .desc = {"The controller display, on its own level: the",
+                 "main Intensity doesn't change it."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Auto Fade",
+        .value_num = countof(fade_names),
+        .values = fade_names,
+        .desc = {"Fade the timers or cues as you learn a timing:",
+                 "each kind (AI, NIL, waveland) follows how many of",
+                 "your last 10 or so tries hit. A miss brings it",
+                 "back a little, a run of misses all the way."},
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Reset Fade",
+        .desc = {"Forget the hit rates Auto Fade goes by, so",
+                 "everything shows in full again."},
+        .OnSelect = Event_FadeReset,
+    },
+};
+
+static EventMenu Menu_Intensity = {
+    .name = "Intensity by Group",
+    .option_num = countof(Options_Intensity),
+    .options = Options_Intensity,
+};
+
 // What the cues show, and how Falcon and the floor light up with them.
 enum options_cues
 {
@@ -4032,8 +4574,12 @@ enum options_cues
     COPT_AI,
     COPT_WL,
     COPT_AI_FILTER,
+    COPT_AI_AERIAL,
     COPT_FLASH,
     COPT_GLOW,
+    COPT_INTENSITY,
+    COPT_GROUPS,
+    COPT_RUMBLE,
 
     COPT_COUNT
 };
@@ -4042,7 +4588,6 @@ static EventOption Options_Cues[COPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "NIL Cues",
-        .val = 1,
         .desc = {"Green: holding the stick lands you with no",
                  "landing lag (NIL)."},
     },
@@ -4075,6 +4620,16 @@ static EventOption Options_Cues[COPT_COUNT] = {
                  "more without aerial lag. All shows them all."},
     },
     {
+        .kind = OPTKIND_STRING,
+        .name = "AI Aerial",
+        .value_num = countof(ai_aerial_names),
+        .values = ai_aerial_names,
+        .desc = {"Count down to one aerial's window only. Any uses",
+                 "the aerial that works on the most frames. With",
+                 "the stick held in, A is a fair, not a nair, and",
+                 "its window can be shorter."},
+    },
+    {
         .kind = OPTKIND_TOGGLE,
         .name = "Body Flash",
         .val = 1,
@@ -4085,10 +4640,34 @@ static EventOption Options_Cues[COPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Platform Glow",
-        .val = 1,
         .desc = {"Light up the floor a waveland or wavedash slides",
                  "along: it fills in toward the landing spot as the",
                  "window nears and flashes on each of its frames."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Intensity",
+        .val = 2,
+        .value_num = countof(intensity_names),
+        .values = intensity_names,
+        .desc = {"How strongly the cues, paths and timers show,",
+                 "from faint to bold. Standard is the usual look.",
+                 "Set each group apart from it in the menu below,",
+                 "or change it in the quick menu."},
+    },
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Intensity by Group",
+        .menu = &Menu_Intensity,
+        .desc = {"Cues, paths, timers, ledge info and the",
+                 "controller each fainter or bolder, and Auto Fade."},
+    },
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Rumble",
+        .menu = &Menu_Rumble,
+        .desc = {"Buzz the controller up to a cue's window, and",
+                 "keep the game's own rumble out of it."},
     },
 };
 
@@ -4103,6 +4682,7 @@ enum options_paths
 {
     POPT_PATH,
     POPT_BODY,
+    POPT_ROUTE,
     POPT_INPUTS,
     POPT_MARK_SIZE,
     POPT_TICKS,
@@ -4116,7 +4696,6 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Landing Path",
-        .val = 1,
         .desc = {"Draw where Falcon's ECB bottom goes if you keep",
                  "holding the stick and press nothing, in the",
                  "landing's color when its cue is on."},
@@ -4124,9 +4703,17 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Body Path",
-        .val = 1,
         .desc = {"Also draw a dotted line through Falcon's body,",
                  "which is easier to follow than the ECB bottom."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Ledge Route",
+        .val = 1,
+        .desc = {"While Falcon hangs on a ledge and on the way",
+                 "back, draw the chosen route's path. Shown with",
+                 "Show Routes or Assist on in Ledge Practice, and",
+                 "for the jump chosen in Jump Timing."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -4160,7 +4747,6 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Slide-off Line",
-        .val = 1,
         .desc = {"When a waveland or wavedash would slide off the",
                  "edge, draw where Falcon goes: full stick that way",
                  "until it starts, then your real stick."},
@@ -4183,47 +4769,114 @@ static EventMenu Menu_Paths = {
     .options = Options_Paths,
 };
 
+// The countdowns to each input, and how each one looks.
+enum options_timers
+{
+    TOPT_NEAR,
+    TOPT_STRIP,
+    TOPT_WIDE,
+    TOPT_SPOT,
+    TOPT_WL,
+    TOPT_WD,
+    TOPT_TRAVEL,
+
+    TOPT_COUNT
+};
+
+static EventOption Options_Timers[TOPT_COUNT] = {
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Near Falcon",
+        .value_num = countof(near_names),
+        .values = near_names,
+        .desc = {"A countdown that rides with Falcon. Bubble: a",
+                 "ring closes on where his body will be. Halo: a",
+                 "bead runs into a notch. Pincers, ECB Fill and",
+                 "Lights close, fill or count in on him."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Fixed Strip",
+        .val = STRIP_CELLS,
+        .value_num = countof(strip_names),
+        .values = strip_names,
+        .desc = {"A countdown in a corner. Cells slide into a gate,",
+                 "Highway drops notes onto a line, Dial sweeps a",
+                 "hand into the window. Press as it arrives."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Wide Cells",
+        .val = 1,
+        .desc = {"Make each frame cell of the cell timers a little",
+                 "wider."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Landing Spot",
+        .val = 1,
+        .desc = {"Brackets close in on the landing spot of an AI",
+                 "or NIL and meet it on the frame to press."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Waveland",
+        .val = WLT_TICKS,
+        .value_num = countof(wl_timer_names),
+        .values = wl_timer_names,
+        .desc = {"At the slide: ticks run in from its ends and",
+                 "spike where they meet, the rails fill in, or",
+                 "chevrons hop in a notch a frame. They meet on",
+                 "the frame to airdodge."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Wavedash",
+        .val = WDT_CELLS,
+        .value_num = countof(wd_timer_names),
+        .values = wd_timer_names,
+        .desc = {"Out of the jumpsquat: a row in the strips, a pip",
+                 "a frame under Falcon's feet, or a ring on the",
+                 "floor that closes on the airdodge frame."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Note Travel",
+        .val = TRAVEL_FIXED,
+        .value_num = countof(travel_names),
+        .values = travel_names,
+        .desc = {"Cells and Highway. Fixed Speed: a frame is always",
+                 "the same distance, so a window found late shows up",
+                 "partway along. Catch Up: every window comes in from",
+                 "the far end and settles to that speed halfway in."},
+    },
+};
+
+static EventMenu Menu_Timers = {
+    .name = "Timers",
+    .option_num = countof(Options_Timers),
+    .options = Options_Timers,
+};
+
 // What's drawn on the screen rather than in the stage.
 enum options_hud
 {
-    HOPT_TIMER,
-    HOPT_WIDE,
-    HOPT_SPOT,
     HOPT_STICK,
     HOPT_LOOK,
     HOPT_PAD_SIZE,
     HOPT_BUTTONS,
+    HOPT_PAD_CUES,
+    HOPT_SHIELD_DROP,
     HOPT_PANEL,
     HOPT_PANEL_SIDE,
+    HOPT_DECK,
+    HOPT_DECK_IDLE,
+    HOPT_DECK_PLAY,
 
     HOPT_COUNT
 };
 
 static EventOption Options_Hud[HOPT_COUNT] = {
-    {
-        .kind = OPTKIND_STRING,
-        .name = "Timer",
-        .value_num = countof(timer_names),
-        .values = timer_names,
-        .desc = {"Count down to each input frame by frame: cells",
-                 "slide into the gate, press as one reaches it.",
-                 "Near Falcon stays put by him, clear of his path;",
-                 "Fixed Strip is a bigger one with labels."},
-    },
-    {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Wide Cells",
-        .desc = {"Make each frame cell of the timer a little",
-                 "wider."},
-    },
-    {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Spot Timers",
-        .val = 1,
-        .desc = {"Count down at the landing spot too: brackets",
-                 "close in for an AI or NIL; for a waveland, ticks",
-                 "run in from the ends of the slide to the middle."},
-    },
     {
         .kind = OPTKIND_STRING,
         .name = "Controller",
@@ -4241,7 +4894,8 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .values = pad_look_names,
         .desc = {"Ring: the whole controller in a small ellipse,",
                  "L and R as its halves, filling into their nubs.",
-                 "Classic: the wider block with trigger bars."},
+                 "Crest: a shield with L and R as its wings. Classic:",
+                 "the wider block with trigger bars."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -4259,6 +4913,24 @@ static EventOption Options_Hud[HOPT_COUNT] = {
                  "the controller's own colors."},
     },
     {
+        .kind = OPTKIND_STRING,
+        .name = "Controller Cues",
+        .value_num = countof(pad_cue_names),
+        .values = pad_cue_names,
+        .desc = {"The button an AI or waveland window wants, timed",
+                 "on the controller: a ring closing in on it, or a",
+                 "gauge going round it. Never filled, so it can't",
+                 "pass for a press. Needs Buttons and Triggers."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Shield Drop Zone",
+        .val = 1,
+        .desc = {"Shade the stick angles that drop through a",
+                 "platform out of shield, in the stick's gate.",
+                 "Shown while Falcon is on a platform."},
+    },
+    {
         .kind = OPTKIND_TOGGLE,
         .name = "Info Panel",
         .val = 1,
@@ -4272,6 +4944,35 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .values = panel_side_names,
         .desc = {"Where the info panel goes. Auto keeps it on the",
                  "side of the screen Falcon isn't on."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Quick Menu",
+        .val = 1,
+        .desc = {"L or R clicked all the way with D-pad up or down",
+                 "freezes the game and opens a deck of your",
+                 "presets: left and right flip through them, down",
+                 "changes the chosen one's settings."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Quick Menu Idle",
+        .val = 1,
+        .value_num = countof(deck_idle_names),
+        .values = deck_idle_names,
+        .desc = {"The quick menu stays up with the trigger let go,",
+                 "and fades out and closes after this long with no",
+                 "D-pad or trigger press. B closes it at once."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Quick Menu Play",
+        .val = 1,
+        .value_num = countof(deck_play_names),
+        .values = deck_play_names,
+        .desc = {"Moving the stick plays out of the quick menu:",
+                 "the game goes on and the menu fades out over this",
+                 "long. The D-pad or a trigger brings it back."},
     },
 };
 
@@ -4288,6 +4989,8 @@ enum options_sounds
 {
     SOPT_CHIME,
     SOPT_WINDOW,
+    SOPT_SKIP,
+    SOPT_ROUTE_CHIME,
     SOPT_LOST,
     SOPT_FF,
     SOPT_JUMP,
@@ -4302,14 +5005,28 @@ static EventOption Options_Sounds[SOPT_COUNT] = {
         .name = "Chime on a Hit",
         .val = 1,
         .desc = {"Chime when you land a NIL, an AI or a perfect",
-                 "waveland."},
+                 "waveland, for the cues that are on."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Buzz: Missed Window",
         .val = 1,
-        .desc = {"Buzz when an AI or waveland window passes",
-                 "without the press, or the press misses it."},
+        .desc = {"Buzz when you press for an AI or waveland",
+                 "window and miss it, early or late."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Buzz: Skipped Window",
+        .desc = {"Buzz when an AI or waveland window passes with",
+                 "no press at all. Off, you can watch windows go",
+                 "by to get a feel for the timing."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Chime: Ledge Route",
+        .val = 1,
+        .desc = {"Chime when a ledge route lands with GALINT left,",
+                 "instead of the cue chime."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -4375,6 +5092,7 @@ static EventOption Options_Game[GOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Advance Button",
+        .val = 1,
         .value_num = countof(adv_button_names),
         .values = adv_button_names,
         .desc = {"The button that steps a frame while Frame",
@@ -4388,13 +5106,107 @@ static EventMenu Menu_Game = {
     .options = Options_Game,
 };
 
+// Settings presets: what every menu is set to, kept on the memory card in
+// Landing Lab's own small file, so TM-CE's save is never touched.
+enum preset_slot
+{
+    PS_USER, // the last settings: saved whenever the menu closes
+    PS_1,
+    PS_2,
+    PS_3,
+    PS_4,
+    PS_SAVED, // the ones above are on the card, the ones from here built in
+    PS_DEFAULTS = PS_SAVED,
+    PS_MINIMAL,
+    PS_EVERYTHING,
+    PS_LEDGE,
+
+    PS_COUNT
+};
+static char preset_label[PS_SAVED][20]; // Preset 1 to 4, or their names
+static const char *preset_names[PS_COUNT] = {"User Custom", preset_label[1], preset_label[2], preset_label[3], preset_label[4],
+                                             "Defaults", "Minimal", "Everything", "Ledge Drill"};
+static char preset_desc[3][52];      // the chosen preset's settings, in short
+static char preset_card_desc[3][52]; // what the memory card is doing
+
+enum options_presets
+{
+    PROPT_PICK,
+    PROPT_LOAD,
+    PROPT_SAVE,
+    PROPT_NAME,
+    PROPT_START,
+    PROPT_CARD,
+
+    PROPT_COUNT
+};
+
+static EventOption Options_Presets[PROPT_COUNT] = {
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Preset",
+        .value_num = PS_COUNT,
+        .values = preset_names,
+        .desc = {preset_desc[0], preset_desc[1], preset_desc[2], "Load it or save to it below."},
+        .OnChange = Event_ChangePreset,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Load Preset",
+        .desc = {"Set every menu the way the preset above has",
+                 "it."},
+        .OnSelect = Event_PresetLoad,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Save to Preset",
+        .desc = {"Keep the current settings in the preset above:",
+                 "User Custom or Preset 1 to 4. Defaults,",
+                 "Minimal, Everything and Ledge Drill are built",
+                 "in and stay as they are."},
+        .OnSelect = Event_PresetSave,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Name Preset",
+        .desc = {"Give the preset above a name: Preset 1 to 4",
+                 "only."},
+        .OnSelect = Event_PresetName,
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Load at Start",
+        .value_num = PS_COUNT,
+        .values = preset_names,
+        .desc = {"The preset the event starts with. User Custom",
+                 "is how you left the menus the last time you",
+                 "closed them."},
+        .OnChange = Event_ChangePresetStart,
+    },
+    {
+        .kind = OPTKIND_INFO,
+        .name = "Memory Card",
+        .desc = {preset_card_desc[0], preset_card_desc[1], preset_card_desc[2]},
+    },
+};
+
+static EventMenu Menu_Presets = {
+    .name = "Presets",
+    .option_num = countof(Options_Presets),
+    .options = Options_Presets,
+};
+
 enum options_main
 {
+    OPT_PRESETS,
     OPT_CUES,
+    OPT_TIMERS,
     OPT_PATHS,
     OPT_HUD,
     OPT_SOUNDS,
     OPT_LEDGE,
+    OPT_JUMP,
+    OPT_CAMERA,
     OPT_GAME,
     OPT_DEV,
     OPT_CONTROLS,
@@ -4407,6 +5219,14 @@ enum options_main
 static EventOption Options_Main[OPT_COUNT] = {
     {
         .kind = OPTKIND_MENU,
+        .name = "Presets",
+        .menu = &Menu_Presets,
+        .desc = {"Load and save whole setups, and pick the one",
+                 "the event starts with. Settings are kept on",
+                 "the memory card in slot A."},
+    },
+    {
+        .kind = OPTKIND_MENU,
         .name = "Cues",
         .menu = &Menu_Cues,
         .desc = {"Which landings get cues (NIL, AI, waveland), the",
@@ -4414,17 +5234,25 @@ static EventOption Options_Main[OPT_COUNT] = {
     },
     {
         .kind = OPTKIND_MENU,
+        .name = "Timers",
+        .menu = &Menu_Timers,
+        .desc = {"The countdowns to each input: near Falcon, in a",
+                 "corner, at the landing spot, and for wavelands",
+                 "and wavedashes."},
+    },
+    {
+        .kind = OPTKIND_MENU,
         .name = "Paths",
         .menu = &Menu_Paths,
-        .desc = {"The landing and body paths, input markers, frame",
-                 "dots, the slide-off line and jump previews."},
+        .desc = {"The landing, body and ledge route paths, input",
+                 "markers, frame dots, the slide-off line and jump",
+                 "previews."},
     },
     {
         .kind = OPTKIND_MENU,
         .name = "HUD",
         .menu = &Menu_Hud,
-        .desc = {"The timer, spot timers, controller display",
-                 "and the info panel."},
+        .desc = {"The controller display and the info panel."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -4437,8 +5265,21 @@ static EventOption Options_Main[OPT_COUNT] = {
         .name = "Ledge Practice",
         .menu = &Menu_Ledge,
         .desc = {"Routes from the ledge with the most GALINT,",
-                 "quicktime Assist, and reset and camera options",
-                 "like the ledgedash training."},
+                 "quicktime Assist, and reset options like the",
+                 "ledgedash training."},
+    },
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Jump Timing",
+        .menu = &Menu_Jump,
+        .desc = {"In a fall, when to double jump and which",
+                 "aerial to press to land as an AI or a NIL."},
+    },
+    {
+        .kind = OPTKIND_MENU,
+        .name = "Camera",
+        .menu = &Menu_Camera,
+        .desc = {"The Training Lab's camera modes."},
     },
     {
         .kind = OPTKIND_MENU,
@@ -4454,11 +5295,10 @@ static EventOption Options_Main[OPT_COUNT] = {
                  "test scripts."},
     },
     {
-        .kind = OPTKIND_INFO,
+        .kind = OPTKIND_MENU,
         .name = "Controls",
-        .desc = {"D-pad right (hold): save Falcon's position.",
-                 "D-pad left: load it (or replay the script, when",
-                 "one is chosen). D-pad down: frame advance on/off."},
+        .menu = &Menu_Controls,
+        .desc = {"Every button Landing Lab uses outside the menu."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -4483,6 +5323,1191 @@ static EventMenu Menu_Main = {
 };
 
 EventMenu *Event_Menu = &Menu_Main;
+
+///////////////////////
+/// Presets         ///
+///////////////////////
+
+// A preset is a list of (option, value) pairs, each option known by a hash
+// of its menu's and its own name, so a later version with options added,
+// removed or moved still reads an older file: what it doesn't know stays as
+// it is.
+typedef struct PresetOpt
+{
+    u32 key;
+    s16 val;
+    u16 pad;
+} PresetOpt;
+
+#define PRESET_OPTS 72
+typedef struct PresetSlot
+{
+    u16 used;
+    u16 num;
+    PresetOpt opt[PRESET_OPTS];
+} PresetSlot;
+
+#define PRESET_MAGIC 0x4C4C5052 // "LLPR"
+#define PRESET_VERSION 3
+#define NAME_LEN 12   // letters in a view's or preset's name
+#define VIEW_POOL 48  // views kept, all stages together
+typedef struct OldView // version 2's, one set for every stage
+{
+    u8 used;
+    u8 pad[3];
+    Vec3 eye, interest;
+    float fov;
+} OldView;
+typedef struct CamView
+{
+    u8 used;
+    u8 stage; // external stage id
+    u8 slot;  // 1 to VIEW_SLOTS
+    u8 pad;
+    char name[NAME_LEN + 4];
+    Vec3 eye, interest;
+    float fov;
+} CamView;
+typedef struct PresetFile
+{
+    u32 magic;
+    u16 version;
+    u8 start; // the preset loaded at start
+    u8 pad;
+    PresetSlot slot[PS_SAVED];
+    OldView old_view[4];                   // version 2's views: moved to the first stage it's read on
+    char preset_name[PS_SAVED][NAME_LEN + 4]; // [0], User Custom, isn't named
+    CamView view[VIEW_POOL];
+    float skill[4]; // Auto Fade's hit rates, by cue kind
+} PresetFile;
+static float skill[4]; // the same, as they go (CUE_NUM used)
+static CamView *View_Find(int v);
+static CamView *View_New(int v);
+
+// a name, cut to NAME_LEN letters
+static void Name_Copy(char *to, const char *from)
+{
+    int i = 0;
+    for (; i < NAME_LEN && from[i]; i++)
+        to[i] = from[i];
+    to[i] = 0;
+}
+static void Labels_Refresh(void);
+
+typedef struct PresetMenu
+{
+    const char *tag;
+    EventOption *opts;
+    int num;
+} PresetMenu;
+
+// Every menu a player sets up: not Developer, and not Frame Advance or the
+// chosen ledge route, which belong to the moment.
+static const PresetMenu preset_menus[] = {
+    {"Cues", Options_Cues, COPT_COUNT},
+    {"Intensity", Options_Intensity, IOPT_COUNT},
+    {"Rumble", Options_Rumble, RUOPT_COUNT},
+    {"Timers", Options_Timers, TOPT_COUNT},
+    {"Paths", Options_Paths, POPT_COUNT},
+    {"HUD", Options_Hud, HOPT_COUNT},
+    {"Sounds", Options_Sounds, SOPT_COUNT},
+    {"Ledge", Options_Ledge, LOPT_COUNT},
+    {"Jump", Options_Jump, JOPT_COUNT},
+    {"Camera", Options_Camera, CAMOPT_COUNT},
+    {"Speed", Options_Game, GOPT_COUNT},
+};
+
+static PresetFile *preset_file;    // what's on the card, and what gets written to it
+static PresetSlot *preset_builtin; // [PS_COUNT - PS_SAVED]
+static u8 preset_dirty;            // preset_file changed since it was last written
+static u8 preset_was_paused;
+static u8 preset_cam_pending; // a preset changed the camera mode
+static u8 view_pending;       // ... or its view
+
+static int Preset_Kept(EventOption *o)
+{
+    if (o == &Options_Ledge[LOPT_PICK] || o == &Options_Game[GOPT_FRAME_ADV])
+        return 0;
+    return o->kind == OPTKIND_STRING || o->kind == OPTKIND_INT || o->kind == OPTKIND_TOGGLE;
+}
+
+static u32 Preset_Hash(u32 h, const char *t)
+{
+    for (; *t; t++)
+        h = (h ^ (u8)*t) * 16777619u;
+    return h;
+}
+
+static u32 Preset_Key(const char *tag, EventOption *o)
+{
+    return Preset_Hash(Preset_Hash(2166136261u, tag) * 16777619u, o->name);
+}
+
+// The key of an option from any of the menus above, 0 if it's in none.
+static u32 Preset_KeyOf(EventOption *o)
+{
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        if (o >= preset_menus[m].opts && o < preset_menus[m].opts + preset_menus[m].num)
+            return Preset_Key(preset_menus[m].tag, o);
+    return 0;
+}
+
+static PresetSlot *Preset_Slot(int i)
+{
+    return i < PS_SAVED ? &preset_file->slot[i] : &preset_builtin[i - PS_SAVED];
+}
+
+static void Preset_Capture(PresetSlot *s)
+{
+    s->num = 0;
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        for (int i = 0; i < preset_menus[m].num; i++)
+        {
+            EventOption *o = &preset_menus[m].opts[i];
+            if (!Preset_Kept(o) || s->num >= PRESET_OPTS)
+                continue;
+            PresetOpt *p = &s->opt[s->num++];
+            p->key = Preset_Key(preset_menus[m].tag, o);
+            p->val = o->val;
+            p->pad = 0;
+        }
+    s->used = 1;
+}
+
+static PresetOpt *Preset_Find(PresetSlot *s, u32 key)
+{
+    for (int i = 0; i < s->num && i < PRESET_OPTS; i++)
+        if (s->opt[i].key == key)
+            return &s->opt[i];
+    return 0;
+}
+
+// What the preset sets an option to: its own value when the preset doesn't
+// have it.
+static int Preset_Value(PresetSlot *s, EventOption *o)
+{
+    PresetOpt *p = Preset_Find(s, Preset_KeyOf(o));
+    return p ? p->val : o->val;
+}
+
+static int Preset_Fits(EventOption *o, int v)
+{
+    if (o->kind == OPTKIND_TOGGLE)
+        return v == 0 || v == 1;
+    return v >= o->value_min && v - o->value_min < o->value_num;
+}
+
+static void Preset_Apply(PresetSlot *s)
+{
+    if (!s->used)
+        return;
+    int cam = Options_Camera[CAMOPT_MODE].val, view = Options_Camera[CAMOPT_VIEW].val, start = Options_Ledge[LOPT_START].val;
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        for (int i = 0; i < preset_menus[m].num; i++)
+        {
+            EventOption *o = &preset_menus[m].opts[i];
+            if (!Preset_Kept(o))
+                continue;
+            PresetOpt *p = Preset_Find(s, Preset_Key(preset_menus[m].tag, o));
+            if (p && Preset_Fits(o, p->val))
+                o->val = p->val;
+        }
+    // the few settings that act when they change; the rest are read as they're
+    // used. The camera waits for the next frame: this can run at start, before
+    // the match's camera is ready.
+    if (Options_Camera[CAMOPT_MODE].val != cam)
+        preset_cam_pending = 1;
+    if (Options_Camera[CAMOPT_VIEW].val != view && Options_Camera[CAMOPT_VIEW].val)
+        view_pending = 1;
+    if (Options_Ledge[LOPT_START].val != start)
+        Event_ChangeLedgeStart(0, Options_Ledge[LOPT_START].val);
+    Event_ChangeRoutes(0, 0);
+}
+
+static int Preset_Same(PresetSlot *a, PresetSlot *b)
+{
+    if (a->used != b->used || a->num != b->num)
+        return 0;
+    for (int i = 0; i < a->num && i < PRESET_OPTS; i++)
+        if (a->opt[i].key != b->opt[i].key || a->opt[i].val != b->opt[i].val)
+            return 0;
+    return 1;
+}
+
+// The built-in presets, as changes to the defaults.
+typedef struct PresetSet
+{
+    EventOption *o;
+    s16 val;
+} PresetSet;
+
+// The AI cue and the corner strip, nothing else on screen
+static const PresetSet preset_minimal[] = {
+    {&Options_Cues[COPT_NIL], 0},
+    {&Options_Cues[COPT_AI], 1},
+    {&Options_Cues[COPT_WL], 0},
+    {&Options_Cues[COPT_GLOW], 0},
+    {&Options_Timers[TOPT_NEAR], NEAR_OFF},
+    {&Options_Timers[TOPT_STRIP], STRIP_CELLS},
+    {&Options_Timers[TOPT_SPOT], 0},
+    {&Options_Timers[TOPT_WL], WLT_OFF},
+    {&Options_Timers[TOPT_WD], WDT_OFF},
+    {&Options_Paths[POPT_PATH], 0},
+    {&Options_Paths[POPT_BODY], 0},
+    {&Options_Paths[POPT_TICKS], 2},
+    {&Options_Paths[POPT_SLIDEOFF], 0},
+    {&Options_Paths[POPT_PREVIEW], PREVIEW_OFF},
+    {&Options_Hud[HOPT_STICK], 3},
+    {&Options_Hud[HOPT_PANEL], 0},
+};
+
+// Every cue, path, timer and sound
+static const PresetSet preset_everything[] = {
+    {&Options_Cues[COPT_NIL], 1},
+    {&Options_Cues[COPT_AI], 1},
+    {&Options_Cues[COPT_WL], 2},
+    {&Options_Cues[COPT_FLASH], 1},
+    {&Options_Cues[COPT_GLOW], 1},
+    {&Options_Timers[TOPT_NEAR], NEAR_BUBBLE},
+    {&Options_Timers[TOPT_STRIP], STRIP_CELLS},
+    {&Options_Timers[TOPT_SPOT], 1},
+    {&Options_Timers[TOPT_WL], WLT_TICKS},
+    {&Options_Timers[TOPT_WD], WDT_CELLS},
+    {&Options_Paths[POPT_PATH], 1},
+    {&Options_Paths[POPT_BODY], 1},
+    {&Options_Paths[POPT_ROUTE], 1},
+    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Paths[POPT_TICKS], 1},
+    {&Options_Paths[POPT_SLIDEOFF], 1},
+    {&Options_Paths[POPT_PREVIEW], 0},
+    {&Options_Hud[HOPT_STICK], 0},
+    {&Options_Hud[HOPT_PANEL], 1},
+    {&Options_Sounds[SOPT_SKIP], 1},
+    {&Options_Sounds[SOPT_FF], 1},
+    {&Options_Sounds[SOPT_JUMP], 1},
+    {&Options_Sounds[SOPT_AERIAL], 1},
+};
+
+// Ledge routes from the ledge, both kinds, reset to the same ledge each time
+static const PresetSet preset_ledge[] = {
+    {&Options_Ledge[LOPT_ROUTES], 1},
+    {&Options_Ledge[LOPT_KIND], ROUTES_BOTH},
+    {&Options_Ledge[LOPT_START], 0},
+    {&Options_Ledge[LOPT_RESET], 1},
+    {&Options_Paths[POPT_ROUTE], 1},
+    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Cues[COPT_NIL], 1},
+    {&Options_Cues[COPT_AI], 1},
+};
+
+static void Preset_Build(PresetSlot *s, PresetSlot *base, const PresetSet *set, int n)
+{
+    memcpy(s, base, sizeof(*s));
+    for (int i = 0; i < n; i++)
+    {
+        PresetOpt *p = Preset_Find(s, Preset_KeyOf(set[i].o));
+        if (p)
+            p->val = set[i].val;
+    }
+}
+
+// The chosen preset's settings in three short lines, for the menu.
+static void Preset_Describe(int which)
+{
+    PresetSlot *s = Preset_Slot(which);
+    if (!s->used)
+    {
+        sprintf(preset_desc[0], "Empty: Save to Preset keeps the current");
+        sprintf(preset_desc[1], "settings here.");
+        preset_desc[2][0] = 0;
+        return;
+    }
+    char *t = preset_desc[0];
+    int nil = Preset_Value(s, &Options_Cues[COPT_NIL]), ai = Preset_Value(s, &Options_Cues[COPT_AI]);
+    int wl = Preset_Value(s, &Options_Cues[COPT_WL]);
+    int n = 0;
+    t += sprintf(t, "Cues:");
+    if (ai)
+        t += sprintf(t, "%s AI", n++ ? "," : "");
+    if (nil)
+        t += sprintf(t, "%s NIL", n++ ? "," : "");
+    if (wl)
+        t += sprintf(t, "%s waveland", n++ ? "," : "");
+    if (!n)
+        sprintf(t, " none");
+
+    int near = Preset_Value(s, &Options_Timers[TOPT_NEAR]), strip = Preset_Value(s, &Options_Timers[TOPT_STRIP]);
+    t = preset_desc[1];
+    t += sprintf(t, "Timers: %s strip", strip ? strip_names[strip] : "no");
+    if (near != NEAR_OFF)
+        sprintf(t, ", %s by Falcon", near_names[near]);
+
+    int path = Preset_Value(s, &Options_Paths[POPT_PATH]), body = Preset_Value(s, &Options_Paths[POPT_BODY]);
+    int route = Preset_Value(s, &Options_Paths[POPT_ROUTE]), pad = Preset_Value(s, &Options_Hud[HOPT_STICK]);
+    t = preset_desc[2];
+    n = 0;
+    t += sprintf(t, "Paths:");
+    if (path)
+        t += sprintf(t, "%s landing", n++ ? "," : "");
+    if (body)
+        t += sprintf(t, "%s body", n++ ? "," : "");
+    if (route)
+        t += sprintf(t, "%s ledge", n++ ? "," : "");
+    if (!n)
+        t += sprintf(t, " none");
+    sprintf(t, ". Pad %s", pad == 3 ? "off" : "on");
+}
+
+static void Card_Update(void);
+static void Card_Load(void);
+
+void Event_ChangePreset(GOBJ *menu, int value)
+{
+    Preset_Describe(value);
+}
+
+void Event_ChangePresetStart(GOBJ *menu, int value)
+{
+    preset_file->start = value;
+    preset_dirty = 1;
+}
+
+void Event_PresetLoad(GOBJ *menu)
+{
+    int which = Options_Presets[PROPT_PICK].val;
+    PresetSlot *s = Preset_Slot(which);
+    if (!s->used)
+    {
+        SFX_PlayCommon(3);
+        return;
+    }
+    Preset_Apply(s);
+    OSReport("LLPRESET load %s\n", preset_names[which]);
+    SFX_PlayCommon(1);
+}
+
+void Event_PresetSave(GOBJ *menu)
+{
+    int which = Options_Presets[PROPT_PICK].val;
+    if (which >= PS_SAVED)
+    {
+        SFX_PlayCommon(3); // built in
+        OSReport("LLPRESET save refused: %s is built in\n", preset_names[which]);
+        return;
+    }
+    Preset_Capture(&preset_file->slot[which]);
+    preset_dirty = 1;
+    OSReport("LLPRESET save %s, %d settings\n", preset_names[which], preset_file->slot[which].num);
+    Preset_Describe(which);
+    SFX_PlayCommon(1);
+}
+
+// At start: the defaults and the built-in presets are made from the menus as
+// the event sets them, then the card is read.
+static void Presets_Init(void)
+{
+    preset_file = calloc(sizeof(PresetFile));
+    preset_builtin = calloc(sizeof(PresetSlot) * (PS_COUNT - PS_SAVED));
+    preset_file->magic = PRESET_MAGIC;
+    preset_file->version = PRESET_VERSION;
+    preset_file->start = PS_USER;
+    PresetSlot *def = &preset_builtin[PS_DEFAULTS - PS_SAVED];
+    Preset_Capture(def);
+    Preset_Build(&preset_builtin[PS_MINIMAL - PS_SAVED], def, preset_minimal, countof(preset_minimal));
+    Preset_Build(&preset_builtin[PS_EVERYTHING - PS_SAVED], def, preset_everything, countof(preset_everything));
+    Preset_Build(&preset_builtin[PS_LEDGE - PS_SAVED], def, preset_ledge, countof(preset_ledge));
+    Options_Presets[PROPT_START].val = PS_USER;
+    Labels_Refresh();
+    Preset_Describe(Options_Presets[PROPT_PICK].val);
+    Card_Load();
+}
+
+// The card's file was read (or there is none): start with the preset it
+// asks for.
+static void Presets_Loaded(int ok)
+{
+    if (!ok || preset_file->magic != PRESET_MAGIC || preset_file->version != PRESET_VERSION)
+    {
+        memset(preset_file, 0, sizeof(*preset_file));
+        preset_file->magic = PRESET_MAGIC;
+        preset_file->version = PRESET_VERSION;
+        preset_file->start = PS_USER;
+    }
+    // version 2's views, from before views were per stage, go to this one
+    for (int i = 0; i < 4; i++)
+    {
+        OldView *o = &preset_file->old_view[i];
+        CamView *w = o->used ? View_New(i + 1) : 0;
+        if (w)
+        {
+            w->eye = o->eye;
+            w->interest = o->interest;
+            w->fov = o->fov;
+            w->used = 1;
+            preset_dirty = 1;
+        }
+        memset(o, 0, sizeof(*o));
+    }
+    for (int i = 0; i < PS_SAVED; i++)
+        preset_file->preset_name[i][NAME_LEN] = 0;
+    for (int i = 0; i < VIEW_POOL; i++)
+        preset_file->view[i].name[NAME_LEN] = 0;
+    for (int i = 0; i < 4; i++)
+    {
+        float k = preset_file->skill[i];
+        skill[i] = k >= 0.f && k <= 1.f ? k : 0.f; // (a NaN fails both)
+    }
+    Labels_Refresh();
+    int start = preset_file->start < PS_COUNT ? preset_file->start : PS_USER;
+    Options_Presets[PROPT_START].val = start;
+    Preset_Apply(Preset_Slot(start));
+    OSReport("LLPRESET start %s (%s), card file %s\n", preset_names[start], Preset_Slot(start)->used ? "applied" : "empty", ok ? "read" : "not read");
+    Preset_Describe(Options_Presets[PROPT_PICK].val);
+}
+
+///////////////////////
+/// Memory card     ///
+///////////////////////
+
+// Landing Lab's own file on the memory card in slot A: one block with a
+// comment for the card screen and the presets. It's read once at start (the
+// event waits for it, as the lab does), written in the background one step
+// a frame whenever a preset changes, and once more, waiting, on Exit.
+#define CARD_SLOT 0
+#define CARD_FILE "TMCE_LandingLab"
+#define CARD_SIZE 8192 // one block
+#define CARD_TIMEOUT_US 3000000
+
+typedef struct CardImage
+{
+    char comment[CARD_COMMENT_SIZE]; // two lines of 32, at the file's start
+    u32 sum;
+    u32 size;
+    PresetFile file;
+} CardImage;
+typedef char card_image_fits[sizeof(CardImage) <= 8192 ? 1 : -1]; // one block
+#define CARD_READ_LEN ((sizeof(CardImage) + CARD_READ_SIZE - 1) & ~(CARD_READ_SIZE - 1))
+
+enum card_step
+{
+    CARD_IDLE,
+    CARD_MOUNT,
+    CARD_CHECK,
+    CARD_CREATE,
+    CARD_STATUS,
+    CARD_WRITE,
+};
+
+static u8 *card_buf; // CARD_SIZE, 32-byte aligned for the card's DMA
+// frames left logging a probe line after a write, in test runs: in Dolphin,
+// OSReport lines (EXI UART, which shares EXI channel 0 with slot A) have gone
+// missing for a while after one
+#define CARD_PROBE 180
+static int card_probe;
+static CARDFileInfo card_fi;
+static CARDStat card_stat;
+static volatile s32 card_result;
+static volatile int card_done;
+static int card_step;
+static int card_tick;    // when the step under way started
+static u8 card_mounted;
+static u32 card_gen;     // goes up with every change to preset_file
+static u32 card_gen_saved, card_gen_writing, card_gen_failed;
+
+static void Card_Callback(s32 chan, s32 result)
+{
+    card_result = result;
+    card_done = 1;
+}
+
+static void Card_Say(const char *a, const char *b, const char *c)
+{
+    strcpy(preset_card_desc[0], a);
+    strcpy(preset_card_desc[1], b);
+    strcpy(preset_card_desc[2], c);
+    OSReport("LLCARD %s %s %s\n", a, b, c);
+}
+
+static u32 Card_Sum(const void *data, int n)
+{
+    const u8 *b = data;
+    u32 h = 2166136261u;
+    for (int i = 0; i < n; i++)
+        h = (h ^ b[i]) * 16777619u;
+    return h;
+}
+
+// Waits for the step under way: its result, or BUSY if the card never answered.
+static s32 Card_Wait(void)
+{
+    int t0 = OSGetTick();
+    while (!card_done)
+        if (OSTicksToMicroseconds(OSGetTick() - t0) > CARD_TIMEOUT_US)
+            return CARD_RESULT_BUSY;
+    card_done = 0;
+    return card_result;
+}
+
+static void Card_Error(s32 r)
+{
+    char line[52];
+    sprintf(line, "or written (error %d), so settings last", (int)r);
+    Card_Say("The memory card in slot A couldn't be read", line, "until you leave the event.");
+}
+
+// At start, waiting: the file's presets into preset_file, if it's there.
+static void Card_Load(void)
+{
+    if (!card_buf)
+    {
+        void *raw = calloc(CARD_SIZE + 32);
+        card_buf = (u8 *)(((u32)raw + 31) & ~31);
+        Memcard_InitWorkArea();
+    }
+    int ok = 0;
+    s32 mem, sec;
+    s32 r = CARDProbeEx(CARD_SLOT, &mem, &sec);
+    if (r != CARD_RESULT_READY)
+    {
+        Card_Say("No memory card in slot A: settings last until", "you leave the event.", "");
+        Presets_Loaded(0);
+        return;
+    }
+    card_done = 0;
+    r = CARDMountAsync(CARD_SLOT, stc_memcard_work->work_area, 0, Card_Callback);
+    if (r >= 0)
+        r = Card_Wait();
+    if (r == CARD_RESULT_READY || r == CARD_RESULT_BROKEN)
+    {
+        card_done = 0;
+        r = CARDCheckAsync(CARD_SLOT, Card_Callback);
+        if (r >= 0)
+            r = Card_Wait();
+        if (r == CARD_RESULT_READY)
+        {
+            r = CARDOpen(CARD_SLOT, CARD_FILE, &card_fi);
+            if (r == CARD_RESULT_READY)
+            {
+                DCInvalidateRange(card_buf, CARD_READ_LEN);
+                r = CARDRead(&card_fi, card_buf, CARD_READ_LEN, 0);
+                CARDClose(&card_fi);
+                CardImage *img = (CardImage *)card_buf;
+                // older files are this one cut short: what they have
+                // is kept
+                u32 size = img->size;
+                if (r == CARD_RESULT_READY && size >= __builtin_offsetof(PresetFile, old_view) && size <= sizeof(PresetFile) &&
+                    img->sum == Card_Sum(&img->file, size))
+                {
+                    memset(preset_file, 0, sizeof(PresetFile));
+                    memcpy(preset_file, &img->file, size);
+                    if (preset_file->version < PRESET_VERSION)
+                        preset_file->version = PRESET_VERSION;
+                    ok = 1;
+                    Card_Say("Kept in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
+                }
+                else
+                    Card_Say("Landing Lab's file on the card in slot A", "couldn't be read, so it starts over. Changes", "save when the menu closes.");
+            }
+            else if (r == CARD_RESULT_NOFILE)
+                Card_Say("Nothing saved on the card in slot A yet.", "Settings save to a file of 1 block there", "when the menu closes.");
+            else
+                Card_Error(r);
+        }
+        else
+            Card_Error(r);
+        CARDUnmount(CARD_SLOT);
+    }
+    else
+        Card_Error(r);
+    card_gen = card_gen_saved = card_gen_failed = 0;
+    Presets_Loaded(ok);
+}
+
+static void Card_Stop(void)
+{
+    if (card_mounted)
+        CARDUnmount(CARD_SLOT);
+    card_mounted = 0;
+    card_step = CARD_IDLE;
+}
+
+static void Card_Fail(s32 r)
+{
+    Card_Stop();
+    card_gen_failed = card_gen_writing;
+    if (r == CARD_RESULT_NOCARD || r == CARD_RESULT_WRONGDEVICE)
+        Card_Say("No memory card in slot A: settings last until", "you leave the event.", "");
+    else if (r == CARD_RESULT_INSSPACE || r == CARD_RESULT_NOENT)
+        Card_Say("The card in slot A is full: Landing Lab", "needs 1 free block and 1 free file, so", "settings last until you leave the event.");
+    else
+        Card_Error(r);
+}
+
+static void Card_Write(void)
+{
+    card_done = 0;
+    s32 r = CARDWriteAsync(&card_fi, card_buf, CARD_SIZE, 0, Card_Callback);
+    if (r < 0)
+    {
+        CARDClose(&card_fi);
+        Card_Fail(r);
+        return;
+    }
+    card_step = CARD_WRITE;
+}
+
+// Starts writing preset_file as it is now.
+static void Card_Begin(void)
+{
+    CardImage *img = (CardImage *)card_buf;
+    memset(card_buf, 0, CARD_SIZE);
+    strcpy(img->comment, "TM-CE Landing Lab");
+    strcpy(img->comment + 32, "Settings presets");
+    img->size = sizeof(PresetFile);
+    memcpy(&img->file, preset_file, sizeof(PresetFile));
+    img->sum = Card_Sum(&img->file, sizeof(PresetFile));
+    DCFlushRange(card_buf, CARD_SIZE);
+    card_gen_writing = card_gen;
+    card_tick = OSGetTick();
+
+    s32 mem, sec;
+    s32 r = CARDProbeEx(CARD_SLOT, &mem, &sec);
+    if (r == CARD_RESULT_READY)
+    {
+        card_done = 0;
+        r = CARDMountAsync(CARD_SLOT, stc_memcard_work->work_area, 0, Card_Callback);
+    }
+    if (r < 0)
+    {
+        Card_Fail(r);
+        return;
+    }
+    card_step = CARD_MOUNT;
+}
+
+// The next step, once the one under way is done.
+static void Card_Step(void)
+{
+    if (card_step == CARD_IDLE)
+        return;
+    if (!card_done)
+    {
+        if (OSTicksToMicroseconds(OSGetTick() - card_tick) > CARD_TIMEOUT_US)
+        {
+            if (card_step == CARD_WRITE || card_step == CARD_STATUS)
+                CARDClose(&card_fi);
+            Card_Fail(CARD_RESULT_BUSY);
+        }
+        return;
+    }
+    s32 r = card_result;
+    card_done = 0;
+    card_tick = OSGetTick();
+    switch (card_step)
+    {
+    case CARD_MOUNT:
+        if (r != CARD_RESULT_READY && r != CARD_RESULT_BROKEN)
+        {
+            Card_Fail(r);
+            return;
+        }
+        card_mounted = 1;
+        r = CARDCheckAsync(CARD_SLOT, Card_Callback);
+        if (r < 0)
+            Card_Fail(r);
+        else
+            card_step = CARD_CHECK;
+        return;
+    case CARD_CHECK:
+        if (r != CARD_RESULT_READY)
+        {
+            Card_Fail(r);
+            return;
+        }
+        r = CARDOpen(CARD_SLOT, CARD_FILE, &card_fi);
+        if (r == CARD_RESULT_READY)
+            Card_Write();
+        else if (r == CARD_RESULT_NOFILE)
+        {
+            r = CARDCreateAsync(CARD_SLOT, CARD_FILE, CARD_SIZE, &card_fi, Card_Callback);
+            if (r < 0)
+                Card_Fail(r);
+            else
+                card_step = CARD_CREATE;
+        }
+        else
+            Card_Fail(r);
+        return;
+    case CARD_CREATE:
+        if (r != CARD_RESULT_READY)
+        {
+            Card_Fail(r);
+            return;
+        }
+        // the two comment lines at the file's start show on the card screen
+        if (CARDGetStatus(CARD_SLOT, card_fi.fileNo, &card_stat) == CARD_RESULT_READY)
+        {
+            card_stat.commentAddr = 0;
+            card_stat.iconAddr = 0xFFFFFFFF;
+            card_stat.bannerFormat = 0;
+            card_stat.iconFormat = 0;
+            card_stat.iconSpeed = 0;
+            if (CARDSetStatusAsync(CARD_SLOT, card_fi.fileNo, &card_stat, Card_Callback) >= 0)
+            {
+                card_step = CARD_STATUS;
+                return;
+            }
+        }
+        Card_Write();
+        return;
+    case CARD_STATUS:
+        Card_Write(); // without the comment if it didn't take
+        return;
+    case CARD_WRITE:
+        CARDClose(&card_fi);
+        if (r != CARD_RESULT_READY)
+        {
+            Card_Fail(r);
+            return;
+        }
+        Card_Stop();
+        card_gen_saved = card_gen_writing;
+        card_probe = CARD_PROBE;
+        Card_Say("Saved in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
+        return;
+    }
+}
+
+static int Card_Wanted(void)
+{
+    return card_gen != card_gen_saved && card_gen != card_gen_failed;
+}
+
+// Each frame: start a write when the presets changed, and move the one
+// under way along.
+static void Card_Update(void)
+{
+    if (preset_dirty)
+    {
+        preset_dirty = 0;
+        card_gen++;
+    }
+    if (card_step == CARD_IDLE && Card_Wanted())
+        Card_Begin();
+    Card_Step();
+}
+
+// Leaving the event: finish what's under way and write what's left, waiting.
+static void Card_Flush(void)
+{
+    for (int pass = 0; pass < 2; pass++)
+    {
+        if (card_step == CARD_IDLE)
+        {
+            Card_Update();
+            if (card_step == CARD_IDLE)
+                break;
+        }
+        while (card_step != CARD_IDLE)
+            Card_Step();
+    }
+}
+
+// The settings as they are now into User Custom, if they changed.
+static void Presets_KeepUser(void)
+{
+    PresetSlot now;
+    Preset_Capture(&now);
+    if (!Preset_Same(&now, &preset_file->slot[PS_USER]))
+    {
+        memcpy(&preset_file->slot[PS_USER], &now, sizeof(now));
+        preset_dirty = 1;
+    }
+}
+
+// Camera views: where the camera's eye is, what it looks at, and its field
+// of view. A view is held in Advanced mode, the game's develop camera, which
+// puts the camera each frame where its own state says (decomp
+// CameraDebugMode at 0x80453004); a view is written there.
+typedef struct DevCam
+{
+    int last_mode, ply_slot;
+    Vec3 follow_int_offset, follow_eye_offset, follow_eye_pos, follow_int_pos;
+    float follow_fov;
+    Vec3 free_int_pos, free_eye_pos;
+    float free_fov;
+} DevCam;
+#define dev_cam ((DevCam *)0x80453004)
+
+// A view saved on this stage in slot v (1 to VIEW_SLOTS), or 0.
+static CamView *View_Find(int v)
+{
+    int stage = Stage_GetExternalID();
+    for (int i = 0; i < VIEW_POOL; i++)
+    {
+        CamView *w = &preset_file->view[i];
+        if (w->used && w->stage == stage && w->slot == v)
+            return w;
+    }
+    return 0;
+}
+
+// Slot v on this stage to save into: the one there, or a free one (0 when
+// the file has no room left).
+static CamView *View_New(int v)
+{
+    CamView *w = View_Find(v);
+    if (w)
+        return w;
+    for (int i = 0; i < VIEW_POOL; i++)
+    {
+        w = &preset_file->view[i];
+        if (!w->used)
+        {
+            memset(w, 0, sizeof(*w));
+            w->stage = Stage_GetExternalID();
+            w->slot = v;
+            return w;
+        }
+    }
+    return 0;
+}
+
+// The menus' names for the views on this stage and the presets.
+static void Labels_Refresh(void)
+{
+    for (int i = 1; i < PS_SAVED; i++)
+    {
+        if (preset_file->preset_name[i][0])
+            strcpy(preset_label[i], preset_file->preset_name[i]);
+        else
+            sprintf(preset_label[i], "Preset %d", i);
+    }
+    for (int v = 1; v <= VIEW_SLOTS; v++)
+    {
+        CamView *w = View_Find(v);
+        if (w && w->name[0])
+            strcpy(view_label[v - 1], w->name);
+        else
+            sprintf(view_label[v - 1], w ? "View %d" : "View %d (empty)", v);
+    }
+}
+
+// The match camera's COBJ: Match_GetCObj gives its GOBJ, despite the name.
+// It's the one the stage is drawn with in every camera mode; MexTK's
+// stc_matchcam_cobj is a copy the game only keeps up in the normal and fixed
+// modes, so it goes stale in Advanced (the develop camera).
+static COBJ *View_CObj(void)
+{
+    GOBJ *g = (GOBJ *)Match_GetCObj();
+    return g ? g->hsd_object : *stc_matchcam_cobj;
+}
+
+static void View_Apply(int v)
+{
+    CamView *w = View_Find(v);
+    if (!w)
+        return;
+    Options_Camera[CAMOPT_MODE].val = CAM_ADVANCED;
+    Event_ChangeCamera(0, CAM_ADVANCED);
+    dev_cam->free_eye_pos = w->eye;
+    dev_cam->free_int_pos = w->interest;
+    dev_cam->free_fov = w->fov;
+}
+
+void Event_ChangeView(GOBJ *menu, int value)
+{
+    if (value > 0 && !View_Find(value))
+    {
+        SFX_PlayCommon(3); // nothing saved there yet
+        return;
+    }
+    View_Apply(value);
+}
+
+void Event_SaveView(GOBJ *menu)
+{
+    int v = Options_Camera[CAMOPT_VIEW].val;
+    CamView *w = v > 0 ? View_New(v) : 0;
+    COBJ *cobj = View_CObj();
+    if (!w || !cobj)
+    {
+        SFX_PlayCommon(3); // no view picked, or every view in the file is used
+        return;
+    }
+    COBJ_GetEyePosition(cobj, &w->eye);
+    COBJ_GetInterest(cobj, &w->interest);
+    w->fov = cobj->projection_param.perspective.fov;
+    w->used = 1;
+    preset_dirty = 1;
+    Labels_Refresh();
+    OSReport("LLVIEW saved %d on stage %d: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f\n", v, w->stage, w->eye.X, w->eye.Y,
+             w->eye.Z, w->interest.X, w->interest.Y, w->interest.Z, w->fov);
+    View_Apply(v);
+    SFX_PlayCommon(1);
+}
+
+///////////////////////
+/// Naming          ///
+///////////////////////
+
+// Views and presets are named on a letter grid drawn over the paused game,
+// in place of the menu: the stick or D-pad picks a key, A types it, B
+// deletes (or leaves, with nothing left to delete), Y types a space, X
+// switches case and Start keeps the name.
+enum { NAME_VIEW, NAME_PRESET };
+#define NAMER_COLS 10
+#define NAMER_KEYS 4 // the wide keys on the last row
+#define NAMER_ROWS 5
+#define NAMER_SUBTEXTS (4 * NAMER_COLS + NAMER_KEYS)
+static const char *namer_rows[2][4] = {
+    {"ABCDEFGHIJ", "KLMNOPQRST", "UVWXYZ-.'!", "1234567890"},
+    {"abcdefghij", "klmnopqrst", "uvwxyz-.'!", "1234567890"},
+};
+static struct
+{
+    u8 on, what, slot, lower, dirty, leave_menu;
+    int cx, cy, len;
+    char buf[NAME_LEN + 1];
+    char title[48];
+    Text *text;
+} namer;
+static int namer_port; // the controller that opened the menu
+
+static const char *Stage_Name(void)
+{
+    switch (Stage_GetExternalID())
+    {
+    case GRKINDEXT_BATTLE:
+        return "Battlefield";
+    case GRKINDEXT_FD:
+        return "Final Destination";
+    case GRKINDEXT_OLDPU:
+        return "Dream Land";
+    case GRKINDEXT_STORY:
+        return "Yoshi's Story";
+    case GRKINDEXT_IZUMI:
+        return "Fountain of Dreams";
+    case GRKINDEXT_PSTAD:
+        return "Pokemon Stadium";
+    }
+    return "this stage";
+}
+
+// The grid is drawn on the HUD, which the game doesn't draw while paused:
+// the pause menu closes for it, and the game stays frozen the way Frame
+// Advance freezes it (Advance_CheckPause) until it's done, when the menu
+// opens again.
+static void Namer_Open(int what, int slot, const char *name)
+{
+    MenuData *md = event_vars->menu_gobj->userdata;
+    namer_port = md->controller_index;
+    HUDCamData *hud = event_vars->hudcam_gobj->userdata;
+    memset(&namer, 0, sizeof(namer));
+    namer.what = what;
+    namer.slot = slot;
+    Name_Copy(namer.buf, name);
+    namer.len = strlen(namer.buf);
+    namer.lower = namer.len > 0;
+    if (what == NAME_VIEW)
+        sprintf(namer.title, "Name view %d on %s", slot, Stage_Name());
+    else
+        sprintf(namer.title, "Name preset %d", slot);
+    Text *t = Text_CreateText(2, hud->canvas);
+    t->kerning = 1;
+    t->align = 1;
+    t->use_aspect = 0;
+    t->is_depth_compare = 0;
+    t->viewport_scale.X = 0.1f;
+    t->viewport_scale.Y = 0.1f;
+    for (int i = 0; i < NAMER_SUBTEXTS; i++)
+        Text_AddSubtext(t, 0, 0, "");
+    namer.text = t;
+    namer.dirty = 1;
+    namer.on = 1;
+    namer.leave_menu = 1; // next frame: not from inside the menu's own call
+    SFX_PlayCommon(1);
+}
+
+// reopen: back to the menu (Start opens it by itself)
+static void Namer_Close(int keep, int reopen)
+{
+    MenuData *md = event_vars->menu_gobj->userdata;
+    if (keep)
+    {
+        while (namer.len > 0 && namer.buf[namer.len - 1] == ' ')
+            namer.buf[--namer.len] = 0;
+        char *to = 0;
+        if (namer.what == NAME_VIEW)
+        {
+            CamView *w = View_Find(namer.slot);
+            to = w ? w->name : 0;
+        }
+        else
+            to = preset_file->preset_name[namer.slot];
+        if (to)
+        {
+            memset(to, 0, NAME_LEN + 4);
+            strcpy(to, namer.buf);
+            preset_dirty = 1;
+            Labels_Refresh();
+            OSReport("LLNAME %s %d \"%s\"\n", namer.what == NAME_VIEW ? "view" : "preset", namer.slot, namer.buf);
+        }
+    }
+    if (namer.text)
+        Text_Destroy(namer.text);
+    namer.text = 0;
+    namer.on = 0;
+    if (reopen && Pause_CheckStatus(1) != 2)
+    {
+        event_vars->Menu_Enter(event_vars->menu_gobj);
+        md->controller_index = namer_port;
+    }
+    SFX_PlayCommon(keep ? 1 : 0);
+}
+
+static void Namer_Type(char c)
+{
+    if (namer.len >= NAME_LEN)
+    {
+        SFX_PlayCommon(3);
+        return;
+    }
+    namer.buf[namer.len++] = c;
+    namer.buf[namer.len] = 0;
+    // a capital to start with, then small letters, as names are written
+    if (namer.len == 1 && c >= 'A' && c <= 'Z')
+        namer.lower = 1;
+    SFX_PlayCommon(1);
+}
+
+// Each frame while it's up, from Event_Update.
+static void Namer_Think(void)
+{
+    HSD_Pad *pad = PadGetMaster(namer_port);
+    int rep = pad->repeat, down = pad->down;
+    int cols = namer.cy == NAMER_ROWS - 1 ? NAMER_KEYS : NAMER_COLS;
+    int prev_cx = namer.cx, prev_cy = namer.cy;
+    if (rep & (HSD_BUTTON_LEFT | HSD_BUTTON_DPAD_LEFT))
+        namer.cx = (namer.cx + cols - 1) % cols;
+    else if (rep & (HSD_BUTTON_RIGHT | HSD_BUTTON_DPAD_RIGHT))
+        namer.cx = (namer.cx + 1) % cols;
+    else if (rep & (HSD_BUTTON_UP | HSD_BUTTON_DPAD_UP | HSD_BUTTON_DOWN | HSD_BUTTON_DPAD_DOWN))
+    {
+        int dy = rep & (HSD_BUTTON_UP | HSD_BUTTON_DPAD_UP) ? NAMER_ROWS - 1 : 1;
+        int from_keys = namer.cy == NAMER_ROWS - 1;
+        namer.cy = (namer.cy + dy) % NAMER_ROWS;
+        int to_keys = namer.cy == NAMER_ROWS - 1;
+        // the wide keys sit under the columns they span
+        if (to_keys && !from_keys)
+            namer.cx = namer.cx * NAMER_KEYS / NAMER_COLS;
+        else if (from_keys && !to_keys)
+            namer.cx = namer.cx * NAMER_COLS / NAMER_KEYS + 1;
+    }
+    if (namer.cx != prev_cx || namer.cy != prev_cy)
+    {
+        namer.dirty = 1;
+        SFX_PlayCommon(2);
+    }
+
+    if (down & HSD_BUTTON_START)
+    {
+        Namer_Close(1, 0);
+        return;
+    }
+    if (down & HSD_BUTTON_A)
+    {
+        if (namer.cy < NAMER_ROWS - 1)
+            Namer_Type(namer_rows[namer.lower][namer.cy][namer.cx]);
+        else if (namer.cx == 0)
+            Namer_Type(' ');
+        else if (namer.cx == 1 && namer.len > 0)
+        {
+            namer.buf[--namer.len] = 0;
+            SFX_PlayCommon(0);
+        }
+        else if (namer.cx == 2)
+            namer.lower ^= 1;
+        else if (namer.cx == 3)
+        {
+            Namer_Close(1, 1);
+            return;
+        }
+        namer.dirty = 1;
+    }
+    else if (down & HSD_BUTTON_B)
+    {
+        if (namer.len == 0)
+        {
+            Namer_Close(0, 1);
+            return;
+        }
+        namer.buf[--namer.len] = 0;
+        SFX_PlayCommon(0);
+    }
+    else if (down & HSD_BUTTON_Y)
+        Namer_Type(' ');
+    else if (down & HSD_BUTTON_X)
+    {
+        namer.lower ^= 1;
+        namer.dirty = 1;
+    }
+}
+
+void Event_NameView(GOBJ *menu)
+{
+    int v = Options_Camera[CAMOPT_VIEW].val;
+    CamView *w = v > 0 ? View_Find(v) : 0;
+    if (!w)
+    {
+        SFX_PlayCommon(3); // pick a saved view first
+        return;
+    }
+    Namer_Open(NAME_VIEW, v, w->name);
+}
+
+void Event_PresetName(GOBJ *menu)
+{
+    int p = Options_Presets[PROPT_PICK].val;
+    if (p < PS_1 || p >= PS_SAVED)
+    {
+        SFX_PlayCommon(3); // User Custom and the built-in ones keep their names
+        return;
+    }
+    Namer_Open(NAME_PRESET, p, preset_file->preset_name[p]);
+}
+
+// Each frame: closing the menu keeps the settings in User Custom, and the
+// card is written when anything it holds changed.
+static void Presets_Update(void)
+{
+    int paused = Pause_CheckStatus(1) == 2;
+    if (preset_was_paused && !paused)
+        Presets_KeepUser();
+    // Auto Fade's hit rates go to the card when the menu opens, not after
+    // every try
+    if (paused && !preset_was_paused)
+    {
+        for (int i = 0; i < 4; i++)
+        {
+            if (preset_file->skill[i] != skill[i])
+                preset_dirty = 1;
+            preset_file->skill[i] = skill[i];
+        }
+    }
+    preset_was_paused = paused;
+    if (preset_cam_pending)
+    {
+        preset_cam_pending = 0;
+        Event_ChangeCamera(0, Options_Camera[CAMOPT_MODE].val);
+    }
+    if (view_pending)
+    {
+        view_pending = 0;
+        View_Apply(Options_Camera[CAMOPT_VIEW].val);
+    }
+    Card_Update();
+}
 
 // live tracking
 static int prev_state_id = -1;
@@ -4568,12 +6593,15 @@ typedef struct Cue
     u8 wd;    // rails: a wavedash out of the jumpsquat
     u8 soft;  // hit: a waveland that wasn't perfect
     u8 fresh; // set from this frame's prediction
+    u8 has_body; // body is set (Cue_Body)
     int left; // frames until the press; 1 = press on the next frame
     int span; // frames the countdown had when it showed up
     int age;  // frames into the window, or into the ending
     int pulse; // frames since the window opened, -1 = none
+    int press; // frames since a press that works (or the hit, with none), -1 = none
     int lag;  // hit: the landing lag the timer burns over
     Vec2 spot; // on the floor: where the AI or NIL lands, or the rails' middle
+    Vec2 body; // where the middle of his body is as the press works (the touchdown, for a NIL)
     float x0, x1; // rails: where that floor ends
 } Cue;
 
@@ -4592,6 +6620,95 @@ static void Cue_Log(int kind, const char *what, int a, int b)
     sprintf(buf, "LLCUE %d %s %s %d %d\n", event_vars->game_timer, cue_names[kind], what, a, b);
     OSReport("%s", buf);
 }
+///////////////////////
+/// Rumble          ///
+///////////////////////
+
+// A ramp up to a window on the controller's motor: short buzzes that come
+// closer together, then a steady one, stopping dead as the window opens.
+// While any cue's rumble is on, the game's own rumble is kept off that
+// controller: its player's rumble setting is switched off, so the game
+// queues none, and anything queued already is cleared every frame. A buzz
+// is queued one frame at a time, so the motor can't be left running if the
+// event stops calling this; between buzzes the port's direct setting is a
+// stop, and a hard stop (which brakes the motor) as the window opens.
+typedef struct PadRumble
+{
+    u8 last_status, status, direct_status; // HSD_RumbleData
+    u16 nb_list;
+    void *listdatap;
+} PadRumble;
+#define pad_rumble ((PadRumble *)0x804C22E0) // one per port
+#define MOTOR_HARD_STOP 0 // as HSD reads direct_status
+// Buzz on the frames this many frames before the press (bit n: n frames;
+// 1 is the window): four on, gaps of four, three, two, then on for the last
+// five. The motor needs a few frames to spin up, so shorter pulses barely
+// register (Stephen found the first version, two-frame pulses, too weak).
+#define RUMBLE_RAMP ((0xFu << 24) | (0xFu << 16) | (0xFu << 9) | (0x1Fu << 2))
+#define MOTOR_STOP 1 // a soft stop: the motor coasts between pulses, which reads stronger
+
+static s8 rumble_port = -1; // the port taken over, -1 none
+static u8 rumble_ply;       // its player
+static u8 rumble_was_on;    // and that player's rumble setting before
+static u8 rumble_direct;    // and the port's direct setting
+// HSD's rumble script for one frame on: run (op 1) for 1 frame, then end
+static const u16 rumble_buzz[2] = {(1 << 13) | 1, 0};
+
+static void Rumble_Release(void)
+{
+    if (rumble_port < 0)
+        return;
+    HSD_PadRumbleRemove(rumble_port);
+    pad_rumble[rumble_port].direct_status = rumble_direct;
+    Fighter_GetPlayerblock(rumble_ply)->flags.b0 = rumble_was_on;
+    rumble_port = -1;
+}
+
+// Each frame, frozen or not (frozen: paused, or Frame Advance holding).
+static void Rumble_Update(FighterData *fp, int frozen)
+{
+    static const u8 opt[CUE_NUM] = {RUOPT_AI, RUOPT_WL, RUOPT_NIL};
+    int want = 0;
+    for (int i = 0; i < RUOPT_NOTE; i++)
+        want |= Options_Rumble[i].val;
+    int port = fp->pad_index;
+    if (!want || port > 3)
+    {
+        Rumble_Release();
+        return;
+    }
+    if (rumble_port != port)
+    {
+        Rumble_Release();
+        Playerblock *pb = Fighter_GetPlayerblock(fp->ply);
+        rumble_ply = fp->ply;
+        rumble_was_on = pb->flags.b0;
+        pb->flags.b0 = 0;
+        rumble_direct = pad_rumble[port].direct_status;
+        pad_rumble[port].direct_status = MOTOR_HARD_STOP;
+        rumble_port = port;
+    }
+    HSD_PadRumbleRemove(port);
+    pad_rumble[port].direct_status = MOTOR_STOP;
+
+    // the soonest window of a cue with its rumble on
+    int soon = 99;
+    for (int k = 0; k < CUE_NUM && !frozen; k++)
+    {
+        Cue *c = &cue_live[k];
+        if (!Options_Rumble[opt[k]].val || c->dim || c->held)
+            continue;
+        if (c->phase == PH_WINDOW)
+            soon = 0;
+        else if (c->phase == PH_COUNT && c->left < soon)
+            soon = c->left;
+    }
+    if (soon >= 2 && soon < 32 && ((RUMBLE_RAMP >> soon) & 1))
+        HSD_PadRumbleAdd(port, 0, 1, 0, (void *)rumble_buzz);
+    else if (soon <= 1)
+        pad_rumble[port].direct_status = MOTOR_HARD_STOP; // it stops dead as the window opens
+}
+
 static int galint_now;        // ledge intangibility left once Falcon has let go of the ledge
 
 // last frame's next windows, to tell when one was skipped or missed
@@ -4608,6 +6725,7 @@ static int stat_exact;
 static char text_predict[32] = "-";
 static char text_ai[32] = "-";
 static char text_last[48] = "-";
+static u8 press_note; // text_last says why the last press stayed in the air: the landing keeps it
 static char text_next[64] = "-"; // the panel's first line: what's coming up
 static char text_steps[64];       // ... and a ledge route's inputs under it
 static char text_frame[32]; // in Frame Advance: the state on screen and its frame
@@ -4649,6 +6767,9 @@ static void Log_Attributes(FighterData *fp)
     Log(buf);
     sprintf(buf, "LandingLab common: nair below stick x %.4f y %.4f, uair/dair above %.4f rad\n",
             common_aerial_stick_x, common_aerial_stick_y, common_aerial_angle);
+    Log(buf);
+    sprintf(buf, "LandingLab common: shield drop stick %.4f window %d (raw %x), spotdodge stick %.4f window %d\n",
+            common_drop_stick, common_drop_window, Common_Int(COMMON_DROP_WINDOW), common_spot_stick, common_spot_window);
     Log(buf);
     sprintf(buf, "LandingLab common: fall lean deadzone %.5f rate %.5f, max jumps %d\n",
             common_fall_lean_deadzone, common_fall_lean_rate, fp->attr.max_jumps);
@@ -5109,10 +7230,27 @@ static void Press_CheckMissed(FighterData *fp, int ts)
         if (!(dodge ? Cues_Waveland() : Cues_Ai()))
             return;
         int off = Window_Offset(pred_seg, shown, k, bit);
-        if (off == 0)
+        u8 others = dodge ? 0 : shown[k] & ~bit; // aerials that would have landed on this frame
+        if (others)
+        {
+            // the frame was in the window, for another aerial: say which,
+            // since the stick held in turns A into a fair
+            char *t = text_last;
+            t += sprintf(t, "No AI: %s here, ", tracked_state_names[ts]);
+            int n = 0;
+            for (int a = TS_AIRN; a <= TS_AIRLW && n < 2; a++)
+                if (others & AERIAL_BIT(a))
+                    t += sprintf(t, n++ ? "/%s" : "%s", tracked_state_names[a]);
+            sprintf(t, n > 1 ? " land" : " lands");
+        }
+        else if (off == 0)
             return;
-        sprintf(text_last, "No %s, %df %s", name, off < 0 ? -off : off, off < 0 ? "early" : "late");
+        else if (dodge)
+            sprintf(text_last, "No %s, %df %s", name, off < 0 ? -off : off, off < 0 ? "early" : "late");
+        else
+            sprintf(text_last, "No AI: %s %df %s", tracked_state_names[ts], off < 0 ? -off : off, off < 0 ? "early" : "late");
         last_kind = -1;
+        press_note = 1;
         sprintf(buf, "LandingLab press: %s at %d stayed in the air, %df %s for the window (from %d)\n",
                 tracked_state_names[ts], event_vars->game_timer, off < 0 ? -off : off, off < 0 ? "early" : "late",
                 seg_start_timer);
@@ -5133,6 +7271,7 @@ static void Press_CheckMissed(FighterData *fp, int ts)
         sprintf(text_last, "No AI, predicted");
         last_kind = -1;
     }
+    press_note = 1;
 
     stat_total++;
     Text_Exact();
@@ -5144,13 +7283,15 @@ static void Press_CheckMissed(FighterData *fp, int ts)
 
 static void Cue_Missed(int kind);
 static void Cue_Pressed(int kind);
+static int route_active; // following a ledge route after letting go
+static int jt_active;    // Jump Timing has an anchor for this fall
 
 // Buzz when a window passes without its press, or an aerial or airdodge
 // comes while the countdown runs but doesn't touch down. Called on tracked
 // air frames, after pred_live is updated.
 static void Window_Feedback(FighterData *fp, int ts)
 {
-    int miss = 0;
+    int miss = 0, skip = 0;
     if (Jump_Or_Fall(prev_ts) && Tracked_IsAerial(ts))
     {
         int timed = prev_ai_first && prev_ai_first <= LL_COUNT_FRAMES;
@@ -5175,9 +7316,9 @@ static void Window_Feedback(FighterData *fp, int ts)
         Prediction *p = pred_live;
         int ai_next = Cues_Ai() && p->ai_first == 1 && p->uncertain_from > 1;
         int wl_next = Cues_Waveland() && p->wl_first == 1 && p->uncertain_from > 1;
-        miss = (prev_ai_first == 1 || prev_wl_first == 1) && !ai_next && !wl_next;
+        skip = (prev_ai_first == 1 || prev_wl_first == 1) && !ai_next && !wl_next;
     }
-    if (miss && Options_Sounds[SOPT_WINDOW].val)
+    if ((miss && Options_Sounds[SOPT_WINDOW].val) || (skip && Options_Sounds[SOPT_SKIP].val))
         SFX_PlayCommon(3);
 }
 
@@ -5202,7 +7343,7 @@ static void Window_Forget(void)
 /// Timers          ///
 ///////////////////////
 
-#define LL_GHOST 8 // frames a window's ghost takes to spread out
+#define LL_GHOST 6 // frames a ghost takes to spread out and fade: snappy
 #define LL_BURST 7 // a hit's burst
 #define LL_FADE 10 // a miss or skip folding in
 #define LL_CUT 4   // a countdown the prediction dropped
@@ -5288,6 +7429,8 @@ static void Cue_Open(Cue *c)
     c->pulse = 0;
 }
 
+static void Skill_Add(int kind, int hit);
+
 static void Cue_Finish(int kind, int phase, int dim)
 {
     Cue *c = &cue_live[kind];
@@ -5295,6 +7438,8 @@ static void Cue_Finish(int kind, int phase, int dim)
         return;
     Cue_Log(kind, "end", phase, dim);
     Cue *e = &cue_end[kind];
+    if (phase == PH_FADE && dim == DIM_MISS)
+        Skill_Add(kind, 0);
     *e = *c;
     e->phase = phase;
     e->dim = dim;
@@ -5316,6 +7461,7 @@ static void Cue_Set(int kind, int left, int width, u8 dirs, int wd, float x, flo
         memset(c, 0, sizeof(*c));
         c->span = left;
         c->pulse = -1;
+        c->press = -1;
     }
     // a window's width is fixed before it opens; once open, what's left of
     // it shrinks
@@ -5332,6 +7478,22 @@ static void Cue_Set(int kind, int left, int width, u8 dirs, int wd, float x, flo
     c->wd = wd;
     c->fresh = 1;
     Cue_Place(c, x, y);
+}
+
+// Where the middle of Falcon's body (halfway between his ECB's bottom and
+// top) is on frame k of the prediction p, for the near-Falcon bubble: as he
+// presses (a frame before the first the press works), or, for a NIL, as he
+// touches down. Set with each countdown frame and on the frame the window
+// opens, then kept: the ending copies it, so the bubble doesn't follow him
+// through the window or the hit. A cue Cue_Set left alone (already decided)
+// keeps its own.
+static void Cue_Body(int kind, Prediction *p, int k)
+{
+    Cue *c = &cue_live[kind];
+    if (!c->fresh || (c->phase == PH_WINDOW && c->age > 0) || k < 0 || k > p->num)
+        return;
+    c->body = (Vec2){p->pos[k].X, p->pos[k].Y + (p->bottom[k] + p->top[k]) / 2.f};
+    c->has_body = 1;
 }
 
 // A press too early, or one that doesn't work: the timer still runs to its
@@ -5359,6 +7521,7 @@ static void Cue_Pressed(int kind)
     if (c->phase != PH_WINDOW)
         Cue_Open(c);
     c->held = 1;
+    c->press = 0;
 }
 
 // A hit plays until the burn over the landing lag and its flash are done,
@@ -5382,11 +7545,14 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
     Cue *e = &cue_end[kind];
     Cue_Log(kind, "hit", lag, soft);
     if (c->phase)
+        Skill_Add(kind, 1); // only a timer that was shown counts toward its fade
+    if (c->phase)
         *e = *c;
     else
     {
         memset(e, 0, sizeof(*e));
         e->pulse = -1;
+        e->press = -1;
     }
     c->phase = PH_OFF;
     e->phase = PH_HIT;
@@ -5398,6 +7564,8 @@ static void Cue_Hit(FighterData *fp, int kind, int lag, int soft, u8 dirs)
         e->dirs = dirs;
     if (e->pulse < 0)
         e->pulse = 0;
+    if (e->press < 0)
+        e->press = 0; // no press to pulse on (a NIL): the hit pulses
     Cue_Place(e, fp->phys.pos.X, fp->phys.pos.Y + 1.f);
 }
 
@@ -5447,6 +7615,8 @@ static void Cues_Begin(void)
         {
             if (c->pulse >= 0)
                 c->pulse++;
+            if (c->press >= 0)
+                c->press++;
             if (c->phase == PH_WINDOW)
                 c->age++;
             if (c->held && c->age > 15)
@@ -5462,6 +7632,8 @@ static void Cues_Begin(void)
         {
             if (e->pulse >= 0)
                 e->pulse++;
+            if (e->press >= 0)
+                e->press++;
             e->age++;
             int len = e->phase == PH_HIT ? Cue_HitLen(e, i) : e->phase == PH_FADE ? LL_FADE : LL_CUT;
             if (e->age >= len && !(e->phase == PH_HIT && galint_now > 1))
@@ -5491,7 +7663,24 @@ static void Cues_Clear(void)
 #define LL_GHOST_FRAMES 90
 
 // The fighter left the tracked air states this frame: judge the landing.
+static void Landing_Judge(FighterData *fp);
+
+// The landing's own text ("Lag") would replace why the press before it
+// stayed in the air, which is the part worth reading, so that stays up
+// unless the landing was a hit after all.
 static void Landing_Resolve(FighterData *fp)
+{
+    char note[sizeof(text_last)] = "";
+    int keep = press_note && !route_active;
+    if (keep)
+        strcpy(note, text_last);
+    press_note = 0;
+    Landing_Judge(fp);
+    if (keep && last_kind < 0)
+        strcpy(text_last, note);
+}
+
+static void Landing_Judge(FighterData *fp)
 {
     int sid = fp->state_id;
     int landing_air = sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW;
@@ -5554,7 +7743,8 @@ static void Landing_Resolve(FighterData *fp)
     int hit = kind == LAND_NIL || kind == LAND_PERFECT_WL || (kind == LAND_AI && !landing_air);
     last_kind = kind == LAND_NIL ? CUE_NIL : kind == LAND_AI ? CUE_AI : kind == LAND_PERFECT_WL ? CUE_WL : -1;
     Cue_Landed(fp, kind, landing_air);
-    if (Options_Sounds[SOPT_CHIME].val && hit)
+    // only for the cues that are on; a ledge route chimes on its own
+    if (Options_Sounds[SOPT_CHIME].val && hit && Kind_Shown(kind) && !route_active)
         SFX_PlayRaw(303, 255, 128, 20, 3); // laserland's success sound
 
     char buf[200];
@@ -5593,9 +7783,9 @@ static void Landing_Resolve(FighterData *fp)
             Text_Exact();
         }
 
-        sprintf(buf, "LandingLab landing: %s with %s pressed at %d x %.4f y %.4f, %s (from %d)%s\n",
+        sprintf(buf, "LandingLab landing: %s with %s pressed at %d x %.4f y %.4f line %d, %s (from %d)%s\n",
                 land_kind_names[kind], pressed >= 0 ? tracked_state_names[pressed] : (dodge == DODGE_RIGHT ? "airdodge right" : "airdodge left"),
-                event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y,
+                event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, fp->coll_data.ground_index,
                 predicted ? "predicted" : "not predicted", seg_start_timer, learning ? " learning" : "");
         Log(buf);
         return;
@@ -5639,8 +7829,8 @@ static void Landing_Resolve(FighterData *fp)
         Text_Exact();
     }
 
-    sprintf(buf, "LandingLab landing: %s at %d x %.4f, predicted %s at %d x %.4f (from %d)%s%s\n",
-            land_kind_names[kind], event_vars->game_timer, fp->phys.pos.X,
+    sprintf(buf, "LandingLab landing: %s at %d x %.4f y %.4f line %d, predicted %s at %d x %.4f (from %d)%s%s\n",
+            land_kind_names[kind], event_vars->game_timer, fp->phys.pos.X, fp->phys.pos.Y, fp->coll_data.ground_index,
             land_kind_names[pred_seg->land_kind], predicted, pred_seg->pos[pred_seg->land_frame].X,
             seg_start_timer, learning ? " learning" : "", late ? " late-input" : "");
     Log(buf);
@@ -5662,6 +7852,97 @@ static const GXColor color_ecb = {255, 230, 0, 255};
 // GFX_Start, with the depth test left on.
 static int world_on_top;
 static int world_add; // glows: added to what's behind, so a faint one never darkens it
+
+// Intensity: the cues, paths and timers are drawn fainter or bolder than
+// the standard look (level 3); the controller and the panel never change.
+// Fainter takes color and opacity down together. Bolder makes a shape more
+// opaque, and brighter as far as its strongest channel allows, so no color
+// shifts toward white and a hit can't be mistaken for a miss.
+static const float vis_levels[] = {0.55f, 0.78f, 1.f, 1.3f, 1.65f};
+static float vis_k = 1.f; // for what's being drawn now
+
+static GXColor Vis(GXColor c)
+{
+    if (vis_k == 1.f)
+        return c;
+    // dimmer: only the alpha goes down (by k squared, as bright as scaling
+    // both had looked), so a faded shape fades into what's behind it instead
+    // of leaving a dark shadow of itself
+    float ka = vis_k < 1.f ? vis_k * vis_k : vis_k, kc = vis_k < 1.f ? 1.f : vis_k;
+    if (vis_k > 1.f)
+    {
+        int m = c.r > c.g ? c.r : c.g;
+        if (c.b > m)
+            m = c.b;
+        if (c.a * ka > 255.f)
+            ka = c.a ? 255.f / c.a : 1.f;
+        kc = ka;
+        if (m * kc > 255.f)
+            kc = m ? 255.f / m : 1.f;
+    }
+    c.r = c.r * kc;
+    c.g = c.g * kc;
+    c.b = c.b * kc;
+    c.a = c.a * ka;
+    return c;
+}
+
+// Intensity by group (Options_Intensity), and Auto Fade: each cue kind
+// keeps a running hit rate (about the last 10 tries), and in a group set
+// to fade, each kind's drawing dims by its own rate (Fade_Factor).
+enum { VG_CUES, VG_PATHS, VG_TIMERS, VG_LEDGE, VG_PAD };
+
+static float Group_K(int g)
+{
+    if (g == VG_PAD)
+        return vis_levels[Options_Intensity[IOPT_PAD].val];
+    int lv = Options_Cues[COPT_INTENSITY].val + Options_Intensity[g].val - 2;
+    lv = lv < 0 ? 0 : lv > 4 ? 4 : lv;
+    return vis_levels[lv];
+}
+
+static void Skill_Add(int kind, int hit)
+{
+    skill[kind] += ((hit ? 1.f : 0.f) - skill[kind]) * 0.15f;
+    if (cue_log)
+        OSReport("LLFADE %d %s rate %.2f\n", kind, hit ? "hit" : "miss", skill[kind]);
+}
+
+// How far Auto Fade dims this frame: a kind's hit rate fades it from
+// half its tries hit (nothing) to 9 in 10 (down to 35%).
+static float Fade_Of(int kind)
+{
+    float t = (skill[kind] - 0.5f) / 0.4f;
+    t = t < 0 ? 0 : t > 1 ? 1 : t;
+    return 1.f - 0.65f * t;
+}
+
+// Auto Fade's part of a group's level for one cue kind's drawing (1: none).
+static float Fade_Factor(int g, int kind)
+{
+    int fade = Options_Intensity[IOPT_FADE].val;
+    if (kind >= 0 && kind < CUE_NUM &&
+        ((g == VG_TIMERS && (fade == FADE_TIMERS || fade == FADE_BOTH)) ||
+         (g == VG_CUES && (fade == FADE_CUES || fade == FADE_BOTH))))
+        return Fade_Of(kind);
+    return 1.f;
+}
+
+static float Kind_K(int g, int kind)
+{
+    return Group_K(g) * Fade_Factor(g, kind);
+}
+
+void Event_FadeReset(GOBJ *menu)
+{
+    memset(skill, 0, sizeof(skill));
+    SFX_PlayCommon(1);
+}
+
+static void World_Vtx(f32 x, f32 y, f32 z, GXColor c)
+{
+    GFX_AddVtx(x, y, z, Vis(c));
+}
 
 static void World_Start(int count, u8 shape, u8 size)
 {
@@ -5712,7 +7993,7 @@ static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color,
 
     World_Start(count, GX_LINESTRIP, size);
     for (int i = from; i <= to; i++)
-        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
+        World_Vtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
 }
 
 // The paths look different from each other: the landing path is solid, the
@@ -5730,8 +8011,8 @@ static void Draw_Dashed(Vec2 *pos, float *bottom, int from, int to, GXColor colo
     World_Start(dashes * 2, GX_LINES, size);
     for (int i = from; i + 1 <= to; i += 2)
     {
-        GFX_AddVtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
-        GFX_AddVtx(pos[i + 1].X, pos[i + 1].Y + bottom[i + 1], 0, Path_Flow(color, i + 1, from, to));
+        World_Vtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
+        World_Vtx(pos[i + 1].X, pos[i + 1].Y + bottom[i + 1], 0, Path_Flow(color, i + 1, from, to));
     }
 }
 
@@ -5758,14 +8039,14 @@ static void Draw_Ticks(Vec2 *pos, float *bottom, int from, int to, GXColor color
         float x = pos[i].X;
         float y = pos[i].Y + bottom[i];
         float r = LL_DOT_R;
-        GFX_AddVtx(x, y - r, 0, color);
-        GFX_AddVtx(x + r, y, 0, color);
-        GFX_AddVtx(x + r, y, 0, color);
-        GFX_AddVtx(x, y + r, 0, color);
-        GFX_AddVtx(x, y + r, 0, color);
-        GFX_AddVtx(x - r, y, 0, color);
-        GFX_AddVtx(x - r, y, 0, color);
-        GFX_AddVtx(x, y - r, 0, color);
+        World_Vtx(x, y - r, 0, color);
+        World_Vtx(x + r, y, 0, color);
+        World_Vtx(x + r, y, 0, color);
+        World_Vtx(x, y + r, 0, color);
+        World_Vtx(x, y + r, 0, color);
+        World_Vtx(x - r, y, 0, color);
+        World_Vtx(x - r, y, 0, color);
+        World_Vtx(x, y - r, 0, color);
     }
 }
 
@@ -5794,10 +8075,10 @@ static void Draw_BodyPath(Prediction *p, int from, int last, GXColor c)
     for (int i = from; i <= last; i++)
     {
         float x = p->pos[i].X, y = p->pos[i].Y + body_offset;
-        GFX_AddVtx(x - LL_DOT, y - LL_DOT, 0, c);
-        GFX_AddVtx(x + LL_DOT, y - LL_DOT, 0, c);
-        GFX_AddVtx(x + LL_DOT, y + LL_DOT, 0, c);
-        GFX_AddVtx(x - LL_DOT, y + LL_DOT, 0, c);
+        World_Vtx(x - LL_DOT, y - LL_DOT, 0, c);
+        World_Vtx(x + LL_DOT, y - LL_DOT, 0, c);
+        World_Vtx(x + LL_DOT, y + LL_DOT, 0, c);
+        World_Vtx(x - LL_DOT, y + LL_DOT, 0, c);
     }
 }
 
@@ -5808,10 +8089,10 @@ static void Draw_Ecb(Vec2 pos, float bottom, EcbSample *s, float facing, GXColor
         // shape unknown: a small cross at the touchdown point
         float y = pos.Y + bottom;
         World_Start(4, GX_LINES, 24);
-        GFX_AddVtx(pos.X - 1.5f, y - 1.5f, 0, color);
-        GFX_AddVtx(pos.X + 1.5f, y + 1.5f, 0, color);
-        GFX_AddVtx(pos.X - 1.5f, y + 1.5f, 0, color);
-        GFX_AddVtx(pos.X + 1.5f, y - 1.5f, 0, color);
+        World_Vtx(pos.X - 1.5f, y - 1.5f, 0, color);
+        World_Vtx(pos.X + 1.5f, y + 1.5f, 0, color);
+        World_Vtx(pos.X - 1.5f, y + 1.5f, 0, color);
+        World_Vtx(pos.X + 1.5f, y - 1.5f, 0, color);
         return;
     }
 
@@ -5819,11 +8100,11 @@ static void Draw_Ecb(Vec2 pos, float bottom, EcbSample *s, float facing, GXColor
     float left_x = facing > 0 ? s->back : -s->front;
 
     World_Start(5, GX_LINESTRIP, 24);
-    GFX_AddVtx(pos.X, pos.Y + s->top, 0, color);
-    GFX_AddVtx(pos.X + right_x, pos.Y + s->side_y, 0, color);
-    GFX_AddVtx(pos.X, pos.Y + bottom, 0, color);
-    GFX_AddVtx(pos.X + left_x, pos.Y + s->side_y, 0, color);
-    GFX_AddVtx(pos.X, pos.Y + s->top, 0, color);
+    World_Vtx(pos.X, pos.Y + s->top, 0, color);
+    World_Vtx(pos.X + right_x, pos.Y + s->side_y, 0, color);
+    World_Vtx(pos.X, pos.Y + bottom, 0, color);
+    World_Vtx(pos.X + left_x, pos.Y + s->side_y, 0, color);
+    World_Vtx(pos.X, pos.Y + s->top, 0, color);
 }
 
 // Falcon's ECB right now, for the collision view (his model is hidden).
@@ -5834,11 +8115,11 @@ static void Draw_CurrentEcb(FighterData *fp)
     float y = fp->phys.pos.Y;
 
     World_Start(5, GX_LINESTRIP, 24);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_right.X, y + cd->ecbCurrCorrect_right.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_bot.X, y + cd->ecbCurrCorrect_bot.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_left.X, y + cd->ecbCurrCorrect_left.Y, 0, color_ecb);
-    GFX_AddVtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_right.X, y + cd->ecbCurrCorrect_right.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_bot.X, y + cd->ecbCurrCorrect_bot.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_left.X, y + cd->ecbCurrCorrect_left.Y, 0, color_ecb);
+    World_Vtx(x + cd->ecbCurrCorrect_top.X, y + cd->ecbCurrCorrect_top.Y, 0, color_ecb);
 }
 
 // The aerial pickers (Compass_Draw), queued here while the stage is drawn
@@ -5881,11 +8162,11 @@ static void Draw_Bar(Prediction *p, int k, int e, GXColor color, u8 size)
     int before = k - 1;
     int after = e < p->num ? e + 1 : e;
     World_Start(e - k + 3, GX_LINESTRIP, size);
-    GFX_AddVtx((p->pos[before].X + p->pos[k].X) / 2,
+    World_Vtx((p->pos[before].X + p->pos[k].X) / 2,
                (p->pos[before].Y + p->bottom[before] + p->pos[k].Y + p->bottom[k]) / 2, 0, color);
     for (int i = k; i <= e; i++)
-        GFX_AddVtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
-    GFX_AddVtx((p->pos[e].X + p->pos[after].X) / 2,
+        World_Vtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
+    World_Vtx((p->pos[e].X + p->pos[after].X) / 2,
                (p->pos[e].Y + p->bottom[e] + p->pos[after].Y + p->bottom[after]) / 2, 0, color);
 }
 
@@ -5995,8 +8276,8 @@ static void Draw_Prediction(Prediction *p, int body, int style)
         int k = p->fastfall_frame;
         float y = p->pos[k].Y + p->bottom[k];
         World_Start(2, GX_LINES, 24);
-        GFX_AddVtx(p->pos[k].X - 2.f, y, 0, color_actual);
-        GFX_AddVtx(p->pos[k].X + 2.f, y, 0, color_actual);
+        World_Vtx(p->pos[k].X - 2.f, y, 0, color_actual);
+        World_Vtx(p->pos[k].X + 2.f, y, 0, color_actual);
     }
 }
 
@@ -6011,9 +8292,10 @@ static void Draw_Prediction(Prediction *p, int body, int style)
 //   an AI or NIL, ticks run in from both ends of the slide to the middle
 //   for a waveland or wavedash.
 // - the fixed strip (optional), a bigger meter at the bottom with labels.
-// Every timer pulses a ghost outward on each frame of its window, the first
-// and last brightest, and ends in a burst (hit) or a muted implosion (miss
-// or skip). Hits keep the cue's color, misses turn a cold slate and skips
+// Every timer sends one ghost out: a strong one with a burst on a press
+// that works, else a faint one on the window's last frame (a skip), and
+// none for an early or late press. It ends in a burst (hit) or a muted
+// implosion (miss or skip). Hits keep the cue's color, misses turn a cold slate and skips
 // gray.
 static const GXColor color_miss = {104, 114, 150, 255}; // cold slate
 static const GXColor color_skip = {140, 149, 168, 255};
@@ -6129,7 +8411,7 @@ static int Cue_FlashAge(Cue *e)
 static int Hud_FromWorld(float x, float y, float *hx, float *hy)
 {
     Vec3 in = {x, y, 0}, out;
-    HSD_GXProject(*stc_matchcam_cobj, &in, &out, 1);
+    HSD_GXProject(View_CObj(), &in, &out, 1);
     *hx = (out.X - 320.f) / HUD_PX;
     *hy = (240.f - out.Y) / HUD_PY;
     return *hx > -HUD_W - 10.f && *hx < HUD_W + 10.f && *hy > -HUD_H - 10.f && *hy < HUD_H + 10.f;
@@ -6157,8 +8439,8 @@ static void Quad_Add2(float x0, float y0, float x1, float y1, float x2, float y2
     q->v[1] = (Vec2){x1, y1};
     q->v[2] = (Vec2){x2, y2};
     q->v[3] = (Vec2){x3, y3};
-    q->c = c;
-    q->c2 = c2;
+    q->c = Vis(c);
+    q->c2 = Vis(c2);
 }
 
 static void Quad_Add(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3, GXColor c)
@@ -6327,6 +8609,7 @@ static void Hud_TextAligned(const char *text, float x, float y, float size, GXCo
     HUDCamData *hud = event_vars->hudcam_gobj->userdata;
     int slot = hud->text_cache_used;
     Rect r = {x, y, 0, 2.5f};
+    color = Vis(color); // text fades with what it's part of, like the shapes
     event_vars->HUD_DrawTextEx(text, &r, size, color, (GXColor){0, 0, 0, 0}, 0, 0);
     if (slot < (int)countof(hud->text_cache) && hud->text_cache[slot])
     {
@@ -6342,10 +8625,44 @@ static void Hud_Text(const char *text, float x, float y, float size, GXColor col
     Hud_TextAligned(text, x, y, size, color, 0);
 }
 
-// A rough width for a dark plate behind a line of text.
+// A line of text's width, for the dark plate behind it: Melee's font is
+// proportional, so each glyph by its kind (about 6.5 px for an average
+// glyph at size 0.45, as measured in game).
 static float Text_Width(const char *text, float size)
 {
-    return strlen(text) * size * 1.4f; // measured in game: about 6.5 px a glyph at 0.45
+    float w = 0;
+    for (const char *c = text; *c; c++)
+    {
+        char ch = *c;
+        float g;
+        if (ch == ' ')
+            g = 0.9f;
+        else if (strchr("iIl1.,:;'!|", ch))
+            g = 0.7f;
+        else if (strchr("fjrt()[]-/", ch))
+            g = 1.0f;
+        else if (ch == 'm' || ch == 'w')
+            g = 1.9f;
+        else if (ch == 'M' || ch == 'W')
+            g = 2.0f;
+        else if (ch >= 'A' && ch <= 'Z')
+            g = 1.6f;
+        else if (ch >= '0' && ch <= '9')
+            g = 1.35f;
+        else if (ch >= 'a' && ch <= 'z')
+            g = 1.3f;
+        else
+            g = 1.4f;
+        w += g;
+    }
+    return w * size;
+}
+
+// The dark plate behind a line of text whose row starts at y (rows 2.5
+// tall), from x0 to x1: solid enough to read over a light stage.
+static void Text_Plate(float x0, float x1, float y)
+{
+    Hud_Rect(x0, y + 0.15f, x1, y + 2.35f, Color_Over(color_plate, 0.72f));
 }
 
 ///////////////////////
@@ -6392,6 +8709,9 @@ enum glyph_kind
     GLYPH_UP,     // stick (or C-stick) up
     GLYPH_DOWN_LEFT,
     GLYPH_DOWN_RIGHT,
+    GLYPH_FF,            // fastfall: a double chevron, where a plain hold down is one solid arrow
+    GLYPH_FF_DOWN_LEFT,
+    GLYPH_FF_DOWN_RIGHT,
 };
 
 typedef struct MeterRow
@@ -6403,6 +8723,7 @@ typedef struct MeterRow
     GXColor color;
     int len;      // cells used: the last one + 1
     u8 hot;       // a press is at the gate in its window: 1, 2 on the window's first or last frame
+    u8 spent;     // frames of that window already gone: the cells show what's left, the dial the whole wedge
     u8 dim;       // a route that isn't the chosen one
     s8 ghost[4];  // ages of the ghosts spreading out of the gate, -1 none
     u8 ghost_bright[4];
@@ -6410,6 +8731,9 @@ typedef struct MeterRow
     s8 implode;   // frames since a miss or skip folded in, -1 none
     u8 implode_tone;
     s8 flash;     // frames since the gate reached the first frame Falcon can act, -1 none
+    float fade;   // Auto Fade (and a lane fading out): the whole row's opacity scaled by this
+    u8 gap;       // a lane kept free for a row that went, so the others stay put
+    u8 span;      // cells from the gate its first window was at when it came up (Note Travel)
     char label[8];
     char info[24];
 } MeterRow;
@@ -6424,6 +8748,7 @@ static MeterRow *Meter_Add(GXColor color, const char *label)
     MeterRow *r = &meter[meter_rows++];
     memset(r, 0, sizeof(*r));
     r->color = color;
+    r->fade = 1.f;
     r->burst = -1;
     r->implode = -1;
     r->flash = -1;
@@ -6457,18 +8782,31 @@ static void Row_Ghost(MeterRow *r, int age, int bright)
     }
 }
 
-// One ghost leaves the gate on each frame of a window, until it ended.
-static void Row_Ghosts(MeterRow *r, Cue *c, int ended)
+// The one ghost a timer sends out: a strong one on a press that works (or
+// on the hit, when there was no press), else a faint one on the window's
+// last frame, which a dry run can time against. An early or late press
+// sends none, so it can't be mistaken for either. Returns its age, or -1.
+static int Cue_Ghost(Cue *c, int *bright)
 {
-    if (c->pulse < 0)
-        return;
-    int last = ended ? c->pulse - c->age : c->pulse;
-    for (int j = 0; j < c->width && j <= last; j++)
+    if (c->press >= 0)
     {
-        int g = c->pulse - j;
-        if (g >= 0 && g < LL_GHOST)
-            Row_Ghost(r, g, j == 0 || j == c->width - 1 || j == last);
+        *bright = 1;
+        return c->press < LL_GHOST ? c->press : -1;
     }
+    *bright = 0;
+    if (c->dim == DIM_MISS || c->pulse < 0)
+        return -1;
+    int g = c->pulse - (c->width - 1);
+    return g >= 0 && g < LL_GHOST ? g : -1;
+}
+
+static void Row_Ghosts(MeterRow *r, Cue *c)
+{
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g >= 0)
+        Row_Ghost(r, g, bright);
+    if (c->press >= 0 && c->press < LL_BURST)
+        r->burst = c->press; // the burst goes with the hit's ghost
 }
 
 // The ledge intangibility tail after the first frame Falcon can act (act,
@@ -6488,9 +8826,13 @@ static void Meter_FromCue(int kind)
     int live = c->phase != PH_OFF;
     if (!live && e->phase == PH_OFF)
         return;
-    MeterRow *r = Meter_Add(Cue_Color(kind), kind == CUE_WL && (live ? c->wd : e->wd) ? "WD" : cue_labels[kind]);
+    int wd = kind == CUE_WL && (live ? c->wd : e->wd);
+    if (wd && Options_Timers[TOPT_WD].val != WDT_CELLS)
+        return; // drawn by Falcon's feet, or not at all
+    MeterRow *r = Meter_Add(Cue_Color(kind), wd ? "WD" : cue_labels[kind]);
     if (!r)
         return;
+    r->fade = Fade_Factor(VG_TIMERS, kind);
 
     switch (e->phase)
     {
@@ -6502,11 +8844,9 @@ static void Meter_FromCue(int kind)
         if (act >= 0)
             Row_Set(r, act, CELL_ACT, TONE_CUE, 1);
         Row_Tail(r, act);
-        if (e->age < LL_BURST)
-            r->burst = e->age;
         if (act <= 0 && -act < 4)
             r->flash = -act;
-        Row_Ghosts(r, e, 1);
+        Row_Ghosts(r, e);
         if (galint_now > 1 && act < 0)
             sprintf(r->info, "%d GALINT", galint_now - 1);
         else if (act > 0)
@@ -6518,6 +8858,7 @@ static void Meter_FromCue(int kind)
     case PH_FADE:
         r->implode = e->age;
         r->implode_tone = e->dim == DIM_MISS ? TONE_MISS : TONE_SKIP;
+        Row_Ghosts(r, e); // a skip's faint ghost plays out
         sprintf(r->info, e->dim == DIM_MISS ? "miss" : "skip");
         break;
     case PH_CUT:
@@ -6549,23 +8890,31 @@ static void Meter_FromCue(int kind)
     {
         for (int j = c->age; j < c->width; j++)
             Row_Set(r, j - c->age, CELL_PRESS, tone, 1);
+        r->spent = c->age < c->width ? c->age : c->width;
         if (!c->dim)
             r->hot = c->age == 0 || c->age == c->width - 1 ? 2 : 1;
-        Row_Ghosts(r, c, 0);
+        Row_Ghosts(r, c);
         sprintf(r->info, c->dim ? "miss" : "now");
     }
 }
 
 static int route_rows_active; // ledge routes fill the meter; the cues' rows give way
-static int route_active;      // following a ledge route after letting go
+static int jump_rows_active;  // ... or it's a jump's route (Jump Timing), which keeps the controller cues
+static int Jump_PressAhead(void);
+static int drop_sid; // Falcon's state, for the drop drill's row
+static void Meter_AddDrop(int sid);
 static int route_dj_done;     // ... and its double jump happened
 static void Meter_AddRoutes(void);
+static void Meter_AddJump(void);
 
-static void Meter_Build(void)
+static void Meter_Collect(void)
 {
     meter_rows = 0;
     route_rows_active = 0;
+    jump_rows_active = 0;
     Meter_AddRoutes();
+    Meter_AddJump();
+    Meter_AddDrop(drop_sid);
     if (route_rows_active)
         return; // a ledge route has the meter to itself
     if (Cues_Ai())
@@ -6576,9 +8925,187 @@ static void Meter_Build(void)
         Meter_FromCue(CUE_NIL);
 }
 
+// Lanes keep their places: a row keeps the lane it came up in (by its
+// label) while it's up and for MT_LINGER frames after, fading out, so the
+// others never shift or swap. One that went with a window still ahead
+// leaves that window in gray as it fades, rather than just vanishing. A new
+// row takes the first free lane. Each lane also remembers how far out its
+// window was when it came up, for Note Travel.
+#define MT_LINGER 8
+typedef struct Lane
+{
+    char label[8];
+    int seen;    // the frame it was last up
+    int k_prev;  // its first window's cell last frame, -1 none
+    int k0;      // ... and when that window came up
+    u8 used;
+    MeterRow last;
+} Lane;
+static Lane lanes[MT_ROWS];
+
+static int Str_Same(const char *a, const char *b)
+{
+    while (*a && *a == *b)
+        a++, b++;
+    return *a == *b;
+}
+
+// The first cell that is a window to press in, a touchdown or the first
+// frame to act, or -1.
+static int Row_FirstTarget(MeterRow *r)
+{
+    for (int k = 0; k < r->len && k < MT_CELLS; k++)
+        if (r->cell[k] == CELL_PRESS || r->cell[k] == CELL_LAND || r->cell[k] == CELL_ACT)
+            return k;
+    return -1;
+}
+
+static void Meter_Settle(void)
+{
+    static MeterRow built[MT_ROWS];
+    int now = event_vars->game_timer, n = meter_rows;
+    int taken[MT_ROWS], at[MT_ROWS];
+    memcpy(built, meter, n * sizeof(MeterRow));
+    for (int l = 0; l < MT_ROWS; l++)
+    {
+        taken[l] = -1;
+        if (lanes[l].used && (now < lanes[l].seen || now - lanes[l].seen > MT_LINGER))
+        {
+            lanes[l].used = 0; // gone long enough, or the clock went back (a save state)
+            if (cue_log)
+                OSReport("LLLANE %d %s lane %d gone\n", now, lanes[l].label, l);
+        }
+    }
+    // the lanes the rows already had, then the first free one for the rest
+    for (int i = 0; i < n; i++)
+    {
+        at[i] = -1;
+        for (int l = 0; l < MT_ROWS && at[i] < 0; l++)
+            if (lanes[l].used && taken[l] < 0 && Str_Same(lanes[l].label, built[i].label))
+                at[i] = l;
+        if (at[i] >= 0)
+            taken[at[i]] = i;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (at[i] >= 0)
+            continue;
+        int best = -1;
+        for (int l = 0; l < MT_ROWS && best < 0; l++)
+            if (!lanes[l].used && taken[l] < 0)
+                best = l;
+        // all taken: the one gone longest
+        for (int l = 0; l < MT_ROWS && best < 0; l++)
+            if (taken[l] < 0 && (best < 0 || lanes[l].seen < lanes[best].seen))
+                best = l;
+        if (best < 0)
+            continue;
+        Lane *L = &lanes[best];
+        memset(L, 0, sizeof(*L));
+        strcpy(L->label, built[i].label);
+        L->k_prev = -1;
+        if (cue_log)
+            OSReport("LLLANE %d %s lane %d new\n", now, L->label, best);
+        at[i] = best;
+        taken[best] = i;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (at[i] < 0)
+            continue;
+        Lane *L = &lanes[at[i]];
+        int t = Row_FirstTarget(&built[i]);
+        if (t >= 0 && (L->k_prev < 0 || t > L->k_prev))
+            L->k0 = t; // a new window (or one further out than the last)
+        L->k_prev = t;
+        built[i].span = t >= 0 && L->k0 < 255 ? L->k0 : 0;
+        L->last = built[i];
+        L->seen = now;
+        L->used = 1;
+    }
+
+    int top = -1;
+    for (int l = 0; l < MT_ROWS; l++)
+        if (lanes[l].used)
+            top = l;
+    meter_rows = top + 1;
+    for (int l = 0; l <= top; l++)
+    {
+        MeterRow *r = &meter[l];
+        Lane *L = &lanes[l];
+        if (taken[l] >= 0)
+        {
+            *r = built[taken[l]];
+            continue;
+        }
+        if (!L->used)
+        {
+            memset(r, 0, sizeof(*r));
+            r->gap = 1;
+            r->fade = 1.f;
+            r->burst = r->implode = r->flash = -1;
+            for (int g = 0; g < 4; g++)
+                r->ghost[g] = -1;
+            continue;
+        }
+        // going: fades out over MT_LINGER frames
+        *r = L->last;
+        r->fade *= 1.f - (float)(now - L->seen) / (MT_LINGER + 1);
+        r->hot = 0;
+        r->flash = r->burst = r->implode = -1;
+        r->info[0] = 0;
+        int t = Row_FirstTarget(r);
+        if (t >= 2)
+        {
+            for (int k = 0; k < r->len; k++)
+                r->tone[k] = TONE_SKIP; // a window it no longer has, in gray
+        }
+        else
+            r->len = 0;
+    }
+}
+
+static void Meter_Build(void)
+{
+    Meter_Collect();
+    Meter_Settle();
+}
+
+// Where cell k of a row is along its track, in frames from the gate, with
+// track frames in all. Catch Up brings a window that came up nearer than the
+// track's end in from the end, settling to the fixed speed halfway to the
+// gate (a smoothstep), so every window travels the whole track.
+static float Note_At(MeterRow *r, float k, int track)
+{
+    int k0 = r->span;
+    if (Options_Timers[TOPT_TRAVEL].val != TRAVEL_CATCH || k0 < 2 || k0 >= track)
+        return k;
+    float m = k0 * 0.5f, extra = track - k0;
+    if (k <= m)
+        return k;
+    if (k >= k0)
+        return k + extra; // past it (a window's later frames): off the far end
+    float t = (k - m) / (k0 - m);
+    return k + extra * t * t * (3.f - 2.f * t);
+}
+
 static GXColor Tone_Color(MeterRow *r, int tone)
 {
     return tone == TONE_MISS ? color_miss : tone == TONE_SKIP ? color_skip : r->color;
+}
+
+// Two chevrons stacked along (dx, dy), like speed lines: a fastfall.
+static void Glyph_Chevrons(float x, float y, float r, float dx, float dy, float w, GXColor c)
+{
+    float px = -dy, py = dx;
+    for (int i = 0; i < 2; i++)
+    {
+        float t = i ? r * 0.95f : r * 0.05f; // the tips, along the way down
+        float tx = x + dx * t, ty = y + dy * t;
+        float bx = tx - dx * r * 0.85f, by = ty - dy * r * 0.85f; // narrow, so turned 45 degrees it isn't an L
+        Hud_Seg(bx + px * r * 0.62f, by + py * r * 0.62f, tx, ty, w, c);
+        Hud_Seg(bx - px * r * 0.62f, by - py * r * 0.62f, tx, ty, w, c);
+    }
 }
 
 static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
@@ -6624,6 +9151,16 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
             // a shield bubble
             Hud_Ring(x, y, s * 0.75f, (pass ? 0.45f : 0.45f + 0.24f / s) * s, col);
             break;
+        case GLYPH_FF:
+        case GLYPH_FF_DOWN_LEFT:
+        case GLYPH_FF_DOWN_RIGHT:
+        {
+            float dx = glyph == GLYPH_FF ? 0 : glyph == GLYPH_FF_DOWN_RIGHT ? 0.707f : -0.707f;
+            float dy = glyph == GLYPH_FF ? -1.f : -0.707f;
+            float w = 0.3f * s + (pass ? 0 : 0.16f);
+            Glyph_Chevrons(x - dx * s * 0.1f, y - dy * s * 0.1f, s, dx, dy, w, col); // centered
+            break;
+        }
         }
     }
 }
@@ -6633,7 +9170,7 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
 // labels. Returns nothing drawn when there are no rows.
 static void Meter_Draw(float gx, float base, float scale, int max_cells, int labels)
 {
-    int wide = Options_Hud[HOPT_WIDE].val;
+    int wide = Options_Timers[TOPT_WIDE].val;
     float pitch = (MT_PITCH + (wide ? MT_WIDE : 0)) * scale;
     float cw = (MT_CW + (wide ? MT_WIDE : 0)) * scale;
     float ch = MT_CH * scale, gap = MT_GAP * scale;
@@ -6654,13 +9191,22 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     float glyph_h = glyphs ? 1.1f * scale : 0;
     float x1 = gx + (len - 1) * pitch + cw;
 
-    // the plate, so it reads over any stage
+    // the plate, so it reads over any stage; it fades with the brightest row
+    float base_k = vis_k, plate_k = 0;
+    for (int i = 0; i < rows; i++)
+        if (!meter[i].gap && meter[i].fade > plate_k)
+            plate_k = meter[i].fade;
+    vis_k = base_k * plate_k;
     Hud_Rect(gx - 0.32f * scale, base - 0.22f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
 
+    // rows from the bottom up, each in its own lane (Meter_Settle)
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
-        float y0 = base + (rows - 1 - i) * (ch + gap), y1 = y0 + ch;
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float y0 = base + i * (ch + gap), y1 = y0 + ch;
         float dim = r->dim ? 0.5f : 1.f;
 
         // empty frames
@@ -6677,7 +9223,10 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 continue;
             float a = r->alpha[k] / 255.f * dim;
             GXColor col = Tone_Color(r, r->tone[k]);
-            float cx0 = gx + k * pitch, cx1 = cx0 + cw;
+            float at = Note_At(r, k, len);
+            if (at > len - 0.5f)
+                continue; // still off the far end
+            float cx0 = gx + at * pitch, cx1 = cx0 + cw;
             switch (kind)
             {
             case CELL_PRESS:
@@ -6705,11 +9254,12 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_galint, a));
                 break;
             }
-            if (r->glyph[k] && i == 0)
+            if (r->glyph[k])
                 Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, 0.36f * scale, Color_Fill(color_white, 0.95f * dim));
         }
     }
 
+    vis_k = base_k * plate_k;
     // the gate: two posts, lit while a press is due
     float gy0 = base - 0.3f * scale, gy1 = top + 0.3f * scale;
     float gcx = gx + cw / 2, gcy = (base + top) / 2;
@@ -6753,16 +9303,21 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
-        if (r->dim)
+        if (r->dim || r->gap)
             continue;
+        vis_k = base_k * r->fade;
         for (int g = 0; g < 4; g++)
         {
             if (r->ghost[g] < 0)
                 continue;
-            float q = (float)r->ghost[g] / LL_GHOST;
-            float grow = (0.15f + 1.3f * Ease_Out(q)) * scale;
-            GXColor gc = Color_Fill(Color_Mix(r->color, color_white, 0.5f), (r->ghost_bright[g] ? 0.95f : 0.45f) * (1.f - q));
-            Hud_Frame(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, 1.6f * PX * scale, gc);
+            // a filled copy of the gate's cell, in the row's color, that
+            // swells and fades fast
+            float q = (float)r->ghost[g] / LL_GHOST, fade = (1.f - q) * (1.f - q);
+            int b = r->ghost_bright[g];
+            float grow = (b ? 0.1f + 1.2f * Ease_Out(q) : 0.05f + 0.55f * Ease_Out(q)) * scale;
+            GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
+            Hud_Rect(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
+            Hud_Frame(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, 1.6f * PX * scale, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
         }
         if (r->burst >= 0)
         {
@@ -6789,21 +9344,31 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         }
     }
 
+    vis_k = base_k;
     if (!labels)
         return;
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
-        float y0 = base + (rows - 1 - i) * (ch + gap);
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float y0 = base + i * (ch + gap);
         float ty = y0 + ch / 2 - 1.25f;
         GXColor tc = Color_Mix(r->color, color_white, 0.35f);
         if (r->dim)
             tc = Color_Fill(tc, 0.6f);
         tc.a = 255;
+        Text_Plate(gx - 3.4f, gx - 3.2f + Text_Width(r->label, 0.42f) + 0.2f, ty);
         Hud_Text(r->label, gx - 3.2f, ty, 0.42f, tc);
         if (r->info[0])
-            Hud_Text(r->info, x1 + 0.5f * scale, ty, 0.42f, (GXColor){220, 220, 220, 255});
+        {
+            float ix = x1 + 0.5f * scale;
+            Text_Plate(ix - 0.2f, ix + Text_Width(r->info, 0.42f) + 0.2f, ty);
+            Hud_Text(r->info, ix, ty, 0.42f, (GXColor){220, 220, 220, 255});
+        }
     }
+    vis_k = base_k;
 }
 
 // Near Falcon: the meter is pinned to one spot on the screen when it shows
@@ -6877,6 +9442,74 @@ static void Pin_Path(FighterData *fp)
 
 static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1); // with the controller display
 
+// The fixed strip's other looks sit in a bottom corner, the one away from
+// the controller display. The highway is a lane a row, HW_ROWS frames tall
+// with the hit line at the bottom; the dial is a small dial a row, side by
+// side. Both leave room under for the row's label, and the first lane for
+// the glyphs of a route's inputs.
+#define HW_ROWS 18       // frames of lead a lane shows
+#define HW_PITCH 0.68f   // one frame's height
+#define HW_LANE 2.1f
+#define HW_LANE_GAP 0.5f
+#define HW_GLYPH 1.5f
+#define HW_LABEL 1.7f
+#define DL_R 1.55f       // a dial's radius
+#define DL_CELL 4.2f     // the room one takes, side to side
+#define DL_LABEL 1.7f
+#define STRIP_PAD 0.35f
+
+static int Strip_Glyphs(void)
+{
+    for (int i = 0; i < meter_rows; i++)
+        for (int k = 0; k < meter[i].len && k < HW_ROWS; k++)
+            if (meter[i].glyph[k])
+                return 1;
+    return 0;
+}
+
+// The fade the strip's plate takes: its brightest row's.
+static float Strip_PlateK(void)
+{
+    float k = 0;
+    for (int i = 0; i < meter_rows; i++)
+        if (!meter[i].gap && meter[i].fade > k)
+            k = meter[i].fade;
+    return k;
+}
+
+// Where the highway or the dial is: its left, bottom, width and height.
+static void Strip_Place(FighterData *fp, int look, float *x, float *y, float *w, float *h)
+{
+    int n = meter_rows > 0 ? meter_rows : 1;
+    if (look == STRIP_HIGHWAY)
+    {
+        *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + n * HW_LANE + (n - 1) * HW_LANE_GAP;
+        *h = HW_LABEL + HW_ROWS * HW_PITCH + 0.5f;
+    }
+    else
+    {
+        *w = 2 * STRIP_PAD + n * DL_CELL - 0.4f;
+        *h = DL_LABEL + 2 * DL_R + 0.9f;
+    }
+    float x0, y0, x1, y1;
+    Pad_Box(fp, &x0, &y0, &x1, &y1);
+    *x = x0 + x1 < 0 ? SAFE_W - *w : -SAFE_W;
+    *y = -SAFE_H + 0.4f;
+}
+
+// The fixed strip's box, so the near-Falcon strip keeps out of it.
+static Box Strip_Box(FighterData *fp)
+{
+    int look = Options_Timers[TOPT_STRIP].val;
+    if (look == STRIP_HIGHWAY || look == STRIP_DIAL)
+    {
+        float x, y, w, h;
+        Strip_Place(fp, look, &x, &y, &w, &h);
+        return (Box){x - 0.2f, -SAFE_H, x + w + 0.2f, y + h + 0.3f};
+    }
+    return (Box){-SAFE_W, -SAFE_H, SAFE_W, -SAFE_H + 0.4f + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
+}
+
 // Whether the meter at (gx, base), w by h, is clear of everything else.
 static int Pin_Clear(FighterData *fp, float gx, float base, float w, float h)
 {
@@ -6903,11 +9536,10 @@ static int Pin_Clear(FighterData *fp, float gx, float base, float w, float h)
         if (Box_Hit(&m, &panel))
             return 0;
     }
-    int timer = Options_Hud[HOPT_TIMER].val;
-    if (timer == TIMER_BOTH)
+    if (Options_Timers[TOPT_STRIP].val != STRIP_OFF)
     {
-        // the fixed strip along the bottom
-        Box strip = {-SAFE_W, -SAFE_H, SAFE_W, -SAFE_H + 0.4f + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
+        // the fixed strip along the bottom, or in its corner
+        Box strip = Strip_Box(fp);
         if (Box_Hit(&m, &strip))
             return 0;
     }
@@ -6988,7 +9620,7 @@ static void Meter_Above(FighterData *fp)
     float head_x, head_y;
     Hud_FromWorld(fp->phys.pos.X, fp->phys.pos.Y + 18.f, &head_x, &head_y);
 
-    int wide = Options_Hud[HOPT_WIDE].val;
+    int wide = Options_Timers[TOPT_WIDE].val;
     float pitch = MT_PITCH + (wide ? MT_WIDE : 0);
     float cw = MT_CW + (wide ? MT_WIDE : 0);
     int len = 1;
@@ -7026,10 +9658,372 @@ static void Meter_Above(FighterData *fp)
     Meter_Draw(pin_x, pin_y, 1.f, len, 0);
 }
 
+// A row's label centered at cx, its line's middle at y, made smaller to fit
+// in room (so a long one can't run into its neighbor's).
+static void Strip_Label(MeterRow *r, float cx, float y, float room)
+{
+    GXColor tc = Color_Mix(r->color, color_white, 0.35f);
+    if (r->dim)
+        tc = Color_Fill(tc, 0.6f);
+    tc.a = 255;
+    float size = 0.42f, w = Text_Width(r->label, size);
+    if (w > room)
+    {
+        size *= room / w;
+        w = room;
+    }
+    Text_Plate(cx - w / 2 - 0.2f, cx + w / 2 + 0.2f, y - 1.25f);
+    Hud_Text(r->label, cx - w / 2, y - 1.25f + (0.42f - size) * 2.f, size, tc);
+}
+
+// The dial's wedge, ring and hand are measured in degrees clockwise from
+// twelve o'clock; a frame is DL_DEG of them.
+#define DL_DEG 15.f
+
+static void Dial_Pt(float cx, float cy, float r, float deg, float *x, float *y)
+{
+    float a = deg * 0.0174533f;
+    *x = cx + sin(a) * r;
+    *y = cy + cos(a) * r;
+}
+
+// A pie slice from one angle to the next (a whole disc for 360), in steps
+// of at most 30 degrees.
+static void Dial_Fan(float cx, float cy, float r, float from, float to, GXColor c)
+{
+    int n = (int)((to - from) / 30.f + 0.999f);
+    if (n < 1)
+        return;
+    float step = (to - from) / n, px, py, nx, ny;
+    Dial_Pt(cx, cy, r, from, &px, &py);
+    for (int i = 1; i <= n; i++)
+    {
+        Dial_Pt(cx, cy, r, from + step * i, &nx, &ny);
+        Hud_Tri(cx, cy, px, py, nx, ny, c);
+        px = nx;
+        py = ny;
+    }
+}
+
+// An arc band between two radii.
+static void Dial_Band(float cx, float cy, float r0, float r1, float from, float to, GXColor c)
+{
+    int n = (int)((to - from) / 30.f + 0.999f);
+    if (n < 1)
+        return;
+    float step = (to - from) / n, ix, iy, ox, oy, jx, jy, kx, ky;
+    Dial_Pt(cx, cy, r0, from, &ix, &iy);
+    Dial_Pt(cx, cy, r1, from, &ox, &oy);
+    for (int i = 1; i <= n; i++)
+    {
+        Dial_Pt(cx, cy, r0, from + step * i, &jx, &jy);
+        Dial_Pt(cx, cy, r1, from + step * i, &kx, &ky);
+        Quad_Add(ix, iy, ox, oy, kx, ky, jx, jy, c);
+        ix = jx;
+        iy = jy;
+        ox = kx;
+        oy = ky;
+    }
+}
+
+// The ending a row plays at its gate, shared by the highway and the dial:
+// the ghost's swell (a filled copy of the gate that grows and fades, strong
+// on a press that worked), the hit's burst and the fold of a miss or skip.
+// (cx, cy) is the gate's middle, hw by hh its half size (a round gate uses
+// hw), s a size to scale the effects by.
+static void Strip_Ending(MeterRow *r, float cx, float cy, float hw, float hh, float s, int round)
+{
+    for (int g = 0; g < 4; g++)
+    {
+        if (r->ghost[g] < 0)
+            continue;
+        float q = (float)r->ghost[g] / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        int b = r->ghost_bright[g];
+        float grow = (b ? 0.1f + 1.0f * Ease_Out(q) : 0.05f + 0.45f * Ease_Out(q)) * s;
+        GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
+        if (round)
+            Dial_Fan(cx, cy, hw + grow, 0, 360, Color_Over(tint, (b ? 0.5f : 0.2f) * fade));
+        else
+        {
+            Hud_Rect(cx - hw - grow, cy - hh - grow, cx + hw + grow, cy + hh + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
+            Hud_Frame(cx - hw - grow, cy - hh - grow, cx + hw + grow, cy + hh + grow, 1.6f * PX, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
+        }
+    }
+    if (r->burst >= 0)
+    {
+        float q = (float)r->burst / LL_BURST;
+        float rad = (round ? hw + 0.3f * s : 0.5f * s) + 1.6f * s * Ease_Out(q);
+        float from = rad * 0.55f;
+        if (round)
+            from = rad - 0.8f * s > hw + 0.1f * s ? rad - 0.8f * s : hw + 0.1f * s; // a dial's rays start outside its rim
+        GXColor bc = Color_Fill(r->color, 1.f - q);
+        for (int ray = 0; ray < 6; ray++)
+        {
+            float ang = ray * 1.0471976f + 0.5235988f;
+            float dx = cos(ang), dy = sin(ang);
+            Hud_Seg(cx + dx * from, cy + dy * from, cx + dx * rad, cy + dy * rad, 0.18f * s, bc);
+        }
+    }
+    if (r->implode >= 0)
+    {
+        float q = (float)r->implode / LL_FADE;
+        GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
+        float k = 1.f - Ease_Out(q);
+        if (round)
+        {
+            float rr = (hw + 0.8f * s) * k;
+            if (rr > 0.15f)
+                Dial_Band(cx, cy, rr - 0.1f, rr + 0.1f, 0, 360, Color_Fill(dc, 0.6f * (1.f - q)));
+        }
+        else
+        {
+            if (r->implode == 0)
+                Hud_Rect(cx - hw, cy - hh, cx + hw, cy + hh, dc); // the frame that was needed
+            float fw = (hw + 0.8f * s) * k, fh = (hh + 0.6f * s) * k;
+            if (fw > 0.05f)
+                Hud_Frame(cx - fw, cy - fh, cx + fw, cy + fh, 1.4f * PX, Color_Fill(dc, 0.6f * (1.f - q)));
+        }
+    }
+}
+
+// One lane of the highway: its cells as notes, a cell a frame up from the
+// hit line.
+static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
+{
+    float rx = lx + HW_LANE, in = 0.15f, top = line_y + HW_ROWS * HW_PITCH;
+    float dim = r->dim ? 0.5f : 1.f;
+    int len = r->len < HW_ROWS ? r->len : HW_ROWS;
+
+    for (int k = 0; k < len; k++)
+    {
+        int kind = r->cell[k];
+        if (kind == CELL_NONE)
+            continue;
+        int tone = r->tone[k], al = r->alpha[k];
+        int j = k;
+        // a window two frames wide is one note two rows tall
+        if (kind == CELL_PRESS || kind == CELL_LAG || kind == CELL_TAIL)
+        {
+            while (j + 1 < len && r->cell[j + 1] == kind && r->tone[j + 1] == tone && r->alpha[j + 1] == al)
+                j++;
+        }
+        float a = al / 255.f * dim;
+        GXColor col = Tone_Color(r, tone);
+        float y0 = line_y + Note_At(r, k, HW_ROWS) * HW_PITCH + 0.04f;
+        float y1 = line_y + (Note_At(r, j, HW_ROWS) + 1.f) * HW_PITCH - 0.04f;
+        if (y0 >= top - 0.1f)
+        {
+            k = j;
+            continue; // still off the far end
+        }
+        if (y1 > top)
+            y1 = top;
+        float yc = (y0 + y1) / 2, mid = (lx + rx) / 2;
+        switch (kind)
+        {
+        case CELL_PRESS:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(col, a));
+            break;
+        case CELL_ACT:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(col, a));
+            Hud_Rect(lx + in, y0, rx - in, y0 + 0.2f * HW_PITCH + 0.04f, Color_Fill(color_white, a * 0.9f));
+            break;
+        case CELL_AIR:
+            Hud_Rect(lx + 0.45f, yc - 0.07f, rx - 0.45f, yc + 0.07f, Color_Over(col, 0.45f * a));
+            break;
+        case CELL_LAND:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(color_plate, a * 0.6f));
+            Hud_Frame(lx + in, y0, rx - in, y1, 1.4f * PX, Color_Fill(col, a));
+            Hud_Rect(lx + in, y0, rx - in, y0 + 0.24f * HW_PITCH + 0.04f, Color_Fill(col, a));
+            break;
+        case CELL_LAG:
+            Hud_Rect(mid - 0.5f, y0, mid + 0.5f, y1, Color_Fill(col, a * 0.75f));
+            break;
+        case CELL_TAIL:
+            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(color_galint, a));
+            break;
+        }
+        k = j;
+    }
+    for (int k = 0; k < len; k++)
+    {
+        float at = Note_At(r, k, HW_ROWS);
+        if (r->glyph[k] && at < HW_ROWS - 0.5f)
+            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim));
+    }
+}
+
+// The highway (Fixed Strip): one vertical lane per row, notes falling onto a
+// hit line at the bottom, a row a frame with every fifth one heavier, the
+// label under the lane. The hit line lights while a press is due, and the
+// ghost, burst and fold are the cells' at the line.
+static void Highway_Draw(FighterData *fp)
+{
+    int rows = meter_rows;
+    float x0, y0, w, h;
+    Strip_Place(fp, STRIP_HIGHWAY, &x0, &y0, &w, &h);
+    // lanes count from the screen's edge (the glyphs' column by it), so a
+    // lane added on the far side moves none of the others
+    int right = x0 > 0;
+    float glyph = Strip_Glyphs() ? HW_GLYPH : 0;
+    float glyph_x = right ? x0 + w - STRIP_PAD - glyph / 2 : x0 + STRIP_PAD + glyph / 2;
+    float lanes_l = x0 + STRIP_PAD + (right ? 0 : glyph), lanes_r = x0 + w - STRIP_PAD - (right ? glyph : 0);
+    float line_y = y0 + HW_LABEL;
+    float base_k = vis_k;
+
+    vis_k = base_k * Strip_PlateK();
+    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Fill(color_plate, 0.72f));
+    for (int k = 1; k <= HW_ROWS; k++)
+    {
+        int five = k % 5 == 0;
+        float y = line_y + k * HW_PITCH, e = five ? 0.1f : 0.05f;
+        Hud_Rect(lanes_l - 0.1f, y - e, lanes_r + 0.1f, y + e, Color_Over(color_white, five ? 0.3f : 0.12f));
+    }
+
+    for (int i = 0; i < rows; i++)
+    {
+        MeterRow *r = &meter[i];
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float lx = right ? lanes_r - (i + 1) * HW_LANE - i * HW_LANE_GAP : lanes_l + i * (HW_LANE + HW_LANE_GAP);
+        float rx = lx + HW_LANE;
+        Hud_Rect(lx, line_y, rx, line_y + HW_ROWS * HW_PITCH, Color_Over(color_white, 0.05f));
+        Hw_Lane(r, glyph_x, lx, line_y);
+
+        int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
+        if (hot > 0)
+        {
+            GXColor fill = Color_Mix(r->color, color_white, hot >= 2 ? 1.f : 0.4f);
+            Hud_Rect(lx - 0.3f, line_y - 0.2f, rx + 0.3f, line_y + HW_PITCH + 0.12f, Color_Fill(r->color, 0.3f));
+            Hud_Rect(lx - 0.15f, line_y - 0.09f, rx + 0.15f, line_y + 0.09f, fill);
+            if (hot >= 2)
+                Hud_Rect(lx - 0.3f, line_y - 0.2f, rx + 0.3f, line_y + 0.2f, color_white); // the press frame
+        }
+        else
+            Hud_Rect(lx - 0.2f, line_y - 0.07f, rx + 0.2f, line_y + 0.07f, Color_Over(color_white, r->dim ? 0.3f : 0.6f));
+
+        if (!r->dim)
+            Strip_Ending(r, (lx + rx) / 2, line_y + HW_PITCH / 2, HW_LANE / 2, HW_PITCH / 2, 1.f, 0);
+        Strip_Label(r, (lx + rx) / 2, y0 + 0.75f, HW_LANE + HW_LANE_GAP - 0.5f);
+    }
+    vis_k = base_k;
+}
+
+static int Dial_Target(int kind)
+{
+    return kind == CELL_PRESS || kind == CELL_LAND || kind == CELL_ACT;
+}
+
+// One dial for a row: the first run of cells that matter (a press, a
+// touchdown, the first frame Falcon can act) is its wedge at twelve
+// o'clock, and the hand sweeps clockwise a frame at a time into it, with
+// ticks for the last six frames. A hand more than 21 frames out waits
+// hidden. The ledge intangibility after the wedge is a band on the rim.
+static void Dial_One(MeterRow *r, float cx, float cy)
+{
+    float R = DL_R, dim = r->dim ? 0.5f : 1.f;
+    int a = -1, n = 0, tail = 0;
+    for (int k = 0; k < r->len && k < MT_CELLS; k++)
+    {
+        if (Dial_Target(r->cell[k]))
+        {
+            a = k;
+            break;
+        }
+    }
+    if (a >= 0)
+    {
+        for (n = 1; a + n < r->len && a + n < MT_CELLS && n < 24 && Dial_Target(r->cell[a + n]); n++)
+            ;
+        while (a + n + tail < r->len && a + n + tail < MT_CELLS && n + tail < 24 && r->cell[a + n + tail] == CELL_TAIL)
+            tail++;
+    }
+
+    Dial_Fan(cx, cy, R + 0.35f, 0, 360, Color_Fill(color_plate, 0.8f));
+    Dial_Band(cx, cy, R - 0.05f, R + 0.05f, 0, 360, Color_Over(color_white, 0.2f * dim));
+
+    if (a >= 0)
+    {
+        int tone = r->tone[a];
+        float al = r->alpha[a] / 255.f * dim;
+        GXColor col = Tone_Color(r, tone);
+        int hot = r->flash >= 0 ? 2 : r->hot;
+        float span = (n + r->spent) * DL_DEG;
+        if (span > 360.f)
+            span = 360.f;
+        GXColor wc = hot >= 2 && tone == TONE_CUE ? Color_Mix(col, color_white, 0.6f) : col;
+        Dial_Fan(cx, cy, R - 0.05f, 0, span, Color_Over(wc, (hot ? 1.f : 0.75f) * al));
+        if (tail > 0 && span < 360.f)
+        {
+            float end = span + tail * DL_DEG;
+            Dial_Band(cx, cy, R - 0.38f, R - 0.1f, span, end > 360.f ? 360.f : end, Color_Over(color_galint, 0.85f * al));
+        }
+
+        // ticks for the last six frames, where the hand will be (not on the
+        // routes that aren't the chosen one)
+        for (int d = 1; d <= 6 && !r->dim; d++)
+        {
+            float deg = (0.5f - d) * DL_DEG, x0, y0, x1, y1;
+            Dial_Pt(cx, cy, R - 0.4f, deg, &x0, &y0);
+            Dial_Pt(cx, cy, R, deg, &x1, &y1);
+            Hud_Seg(x0, y0, x1, y1, 0.1f, Color_Over(color_white, 0.6f * al));
+        }
+
+        // the hand, in the middle of its frame's slice
+        if (a <= 21)
+        {
+            float deg = (r->spent - a + 0.5f) * DL_DEG, hx, hy;
+            Dial_Pt(cx, cy, R + 0.2f, deg, &hx, &hy);
+            GXColor hc = tone == TONE_CUE ? Color_Mix(r->color, color_white, hot ? 1.f : 0.55f) : Tone_Color(r, tone);
+            Hud_Seg(cx, cy, hx, hy, 0.34f, Color_Over(color_plate, 0.5f * al));
+            Hud_Seg(cx, cy, hx, hy, 0.2f, Color_Over(hc, al));
+        }
+    }
+    if (r->implode == 0)
+        Dial_Fan(cx, cy, R - 0.05f, 0, DL_DEG, r->implode_tone == TONE_MISS ? color_miss : color_skip); // the frame that was needed
+    if (!r->dim)
+        Strip_Ending(r, cx, cy, R, R, 1.f, 1);
+}
+
+// The dial (Fixed Strip): a small dial for each row, side by side, the label
+// under it.
+static void Dial_Draw(FighterData *fp)
+{
+    float x0, y0, w, h;
+    Strip_Place(fp, STRIP_DIAL, &x0, &y0, &w, &h);
+    int right = x0 > 0; // counted from the screen's edge, like the highway's lanes
+    float base_k = vis_k;
+    for (int i = 0; i < meter_rows; i++)
+    {
+        MeterRow *r = &meter[i];
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float off = STRIP_PAD + DL_R + 0.35f + i * DL_CELL;
+        float cx = right ? x0 + w - off : x0 + off, cy = y0 + DL_LABEL + DL_R + 0.45f;
+        Dial_One(r, cx, cy);
+        Strip_Label(r, cx, y0 + 0.75f, DL_CELL - 0.5f);
+    }
+    vis_k = base_k;
+}
+
 // The fixed strip: bottom left, or bottom right when the controller display
-// is on the left half of the screen.
+// is on the left half of the screen. Cells, or the highway or dial in a
+// corner.
 static void Meter_Fixed(FighterData *fp)
 {
+    int look = Options_Timers[TOPT_STRIP].val;
+    if (look == STRIP_HIGHWAY)
+    {
+        Highway_Draw(fp);
+        return;
+    }
+    if (look == STRIP_DIAL)
+    {
+        Dial_Draw(fp);
+        return;
+    }
     float x0, y0, x1, y1;
     Pad_Box(fp, &x0, &y0, &x1, &y1);
     float gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 3.2f;
@@ -7041,13 +10035,13 @@ static void Meter_Fixed(FighterData *fp)
 ///////////////////////
 
 #define SPOT_HW 4.f     // half the footprint, in world units
-#define SPOT_STEM 0.9f  // bracket height, HUD units
-#define SPOT_LINE 0.28f // footprint and bracket thickness
-#define SPOT_FOOT 0.45f
+#define SPOT_STEM 1.5f  // bracket height, HUD units
+#define SPOT_LINE 0.4f  // footprint and bracket thickness
+#define SPOT_FOOT 0.7f
 
 static float Meter_Pitch(void)
 {
-    return MT_PITCH + (Options_Hud[HOPT_WIDE].val ? MT_WIDE : 0);
+    return MT_PITCH + (Options_Timers[TOPT_WIDE].val ? MT_WIDE : 0);
 }
 
 static void Spot_Bracket(float x, float y, int side, float stem, GXColor c)
@@ -7055,6 +10049,32 @@ static void Spot_Bracket(float x, float y, int side, float stem, GXColor c)
     Hud_Rect(x - SPOT_LINE / 2, y, x + SPOT_LINE / 2, y + stem, c);
     float fx = x - side * SPOT_FOOT;
     Hud_Rect(side > 0 ? fx : x, y, side > 0 ? x : fx, y + SPOT_LINE, c);
+}
+
+// A bracket on a dark edge, so it reads over any stage.
+static void Spot_BracketEdged(float x, float y, int side, float stem, GXColor c, float a)
+{
+    float e = 0.12f;
+    Hud_Rect(x - SPOT_LINE / 2 - e, y - e, x + SPOT_LINE / 2 + e, y + stem + e, Color_Over(color_plate, 0.55f * a));
+    float fx = x - side * (SPOT_FOOT + e);
+    Hud_Rect(side > 0 ? fx : x - e, y - e, side > 0 ? x + e : fx, y + SPOT_LINE + e, Color_Over(color_plate, 0.55f * a));
+    Spot_Bracket(x, y, side, stem, c);
+}
+
+// The timer's one ghost (Cue_Ghost): brackets that spread out and fade.
+static void Spot_BracketGhost(Cue *c, GXColor base, float lx, float ly, float rx, float ry)
+{
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g < 0)
+        return;
+    float q = (float)g / LL_GHOST, fade = (1.f - q) * (1.f - q);
+    float o = (bright ? 3.f : 1.4f) * Ease_Out(q);
+    GXColor gc = Color_Over(Color_Mix(base, color_white, bright ? 0.4f : 0.2f), (bright ? 0.95f : 0.45f) * fade);
+    float stem = SPOT_STEM * (1.f + (bright ? 0.6f : 0.25f) * q);
+    Spot_Bracket(lx - o, ly, -1, stem, gc);
+    Spot_Bracket(rx + o, ry, 1, stem, gc);
+    if (bright)
+        Hud_Seg(lx - o, ly, rx + o, ry, SPOT_LINE, Color_Over(base, 0.5f * fade));
 }
 
 // AI and NIL: the footprint where Falcon touches down, and brackets that
@@ -7079,30 +10099,17 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
             return;
         GXColor col = c->dim ? Dim_Color(c->dim) : base;
         float am = c->dim ? 0.5f : 1.f;
-        float charge = k >= 5 ? 0.55f : 1.f - k * 0.09f;
+        float charge = k >= 5 ? 0.75f : 1.f - k * 0.05f;
         int now = c->phase == PH_WINDOW && !c->dim;
+        Hud_Seg(lx, ly, rx, ry, SPOT_LINE + 0.24f, Color_Over(color_plate, 0.5f * am));
         Hud_Seg(lx, ly, rx, ry, SPOT_LINE + 0.04f, Color_Fill(now ? color_white : col, charge * am));
         float off = k * pitch;
-        GXColor bc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f) : col,
-                                (k == 0 ? 1.f : 0.5f + 0.5f * (1.f - k / 10.f)) * am);
-        Spot_Bracket(lx - off, ly, -1, SPOT_STEM, bc);
-        Spot_Bracket(rx + off, ry, 1, SPOT_STEM, bc);
-        if (now)
-        {
-            // the window's ghosts: brackets spreading out
-            for (int j = 0; j < c->width && j <= c->age; j++)
-            {
-                int g = c->pulse - j;
-                if (g < 0 || g >= LL_GHOST)
-                    continue;
-                float q = (float)g / LL_GHOST;
-                float o = 2.6f * Ease_Out(q);
-                int bright = j == 0 || j == c->width - 1 || j == c->age;
-                GXColor gc = Color_Fill(Color_Mix(base, color_white, 0.5f), (bright ? 0.9f : 0.45f) * (1.f - q));
-                Spot_Bracket(lx - o, ly, -1, SPOT_STEM * (1.f + 0.4f * q), gc);
-                Spot_Bracket(rx + o, ry, 1, SPOT_STEM * (1.f + 0.4f * q), gc);
-            }
-        }
+        float ba = (k == 0 ? 1.f : 0.7f + 0.3f * (1.f - k / 10.f)) * am;
+        GXColor bc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f) : col, ba);
+        Spot_BracketEdged(lx - off, ly, -1, SPOT_STEM, bc, ba);
+        Spot_BracketEdged(rx + off, ry, 1, SPOT_STEM, bc, ba);
+        if (c->phase == PH_WINDOW)
+            Spot_BracketGhost(c, base, lx, ly, rx, ry);
         return;
     }
 
@@ -7133,6 +10140,7 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
             Hud_Rect(mx - a - 0.9f, my, mx - a, my + 0.12f, sc);
             Hud_Rect(mx + a, my, mx + a + 0.9f, my + 0.12f, sc);
         }
+        Spot_BracketGhost(c, base, lx, ly, rx, ry);
         break;
     }
     case PH_FADE:
@@ -7145,6 +10153,7 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
         float o = (rx - mx) * k;
         Spot_Bracket(mx - o, my, -1, SPOT_STEM * k, dc);
         Spot_Bracket(mx + o, my, 1, SPOT_STEM * k, dc);
+        Spot_BracketGhost(c, base, lx, ly, rx, ry); // a skip's faint ghost
         break;
     }
     case PH_CUT:
@@ -7153,10 +10162,232 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
     }
 }
 
-// Waveland and wavedash: a rail as long as the slide each way, and ticks
-// that start at both ends and converge on the touchdown, thinning as they
-// come; they meet on the frame to press, then ghost back out. A white mark
-// shows where the stick held now would stop the slide.
+// A small round dot as an octagon, in three quads.
+static void Hud_Oct(float x, float y, float r, GXColor c)
+{
+    float s = r * 0.4142f;
+    Hud_Rect(x - r, y - s, x + r, y + s, c);
+    Hud_Rect(x - s, y + s, x + s, y + r, c);
+    Hud_Rect(x - s, y - r, x + s, y - s, c);
+}
+
+// A flat disc on the floor: an ellipse rx wide and ry tall.
+static void Hud_Ellipse(float cx, float cy, float rx, float ry, GXColor c)
+{
+    float px = cx + rx, py = cy;
+    for (int i = 1; i <= DISC_SEGS; i++)
+    {
+        float ang = i * (6.2831853f / DISC_SEGS);
+        float nx = cx + cos(ang) * rx, ny = cy + sin(ang) * ry;
+        Hud_Tri(cx, cy, px, py, nx, ny, c);
+        px = nx;
+        py = ny;
+    }
+}
+
+// An ellipse's outline, w thick all the way around (not thinner where it
+// is flat), in enough steps that a flat one stays smooth.
+#define ELL_SEGS 20
+static void Hud_EllipseRing(float cx, float cy, float rx, float ry, float w, GXColor c)
+{
+    float ix[ELL_SEGS + 1], iy[ELL_SEGS + 1], ox[ELL_SEGS + 1], oy[ELL_SEGS + 1];
+    if (rx < 0.05f)
+        rx = 0.05f;
+    if (ry < 0.05f)
+        ry = 0.05f;
+    if (w > ry * 1.6f)
+        w = ry * 1.6f; // the inside of a very flat ring can't turn inside out
+    for (int i = 0; i <= ELL_SEGS; i++)
+    {
+        float ang = i * (6.2831853f / ELL_SEGS);
+        float ca = cos(ang), sa = sin(ang);
+        // the outline's normal there points along (cos / rx, sin / ry)
+        float nx = ca / rx, ny = sa / ry, nl = sqrtf(nx * nx + ny * ny);
+        nx = nx / nl * w / 2;
+        ny = ny / nl * w / 2;
+        ix[i] = cx + ca * rx - nx;
+        iy[i] = cy + sa * ry - ny;
+        ox[i] = cx + ca * rx + nx;
+        oy[i] = cy + sa * ry + ny;
+    }
+    for (int i = 0; i < ELL_SEGS; i++)
+        Quad_Add(ix[i], iy[i], ox[i], oy[i], ox[i + 1], oy[i + 1], ix[i + 1], iy[i + 1], c);
+}
+
+// The wavedash timers that sit at Falcon's feet, drawn from the waveland
+// cue of a wavedash (its jumpsquat, which the cue counts down to the
+// airdodge): Pips and Ring. The countdown is the jumpsquat's own frames, so
+// a pip or a notch of the ring is a frame; the press frame is the cue's
+// window, which opens on the jumpsquat's last frame, as for any timer.
+#define WD_PIPS 4      // frames in Falcon's jumpsquat
+#define WD_SLOT 2.6f   // the pips' spacing, in world units
+#define WD_RING 4.f    // the ring when closed, and
+#define WD_STEP 3.2f   // how much wider it is for each frame left, in world units
+#define WD_FLAT 0.22f  // how flat it lies
+
+// Where the cue's spot is on the screen, and how many HUD units a world unit
+// is there.
+static int Wd_Spot(Cue *c, float *mx, float *my, float *sx)
+{
+    float hx, hy;
+    if (!Hud_FromWorld(c->spot.X, c->spot.Y, mx, my) || !Hud_FromWorld(c->spot.X + 10.f, c->spot.Y, &hx, &hy))
+        return 0;
+    *sx = (hx - *mx) / 10.f;
+    if (*sx < 0.05f)
+        *sx = 0.05f;
+    return 1;
+}
+
+// How a wavedash cue looks right now: how far along (k frames before the
+// airdodge frame, 0 in the window), how strongly it shows, and the color it
+// is drawn in. A press that worked fades it out over the ghost's frames; an
+// ending folds it away muted.
+typedef struct WdLook
+{
+    int k;
+    int lit;       // jumpsquat frames gone, of WD_PIPS
+    float alpha;
+    float fold;    // 1 live, shrinking to 0 as a miss or skip folds
+    GXColor color; // the cue's color, or the muted one
+    int now;       // the frame to press, and it's not muted
+} WdLook;
+
+static void Wd_Look(Cue *c, int ended, WdLook *w)
+{
+    GXColor base = Cue_Color(CUE_WL);
+    w->k = c->phase == PH_WINDOW ? 0 : c->left - 1;
+    if (w->k < 0)
+        w->k = 0;
+    w->lit = c->phase == PH_WINDOW ? WD_PIPS : WD_PIPS + 1 - c->left;
+    w->lit = w->lit < 0 ? 0 : w->lit > WD_PIPS ? WD_PIPS : w->lit;
+    w->alpha = 1.f;
+    w->fold = 1.f;
+    w->color = c->dim ? Dim_Color(c->dim) : base;
+    w->now = !ended && c->phase == PH_WINDOW && !c->dim;
+    if (ended && c->phase == PH_FADE)
+    {
+        float q = (float)c->age / LL_FADE;
+        w->alpha = (c->age == 0 ? 0.9f : 0.5f) * (1.f - q);
+        w->fold = 1.f - Ease_Out(q);
+        w->lit = WD_PIPS;
+    }
+    else if (ended && c->phase == PH_CUT)
+    {
+        w->alpha = 0.4f * (1.f - (float)c->age / LL_CUT);
+        w->color = color_skip;
+    }
+    else if (!ended && c->press >= 0)
+        w->alpha = 1.f - Clamp01((float)c->press / LL_GHOST); // gone with the ghost
+}
+
+// Squat pips: four small pips under Falcon's feet, one lit for each
+// jumpsquat frame, then a diamond for the airdodge frame that turns white
+// in place when it's due.
+static void Wd_Pips(Cue *c, int ended)
+{
+    float mx, my, sx;
+    if (!Wd_Spot(c, &mx, &my, &sx))
+        return;
+    float s = sx < 0.3f ? 0.3f : sx > 0.55f ? 0.55f : sx; // small shapes, kept readable at any zoom
+    float step = WD_SLOT * s, pr = 0.8f * s, dr = 1.4f * s;
+    float y = my - 2.f * s, dx = mx + 2.f * step;
+    GXColor base = Cue_Color(CUE_WL);
+
+    if (c->phase == PH_FADE || c->phase == PH_CUT || c->phase == PH_COUNT || c->phase == PH_WINDOW)
+    {
+        WdLook w;
+        Wd_Look(c, ended, &w);
+        if (w.alpha > 0.01f)
+        {
+            for (int i = 0; i < WD_PIPS; i++)
+            {
+                int on = i < w.lit;
+                float x = mx + (i - 2) * step;
+                GXColor pc = on ? (c->dim || c->phase == PH_FADE || c->phase == PH_CUT ? w.color : color_white) : color_skip;
+                Hud_Oct(x, y, pr + 0.1f, Color_Over(color_plate, 0.6f * w.alpha * (on ? 1.f : 0.6f)));
+                Hud_Oct(x, y, pr, Color_Over(pc, (on ? 0.95f : 0.4f) * w.alpha));
+            }
+            GXColor dc = w.now ? Color_Mix(base, color_white, c->age == 0 ? 0.9f : 0.4f) : c->dim || ended ? w.color : Color_Mix(base, color_plate, 0.4f);
+            float r = dr * w.fold;
+            if (r > 0.05f)
+            {
+                Hud_Diamond(dx, y, r + 0.14f, Color_Over(color_plate, 0.6f * w.alpha));
+                Hud_Diamond(dx, y, r, Color_Over(dc, 0.95f * w.alpha));
+            }
+        }
+    }
+
+    // the one ghost: a disc swelling out of the diamond
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g >= 0 && c->phase != PH_CUT)
+    {
+        float q = (float)g / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float r = (1.4f + (bright ? 3.f : 1.2f) * Ease_Out(q)) * s;
+        Hud_Disc(dx, y, r, Color_Over(Color_Mix(base, color_white, 0.35f), (bright ? 0.6f : 0.25f) * fade));
+    }
+}
+
+// Ground ring: a flat ring on the floor around Falcon's feet, a notch wider
+// for each jumpsquat frame left, closing on the airdodge frame.
+static void Wd_Ring(Cue *c, int ended)
+{
+    float mx, my, sx;
+    if (!Wd_Spot(c, &mx, &my, &sx))
+        return;
+    GXColor base = Cue_Color(CUE_WL);
+
+    if (c->phase == PH_FADE || c->phase == PH_CUT || c->phase == PH_COUNT || c->phase == PH_WINDOW)
+    {
+        WdLook w;
+        Wd_Look(c, ended, &w);
+        float appear = c->phase == PH_COUNT ? Clamp01((c->span - c->left + 1) / 2.f) : 1.f;
+        float rw = (WD_RING + WD_STEP * w.k) * w.fold, a = w.alpha * appear;
+        GXColor rc = w.now ? color_white : w.color;
+        if (rw * sx > 0.1f && a > 0.01f)
+        {
+            Hud_EllipseRing(mx, my, rw * sx, rw * sx * WD_FLAT, 0.42f, Color_Over(color_plate, 0.5f * a));
+            Hud_EllipseRing(mx, my, rw * sx, rw * sx * WD_FLAT, 0.28f, Color_Over(rc, 0.95f * a));
+        }
+    }
+
+    // the one ghost: a flat disc swelling out of the closed ring
+    int bright, g = Cue_Ghost(c, &bright);
+    if (g >= 0 && c->phase != PH_CUT)
+    {
+        float q = (float)g / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float rx = (WD_RING + (bright ? 12.f : 4.f) * Ease_Out(q)) * sx;
+        Hud_Ellipse(mx, my, rx, rx * (WD_FLAT + 0.03f), Color_Over(Color_Mix(base, color_white, 0.35f), (bright ? 0.55f : 0.22f) * fade));
+    }
+}
+
+// Waveland and wavedash: a rail as long as the slide each way, and a mark on
+// each end that counts down to the airdodge frame, in the look picked in the
+// Timers menu: ticks that slide in and spike where they meet, rails that
+// fill from the ends, or chevrons that hop a notch a frame. Every look
+// crosses the rail at one speed, whatever the lead; a shorter one just
+// starts closer. They meet in the middle on the frame to press, then the
+// timer's one ghost plays in place. A white mark shows where the stick held
+// now would stop the slide.
+#define RAIL_FRAMES (LL_COUNT_FRAMES - 1) // frames a mark takes to cross a whole rail
+#define RAIL_FILL 0.3f                    // how thick the filling rails are
+#define CHEV_STEPS 8                      // notches a chevron hops over the last frames
+#define CHEV_GAP 0.5f                     // the last notch's distance from the spot
+
+// The rails on the screen: the spot and the slide's two ends, and which
+// directions work.
+typedef struct RailGeom
+{
+    float mx, my, lx, ly, rx, ry;
+    int ok_l, ok_r;
+} RailGeom;
+
+// How far along its rail a mark k frames from the airdodge frame is: 0 at the
+// spot, 1 at the slide's end.
+static float Rail_Q(int k)
+{
+    return Clamp01((float)k / RAIL_FRAMES);
+}
+
 // A bump standing on y: a bell curve wb wide at its foot and h tall, the
 // shape of the waveland ticks' wave.
 #define BUMP_SLICES 8
@@ -7174,16 +10405,140 @@ static void Hud_Bump(float cx, float y, float wb, float h, GXColor c)
     }
 }
 
-// One of the waveland ticks at f of the way from the spot (0) to the slide's
-// end (1): wide and low out at the ends, where it first catches the eye,
-// thinner and taller as it closes in, and a spike where the two meet, like
-// two waves adding up.
-static void Rail_Tick(float x, float y, float f, GXColor c)
+// How tall the spike gets: about Falcon's height on the screen, kept between
+// a height that shows and one that fills it.
+static float Rail_Peak(Cue *c)
 {
-    float n = 1.f - f;
-    float wb = 0.4f + 1.2f * f;
-    float h = 0.8f + 1.9f * n * n * n;
+    float ax, ay, bx, by;
+    if (!Hud_FromWorld(c->spot.X, c->spot.Y, &ax, &ay) || !Hud_FromWorld(c->spot.X, c->spot.Y + 17.f, &bx, &by))
+        return 6.f;
+    float h = fabs(by - ay);
+    return h < 4.5f ? 4.5f : h > 12.f ? 12.f : h;
+}
+
+// One of the waveland ticks, q of the way from the spot (0) to the slide's
+// end (1): wide and low out at the ends, where it first catches the eye. It
+// keeps the same area as its foot narrows at a steady rate, so it shoots up
+// taller and faster the closer it gets, to peak tall at the spot, while it
+// slides in at a steady speed.
+#define TICK_W0 0.6f // the foot at the spot
+#define TICK_W1 4.0f // and at the slide's end
+static void Rail_Tick(float x, float y, float q, float peak, GXColor c)
+{
+    float wb = TICK_W0 + (TICK_W1 - TICK_W0) * q;
+    float h = peak * TICK_W0 / wb;
+    Hud_Bump(x, y - 0.15f, wb + 0.3f, h + 0.25f, Color_Over(color_plate, 0.5f * c.a / 255.f));
     Hud_Bump(x, y - 0.15f, wb, h, c);
+}
+
+// The countdown, k frames from the airdodge frame (0 in the window), in
+// the picked look, in col at am of its strength.
+static void Rail_Count(int look, Cue *c, RailGeom *g, int k, GXColor col, float am)
+{
+    float q = Rail_Q(k), n = 1.f - q;
+    int now = c->phase == PH_WINDOW && !c->dim;
+    GXColor tc = now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f) : Color_Mix(col, color_white, 0.35f * n * n);
+    GXColor mark = Color_Over(tc, (0.85f + 0.15f * n) * am);
+
+    switch (look)
+    {
+    case WLT_TICKS:
+    {
+        float peak = Rail_Peak(c);
+        if (k == 0)
+        {
+            // they have met: one spike
+            if (g->ok_l || g->ok_r)
+                Rail_Tick(g->mx, g->my, 0, peak, mark);
+            break;
+        }
+        if (g->ok_l)
+            Rail_Tick(g->mx + (g->lx - g->mx) * q, g->my + (g->ly - g->my) * q, q, peak, mark);
+        if (g->ok_r)
+            Rail_Tick(g->mx + (g->rx - g->mx) * q, g->my + (g->ry - g->my) * q, q, peak, mark);
+        break;
+    }
+    case WLT_RAILS:
+        // the rail fills from its end toward the spot, the same share each
+        // frame on both sides, and is full on the airdodge frame
+        for (int side = -1; side <= 1; side += 2)
+        {
+            if (side < 0 ? !g->ok_l : !g->ok_r)
+                continue;
+            float ex = side < 0 ? g->lx : g->rx, ey = side < 0 ? g->ly : g->ry;
+            if (n < 0.001f)
+                continue;
+            float tx = ex + (g->mx - ex) * n, ty = ey + (g->my - ey) * n;
+            Hud_Seg(ex, ey, tx, ty, RAIL_FILL + 0.14f, Color_Over(color_plate, 0.5f * am));
+            Hud_Seg(ex, ey, tx, ty, RAIL_FILL, mark);
+            if (k > 0)
+                Hud_Rect(tx - 0.08f, ty - 0.12f, tx + 0.08f, ty + 0.6f, Color_Over(Color_Mix(tc, color_white, 0.5f), 0.9f * am));
+        }
+        break;
+    case WLT_CHEVRONS:
+    {
+        // arrowheads pointing at the spot, a notch closer a frame over the
+        // last CHEV_STEPS; the notches are marked under the rail
+        int step = k > CHEV_STEPS ? CHEV_STEPS : k;
+        for (int side = -1; side <= 1; side += 2)
+        {
+            if (side < 0 ? !g->ok_l : !g->ok_r)
+                continue;
+            float ex = side < 0 ? g->lx : g->rx, ey = side < 0 ? g->ly : g->ry;
+            float dx = ex - g->mx, dy = ey - g->my, len = sqrtf(dx * dx + dy * dy);
+            if (len < 3.f * CHEV_GAP)
+                continue;
+            float ux = dx / len, uy = dy / len, notch = (len - CHEV_GAP) / (CHEV_STEPS + 1);
+            for (int i = 1; i <= CHEV_STEPS; i++)
+            {
+                float p = CHEV_GAP + i * notch;
+                Hud_Rect(g->mx + ux * p - 0.05f, g->my + uy * p - 0.45f, g->mx + ux * p + 0.05f, g->my + uy * p - 0.1f, Color_Over(color_white, 0.4f * am));
+            }
+            float p = CHEV_GAP + step * notch;
+            float tx = g->mx + ux * p, ty = g->my + uy * p + 0.75f;
+            float bx = tx + ux * 0.65f, by = ty + uy * 0.65f, wx = -uy * 0.7f, wy = ux * 0.7f;
+            GXColor edge = Color_Over(color_plate, 0.5f * am);
+            Hud_Seg(bx + wx, by + wy, tx, ty, 0.42f, edge);
+            Hud_Seg(bx - wx, by - wy, tx, ty, 0.42f, edge);
+            Hud_Seg(bx + wx, by + wy, tx, ty, 0.26f, mark);
+            Hud_Seg(bx - wx, by - wy, tx, ty, 0.26f, mark);
+        }
+        break;
+    }
+    }
+}
+
+// The rails' one ghost (Cue_Ghost), in place like the look it belongs to,
+// strong and growing for a press that worked, small and dim for a skip:
+// the spike swells into a glow (Ticks), the rails swell (Rails), a disc
+// rises at the spot (Chevrons). Nothing runs back out along the rail.
+static void Spot_RailGhost(int look, Cue *c, GXColor base, RailGeom *g)
+{
+    int bright, gh = Cue_Ghost(c, &bright);
+    if (gh < 0)
+        return;
+    float q = (float)gh / LL_GHOST, e = Ease_Out(q), fade = (1.f - q) * (1.f - q);
+    GXColor gc = Color_Mix(base, color_white, bright ? 0.4f : 0.2f);
+    switch (look)
+    {
+    case WLT_TICKS:
+    {
+        float wb = TICK_W0 + (bright ? 2.2f : 1.0f) * e;
+        float h = Rail_Peak(c) * (bright ? 1.f + 0.25f * e : 0.5f);
+        Hud_Bump(g->mx, g->my - 0.15f, wb, h, Color_Over(gc, (bright ? 0.95f : 0.45f) * fade));
+        break;
+    }
+    case WLT_RAILS:
+    {
+        float ax = g->ok_l ? g->lx : g->mx, ay = g->ok_l ? g->ly : g->my;
+        float bx = g->ok_r ? g->rx : g->mx, by = g->ok_r ? g->ry : g->my;
+        Hud_Seg(ax, ay, bx, by, RAIL_FILL + 2.f * (bright ? 0.9f : 0.35f) * e, Color_Over(gc, (bright ? 0.6f : 0.25f) * fade));
+        break;
+    }
+    case WLT_CHEVRONS:
+        Hud_Disc(g->mx, g->my + 0.5f, bright ? 0.5f + 1.8f * e : 0.3f + 0.6f * e, Color_Over(gc, (bright ? 0.6f : 0.25f) * fade));
+        break;
+    }
 }
 
 static void Spot_Rails(Cue *c, FighterData *fp, int ended)
@@ -7203,12 +10558,17 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
     GXColor base = Cue_Color(CUE_WL);
     int ok_l = c->wd || (c->dirs & DODGE_LEFT);
     int ok_r = c->wd || (c->dirs & DODGE_RIGHT);
+    RailGeom g = {mx, my, lx, ly, rx, ry, ok_l, ok_r};
+    int look = Options_Timers[TOPT_WL].val;
+    // a wavedash out of the jumpsquat has a timer of its own (Wavedash in
+    // the menu), so the rails only mark the slide then, unless that timer
+    // is the strip's row
+    int timed = !c->wd || Options_Timers[TOPT_WD].val == WDT_CELLS;
 
     if (!ended && (c->phase == PH_COUNT || c->phase == PH_WINDOW))
     {
         GXColor col = c->dim ? Dim_Color(c->dim) : base;
         float am = c->dim ? 0.5f : 1.f;
-        int now = c->phase == PH_WINDOW && !c->dim;
 
         Hud_Seg(lx, ly, mx, my, 0.12f, Color_Fill(col, (ok_l ? 0.4f : 0.15f) * am));
         Hud_Seg(mx, my, rx, ry, 0.12f, Color_Fill(col, (ok_r ? 0.4f : 0.15f) * am));
@@ -7228,32 +10588,13 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
                 Hud_Rect(ex - 0.1f, ey, ex + 0.1f, ey + 0.75f, ec);
         }
 
+        // a countdown fades in over its first 2 frames
         int k = c->phase == PH_WINDOW ? 0 : c->left - 1;
-        float f = c->span > 1 ? Clamp01((float)k / (c->span - 1)) : 0;
-        float n = 1.f - f;
-        GXColor tc = Color_Fill(now ? Color_Mix(col, color_white, c->age == 0 ? 0.9f : 0.4f)
-                                    : Color_Mix(col, color_white, 0.35f * n * n),
-                                (0.75f + 0.25f * n) * am);
-        if (ok_l)
-            Rail_Tick(mx + (lx - mx) * f, my + (ly - my) * f, f, tc);
-        if (ok_r)
-            Rail_Tick(mx + (rx - mx) * f, my + (ry - my) * f, f, tc);
-        if (now)
-        {
-            for (int j = 0; j < c->width && j <= c->age; j++)
-            {
-                int g = c->pulse - j;
-                if (g < 0 || g >= LL_GHOST)
-                    continue;
-                float q = (float)g / LL_GHOST, e = Ease_Out(q) * 0.6f;
-                int bright = j == 0 || j == c->width - 1 || j == c->age;
-                GXColor gc = Color_Fill(Color_Mix(base, color_white, 0.5f), (bright ? 0.9f : 0.45f) * (1.f - q));
-                if (ok_l)
-                    Hud_Rect(mx + (lx - mx) * e - 0.12f, my + (ly - my) * e - 0.2f, mx + (lx - mx) * e + 0.12f, my + (ly - my) * e + 1.1f, gc);
-                if (ok_r)
-                    Hud_Rect(mx + (rx - mx) * e - 0.12f, my + (ry - my) * e - 0.2f, mx + (rx - mx) * e + 0.12f, my + (ry - my) * e + 1.1f, gc);
-            }
-        }
+        float appear = c->phase == PH_COUNT ? Clamp01((c->span - c->left + 1) / 2.f) : 1.f;
+        if (timed)
+            Rail_Count(look, c, &g, k < 0 ? 0 : k, col, am * appear);
+        if (timed && c->phase == PH_WINDOW)
+            Spot_RailGhost(look, c, base, &g);
 
         // where the stick held now would stop the slide: the dodge takes
         // its angle and keeps the sideways part of its speed
@@ -7300,15 +10641,9 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
             Hud_FromWorld(fx, c->spot.Y, &hx, &hy);
             Hud_Rect(hx - 0.1f, hy - 0.2f, hx + 0.1f, hy + 1.0f, Color_Fill(color_white, 0.85f * fade));
         }
-        if (age < LL_GHOST * 2)
-        {
-            // the pulse out along the floor
-            float q = (float)age / (LL_GHOST * 2), e = Ease_Out(q);
-            GXColor gc = Color_Fill(Color_Mix(base, color_white, 0.4f), 0.9f * (1.f - q) * s);
-            float ox = (rx - mx) * e, oy = (ry - my) * e;
-            Hud_Rect(mx + ox - 0.12f, my + oy - 0.2f, mx + ox + 0.12f, my + oy + 1.2f, gc);
-            Hud_Rect(mx - ox - 0.12f, my - oy - 0.2f, mx - ox + 0.12f, my - oy + 1.2f, gc);
-        }
+        // the ghost carries on from the press
+        if (timed)
+            Spot_RailGhost(look, c, base, &g);
         break;
     }
     case PH_FADE:
@@ -7319,6 +10654,8 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
         Hud_Seg(mx + (lx - mx) * k, my + (ly - my) * k, mx + (rx - mx) * k, my + (ry - my) * k, 0.14f, dc);
         Hud_Rect(mx + (lx - mx) * k - 0.1f, my, mx + (lx - mx) * k + 0.1f, my + 1.1f * k, dc);
         Hud_Rect(mx + (rx - mx) * k - 0.1f, my, mx + (rx - mx) * k + 0.1f, my + 1.1f * k, dc);
+        if (timed)
+            Spot_RailGhost(look, c, base, &g); // a skip's faint ghost
         break;
     }
     case PH_CUT:
@@ -7327,8 +10664,748 @@ static void Spot_Rails(Cue *c, FighterData *fp, int ended)
     }
 }
 
+// The timers that ride with Falcon, in the looks of the Near Falcon option.
+// Each is drawn on the HUD from the cues and his position alone, so a paused
+// game draws the same picture again, and in world sizes that follow the
+// camera's zoom, kept between a size that can be read and one that crowds the
+// screen. They all share what the timers promise: a countdown closes at one
+// fixed speed a frame whatever its lead (a shorter one starts closer), the
+// press frame is the moving part arriving and turning white, a hit sends out
+// the one strong ghost that grows, a skip a smaller, dimmer one, and a miss
+// none: it folds away in slate (a skip in gray).
+#define NEAR_PI 3.1415927f
+#define NEAR_TAU 6.2831853f
+#define NEAR_FILL 12       // the ECB look: frames it takes to fill
+#define NEAR_LIGHTS_MAX 12 // the lights look: lights drawn, at most
+
+enum near_mode
+{
+    NMODE_NONE,   // nothing but a ghost: a hit, or a press that worked waiting for its touchdown
+    NMODE_COUNT,  // closing on the press
+    NMODE_WINDOW, // the press works now
+    NMODE_FOLD,   // a miss or a skip folding in
+    NMODE_CUT,    // a countdown the prediction dropped
+};
+
+// What a look needs of one cue to draw it.
+typedef struct NearCue
+{
+    Cue *c;
+    int mode;
+    int k;        // counting: frames until the press, 0 on its frame
+    int w;        // frames in the window
+    int age;      // frames into the window, or into the ending
+    int dim;      // a miss or skip already decided
+    int now;      // the press works on this frame: white
+    int ghost;    // the ghost's age, -1 none
+    int bright;   // ... of a press that worked
+    float appear; // fading in over the countdown's first 2 frames
+    GXColor base; // the cue's own color
+    GXColor col;  // what its shapes are in: base, or slate or gray once a miss or skip is decided
+} NearCue;
+
+static int Near_Shown(int kind)
+{
+    return kind == CUE_AI ? Cues_Ai() : kind == CUE_WL ? Cues_Waveland() : Cues_Nil();
+}
+
+static float Near_Clamp(float v, float lo, float hi)
+{
+    return v < lo ? lo : v > hi ? hi : v;
+}
+
+// HUD units a world unit takes up at (x, y): the camera's zoom there.
+static float Near_Scale(float x, float y)
+{
+    float ax, ay, bx, by;
+    Hud_FromWorld(x, y, &ax, &ay);
+    Hud_FromWorld(x, y + 10.f, &bx, &by);
+    float s = sqrtf((bx - ax) * (bx - ax) + (by - ay) * (by - ay)) / 10.f;
+    return s > 0.02f ? s : 0.02f;
+}
+
+// The cue as a look draws it. Returns 0 when there is nothing to draw: no
+// cue, a wavedash out of the jumpsquat (its own timers draw that), or an
+// ending past its ghost.
+static int Near_Cue(int kind, Cue *c, NearCue *n)
+{
+    memset(n, 0, sizeof(*n));
+    if (!c->phase || (kind == CUE_WL && c->wd))
+        return 0;
+    n->c = c;
+    n->base = Cue_Color(kind);
+    n->dim = c->dim;
+    n->col = c->dim ? Dim_Color(c->dim) : n->base;
+    n->w = c->width > 0 ? c->width : 1;
+    n->age = c->age;
+    n->appear = 1.f;
+    n->ghost = Cue_Ghost(c, &n->bright);
+    switch (c->phase)
+    {
+    case PH_COUNT:
+        // a NIL's press is its touchdown, a frame before the one it acts on
+        n->mode = NMODE_COUNT;
+        n->k = kind == CUE_NIL ? c->left - 2 : c->left - 1;
+        if (n->k < 0)
+            n->k = 0;
+        // fades in over its first 2 frames (a countdown that grew a frame
+        // stays as it was)
+        n->appear = c->span - c->left + 1 < 1 ? 1.f : Clamp01((c->span - c->left + 1) / 2.f);
+        n->now = n->k == 0 && !c->dim;
+        break;
+    case PH_WINDOW:
+        // once the press worked, its ghost plays on alone
+        n->mode = c->held || c->age >= c->width ? NMODE_NONE : NMODE_WINDOW;
+        n->now = c->age == 0 && !c->dim;
+        break;
+    case PH_FADE:
+        n->mode = NMODE_FOLD;
+        break;
+    case PH_CUT:
+        n->mode = NMODE_CUT;
+        break;
+    }
+    return n->mode != NMODE_NONE || n->ghost >= 0;
+}
+
+// Segments for a circle of radius r (HUD units) that keep its edge round to
+// about a pixel, an even number so a disc is half as many quads.
+static int Near_Segs(float r, int least)
+{
+    int n = (int)(12.f * sqrtf(r) + 0.99f);
+    n += n & 1;
+    return n < least ? least : n > 36 ? 36 : n;
+}
+
+// A circle's outline from angle a0 to a1 (radians, counterclockwise from
+// the right), w wide and centered on radius r.
+static void Near_Arc(float cx, float cy, float r, float w, float a0, float a1, GXColor c)
+{
+    float span = a1 - a0;
+    if (span <= 0.f || r <= 0.f)
+        return;
+    int n = (int)(span / NEAR_TAU * Near_Segs(r, 10) + 0.99f);
+    float r0 = r - w / 2, r1 = r + w / 2;
+    if (r0 < 0.f)
+        r0 = 0.f;
+    float px = cos(a0), py = sin(a0);
+    for (int i = 1; i <= n; i++)
+    {
+        float a = a0 + span * i / n;
+        float nx = cos(a), ny = sin(a);
+        Quad_Add(cx + px * r0, cy + py * r0, cx + px * r1, cy + py * r1, cx + nx * r1, cy + ny * r1, cx + nx * r0, cy + ny * r0, c);
+        px = nx;
+        py = ny;
+    }
+}
+
+static void Near_Ring(float cx, float cy, float r, float w, GXColor c)
+{
+    Near_Arc(cx, cy, r, w, 0.f, NEAR_TAU, c);
+}
+
+// A filled slice of a circle from a0 to a1, with at least least segments
+// around a whole one. Two slices go in each quad (a kite from the center).
+static void Near_Fan(float cx, float cy, float r, float a0, float a1, int least, GXColor c)
+{
+    float span = a1 - a0;
+    if (span <= 0.f || r <= 0.f)
+        return;
+    int n = (int)(span / NEAR_TAU * Near_Segs(r, least) + 0.99f);
+    float px[40], py[40];
+    if (n > 38)
+        n = 38;
+    for (int i = 0; i <= n; i++)
+    {
+        float a = a0 + span * i / n;
+        px[i] = cx + r * cos(a);
+        py[i] = cy + r * sin(a);
+    }
+    int i = 0;
+    for (; i + 1 < n; i += 2)
+        Quad_Add(cx, cy, px[i], py[i], px[i + 1], py[i + 1], px[i + 2], py[i + 2], c);
+    if (i < n)
+        Hud_Tri(cx, cy, px[i], py[i], px[i + 1], py[i + 1], c);
+}
+
+static void Near_Disc(float cx, float cy, float r, GXColor c)
+{
+    Near_Fan(cx, cy, r, 0.f, NEAR_TAU, 10, c);
+}
+
+// A small dot: an octagon, or a hexagon at the smallest.
+static void Near_Dot(float cx, float cy, float r, GXColor c)
+{
+    Near_Fan(cx, cy, r, 0.f, NEAR_TAU, 6, c);
+}
+
+// The bubble: a ring closes on a bubble where Falcon's body will be on the
+// first frame the press works (Cue_Body), at one fixed speed a frame, and
+// touches it on that frame. In the window the bubble is a pie that drains a
+// frame at a time, its edge white as the window opens. A hit's ghost fills
+// the bubble, grows to about 2.3 times its size and bursts in six spokes; a
+// skip's is smaller and dimmer; a miss's ring folds away in slate. The bubble
+// never moves once its window has opened, so it never chases Falcon, and may
+// cover the path under it.
+static void Near_Bubble(int kind, Cue *c)
+{
+    NearCue n;
+    if (!Near_Cue(kind, c, &n))
+        return;
+    // where his body will be; with no countdown behind a hit, where he is
+    float bx = c->has_body ? c->body.X : c->spot.X;
+    float by = c->has_body ? c->body.Y : c->spot.Y + body_offset;
+    float hx, hy;
+    if (!Hud_FromWorld(bx, by, &hx, &hy))
+        return;
+    float S = Near_Scale(bx, by);
+    float rb = Near_Clamp(3.6f * S, 0.9f, 2.4f); // the bubble's radius
+    float step = rb * 0.172f;                    // the ring's speed, a frame
+    float wr = Near_Clamp(0.16f * rb, 0.12f, 0.3f);
+    float ew = wr + 0.1f; // the dark under-stroke
+
+    if (n.mode == NMODE_COUNT)
+    {
+        float a = n.appear;
+        Near_Disc(hx, hy, rb, Color_Over(color_plate, 0.45f * a));
+        Near_Ring(hx, hy, rb, ew, Color_Over(color_plate, 0.4f * a));
+        Near_Ring(hx, hy, rb, wr, Color_Over(n.now ? color_white : n.col, 0.9f * a));
+        Hud_Diamond(hx, hy, 0.4f * rb, Color_Over(color_plate, 0.5f * a));
+        Hud_Diamond(hx, hy, 0.28f * rb, Color_Over(n.col, 0.9f * a));
+        if (n.k > 0)
+        {
+            float ra = rb + n.k * step;
+            if (n.k <= 6) // far out its dark edge isn't worth the quads
+                Near_Ring(hx, hy, ra, ew, Color_Over(color_plate, 0.35f * a));
+            Near_Ring(hx, hy, ra, wr, Color_Over(Color_Mix(n.col, color_white, 0.25f), 0.7f * a));
+        }
+    }
+    else if (n.mode == NMODE_WINDOW)
+    {
+        float left = (float)(n.w - n.age) / n.w;
+        Near_Disc(hx, hy, rb, Color_Over(color_plate, 0.5f));
+        Near_Fan(hx, hy, rb, NEAR_PI / 2.f - NEAR_TAU * left, NEAR_PI / 2.f, 10, Color_Over(n.col, 0.9f));
+        Near_Ring(hx, hy, rb, ew, Color_Over(color_plate, 0.4f));
+        Near_Ring(hx, hy, rb, wr, Color_Over(n.now ? color_white : n.col, 1.f));
+    }
+    else if (n.mode == NMODE_FOLD)
+    {
+        float q = Clamp01((float)n.age / LL_FADE);
+        float r = rb * (1.f - Ease_Out(q));
+        if (r > 0.25f)
+        {
+            Near_Ring(hx, hy, r, ew, Color_Over(color_plate, 0.35f * (1.f - q)));
+            Near_Ring(hx, hy, r, wr, Color_Over(n.col, 0.8f * (1.f - q)));
+        }
+    }
+    else if (n.mode == NMODE_CUT)
+        Near_Ring(hx, hy, rb, wr, Color_Over(color_skip, 0.35f * (1.f - (float)n.age / LL_CUT)));
+
+    if (n.ghost >= 0)
+    {
+        float q = (float)n.ghost / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float r = rb * (1.f + (n.bright ? 1.3f : 0.5f) * Ease_Out(q));
+        Near_Disc(hx, hy, r, Color_Over(Color_Mix(n.base, color_white, n.bright ? 0.3f : 0.15f), (n.bright ? 0.6f : 0.22f) * fade));
+        Near_Ring(hx, hy, r, wr * 1.2f, Color_Over(Color_Mix(n.base, color_white, 0.4f), (n.bright ? 0.95f : 0.45f) * fade));
+        if (n.bright)
+        {
+            for (int i = 0; i < 6; i++)
+            {
+                float ang = i * NEAR_PI / 3.f + NEAR_PI / 6.f, cs = cos(ang), sn = sin(ang);
+                Hud_Seg(hx + cs * r * 0.9f, hy + sn * r * 0.9f, hx + cs * r * 1.5f, hy + sn * r * 1.5f, wr, Color_Over(n.base, fade));
+            }
+        }
+    }
+}
+
+// The halo: a faint ring around Falcon's body, which it follows, with a bead
+// running clockwise at 15 degrees a frame into the window's notch at twelve
+// o'clock (as wide as the window, 15 degrees a frame of it); the last three
+// frames are dots on the ring. A hit lights the ring up a little and grows
+// it; the ghost stays modest.
+static void Near_Halo(FighterData *fp, NearCue *n)
+{
+    float x = fp->phys.pos.X, y = fp->phys.pos.Y + body_offset;
+    float hx, hy;
+    if (!Hud_FromWorld(x, y, &hx, &hy))
+        return;
+    float S = Near_Scale(x, y);
+    float R = Near_Clamp(12.f * S, 2.6f, 7.5f);
+    float wf = 0.12f;                             // the faint ring
+    float wn = Near_Clamp(1.2f * S, 0.3f, 0.5f);   // the notch
+    float step = NEAR_PI / 12.f;                   // 15 degrees
+    float top = NEAR_PI / 2.f;                     // twelve o'clock; a frame before it is counterclockwise
+
+    if (n->mode == NMODE_COUNT || n->mode == NMODE_WINDOW)
+    {
+        float a = n->mode == NMODE_COUNT ? n->appear : 1.f;
+        Near_Ring(hx, hy, R, wf + 0.1f, Color_Over(color_plate, 0.25f * a));
+        Near_Ring(hx, hy, R, wf, Color_Over(color_white, 0.3f * a));
+        float w = n->w * step;
+        if (w > NEAR_TAU - 2.f * step)
+            w = NEAR_TAU - 2.f * step;
+        Near_Arc(hx, hy, R, wn + 0.12f, top - w, top, Color_Over(color_plate, 0.5f));
+        Near_Arc(hx, hy, R, wn, top - w, top, Color_Over(n->col, 0.9f));
+
+        float dr = Near_Clamp(0.6f * S, 0.18f, 0.32f);
+        for (int j = 1; j <= 3; j++)
+        {
+            float ang = top + j * step;
+            Near_Dot(hx + R * cos(ang), hy + R * sin(ang), dr + 0.07f, Color_Over(color_plate, 0.5f * a));
+            Near_Dot(hx + R * cos(ang), hy + R * sin(ang), dr, Color_Over(color_white, 0.7f * a));
+        }
+
+        if (n->mode == NMODE_COUNT)
+        {
+            // the bead and its tail, the tail trailing counterclockwise
+            float br = Near_Clamp(1.4f * S, 0.4f, 0.75f);
+            for (int pass = 0; pass < 2; pass++)
+            {
+                for (int tail = 3; tail >= 0; tail--)
+                {
+                    float ang = top + (n->k + tail * 0.35f) * step;
+                    float r = br * (1.f - 0.19f * tail), al = (1.f - 0.25f * tail) * a;
+                    if (pass == 0)
+                        Near_Dot(hx + R * cos(ang), hy + R * sin(ang), r + 0.09f, Color_Over(color_plate, 0.4f * al));
+                    else
+                        Near_Dot(hx + R * cos(ang), hy + R * sin(ang), r, Color_Over(Color_Mix(n->col, color_white, 0.6f), al));
+                }
+            }
+        }
+        else
+        {
+            float ang = top - (n->age + 0.5f) * step;
+            float br = Near_Clamp(1.5f * S, 0.42f, 0.8f);
+            Near_Dot(hx + R * cos(ang), hy + R * sin(ang), br + 0.1f, Color_Over(color_plate, 0.55f));
+            Near_Dot(hx + R * cos(ang), hy + R * sin(ang), br, Color_Over(n->dim ? n->col : color_white, 1.f));
+        }
+    }
+    else if (n->mode == NMODE_FOLD)
+    {
+        float q = Clamp01((float)n->age / LL_FADE);
+        float r = R * (1.f - 0.5f * Ease_Out(q));
+        Near_Ring(hx, hy, r, wf + 0.12f, Color_Over(color_plate, 0.3f * (1.f - q)));
+        Near_Ring(hx, hy, r, wf + 0.04f, Color_Over(n->col, 0.6f * (1.f - q)));
+    }
+    else if (n->mode == NMODE_CUT)
+        Near_Ring(hx, hy, R, wf, Color_Over(color_skip, 0.3f * (1.f - (float)n->age / LL_CUT)));
+
+    if (n->ghost >= 0)
+    {
+        float q = (float)n->ghost / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float r = R * (1.f + (n->bright ? 0.22f : 0.1f) * Ease_Out(q));
+        float gw = n->bright ? Near_Clamp(0.9f * S, 0.15f, 0.36f) : Near_Clamp(0.5f * S, 0.1f, 0.2f);
+        if (n->bright)
+            Near_Disc(hx, hy, r, Color_Over(n->base, 0.14f * fade));
+        Near_Ring(hx, hy, r, gw, Color_Over(Color_Mix(n->base, color_white, 0.35f), (n->bright ? 0.9f : 0.4f) * fade));
+    }
+}
+
+// Falcon's ECB as the game collides with it this frame, CollData's
+// ecbCurrCorrect_* (offsets from his position): the top, right, bottom and
+// left points, in v. One not built yet (all zero) gets a stand-in.
+static void Near_Ecb(FighterData *fp, Vec2 *v)
+{
+    CollData *cd = &fp->coll_data;
+    v[0] = cd->ecbCurrCorrect_top;
+    v[1] = cd->ecbCurrCorrect_right;
+    v[2] = cd->ecbCurrCorrect_bot;
+    v[3] = cd->ecbCurrCorrect_left;
+    if (v[0].Y - v[2].Y < 6.f || v[1].X - v[3].X < 2.f)
+    {
+        v[0] = (Vec2){0.f, 17.f};
+        v[1] = (Vec2){4.5f, 9.5f};
+        v[2] = (Vec2){0.f, 0.f};
+        v[3] = (Vec2){-4.5f, 9.5f};
+    }
+}
+
+// A bracket whose bar stands at x from y0 up to y1 with a foot at each end
+// reaching toward the middle (side > 0: the right bracket, a ] shape); no
+// part overlaps another, so a translucent one shows no darker corners.
+static void Near_Bracket(float x, float y0, float y1, int side, float foot, float w, GXColor c)
+{
+    float out = x + side * w / 2, in = x - side * foot;
+    float lo = out < in ? out : in, hi = out < in ? in : out;
+    Hud_Rect(x - w / 2, y0 + w / 2, x + w / 2, y1 - w / 2, c);
+    Hud_Rect(lo, y0 - w / 2, hi, y0 + w / 2, c);
+    Hud_Rect(lo, y1 - w / 2, hi, y1 + w / 2, c);
+}
+
+// The pincers: two brackets as tall as Falcon's ECB close in from both sides
+// at a fixed speed a frame and clamp onto his body width on the press frame,
+// holding through the window, each on a dark under-stroke. A hit's ghost
+// spreads them out again with a fill between; a miss folds them up to their
+// middle in slate. Wide is the ECB's own width plus a little, kept near his
+// body's.
+static void Near_Pincers(FighterData *fp, NearCue *n)
+{
+    Vec2 v[4];
+    Near_Ecb(fp, v);
+    float x = fp->phys.pos.X, y = fp->phys.pos.Y;
+    float hx, y0, y1, unused;
+    if (!Hud_FromWorld(x, y + v[2].Y, &hx, &y0) || !Hud_FromWorld(x, y + v[0].Y, &unused, &y1))
+        return;
+    float S = Near_Scale(x, y + v[1].Y);
+    float half = Near_Clamp((v[1].X - v[3].X) / 2.f + 0.5f, 3.6f, 7.f) * S; // body width, HUD units
+    float step = Near_Clamp(0.6f * S, 0.1f, 0.22f);
+    float foot = Near_Clamp(1.6f * S, 0.35f, 0.8f);
+    float w = Near_Clamp(0.6f * S, 0.12f, 0.28f);
+    float e = 0.1f; // the under-stroke's extra width
+
+    if (n->mode == NMODE_COUNT || n->mode == NMODE_WINDOW)
+    {
+        int count = n->mode == NMODE_COUNT;
+        float a = count ? n->appear : 1.f;
+        float off = count ? n->k * step : 0.f;
+        GXColor c = Color_Over(n->now ? color_white : n->col, count ? 0.9f * a : 1.f);
+        for (int side = -1; side <= 1; side += 2)
+            Near_Bracket(hx + side * (half + off), y0, y1, side, foot + e / 2, w + e, Color_Over(color_plate, 0.55f * a));
+        for (int side = -1; side <= 1; side += 2)
+            Near_Bracket(hx + side * (half + off), y0, y1, side, foot, w, c);
+    }
+    else if (n->mode == NMODE_FOLD)
+    {
+        float q = Clamp01((float)n->age / LL_FADE), k = 1.f - Ease_Out(q);
+        float ym = (y0 + y1) / 2.f, hh = (y1 - y0) / 2.f * k;
+        if (hh > 0.3f)
+        {
+            for (int side = -1; side <= 1; side += 2)
+                Near_Bracket(hx + side * half, ym - hh, ym + hh, side, foot + e / 2, w * 0.85f + e, Color_Over(color_plate, 0.35f * (1.f - q)));
+            for (int side = -1; side <= 1; side += 2)
+                Near_Bracket(hx + side * half, ym - hh, ym + hh, side, foot, w * 0.85f, Color_Over(n->col, 0.7f * (1.f - q)));
+        }
+    }
+    else if (n->mode == NMODE_CUT)
+    {
+        for (int side = -1; side <= 1; side += 2)
+            Near_Bracket(hx + side * half, y0, y1, side, foot, w * 0.85f, Color_Over(color_skip, 0.3f * (1.f - (float)n->age / LL_CUT)));
+    }
+
+    if (n->ghost >= 0)
+    {
+        float q = (float)n->ghost / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float o = Ease_Out(q) * (n->bright ? Near_Clamp(4.f * S, 0.6f, 1.8f) : Near_Clamp(1.6f * S, 0.3f, 0.8f));
+        float gw = n->bright ? Near_Clamp(0.9f * S, 0.16f, 0.36f) : Near_Clamp(0.5f * S, 0.1f, 0.22f);
+        GXColor gc = Color_Over(Color_Mix(n->base, color_white, 0.35f), (n->bright ? 0.95f : 0.45f) * fade);
+        if (n->bright)
+            Hud_Rect(hx - half - o, y0, hx + half + o, y1, Color_Over(n->base, 0.3f * fade));
+        for (int side = -1; side <= 1; side += 2)
+            Near_Bracket(hx + side * (half + o), y0, y1, side, foot, gw, gc);
+    }
+}
+
+// A convex outline cut to what is at or below y (HUD y up), into ox and oy.
+// Returns the points left: at most two more than there were.
+static int Near_ClipBelow(const float *px, const float *py, int n, float y, float *ox, float *oy)
+{
+    int m = 0;
+    for (int i = 0; i < n; i++)
+    {
+        int j = (i + 1) % n;
+        int in_i = py[i] <= y, in_j = py[j] <= y;
+        if (in_i)
+        {
+            ox[m] = px[i];
+            oy[m] = py[i];
+            m++;
+        }
+        if (in_i != in_j)
+        {
+            float t = (y - py[i]) / (py[j] - py[i]);
+            ox[m] = px[i] + (px[j] - px[i]) * t;
+            oy[m] = y;
+            m++;
+        }
+    }
+    return m;
+}
+
+// The ECB fill: Falcon's ECB (see Near_Ecb), the diamond the game lands with,
+// drawn on him. It fills from its bottom point at a fixed rate and is full on
+// the press frame, 12 frames after it started; ticks beside it mark the last
+// three frames' levels. In the window its bottom point drops a spike to the
+// floor where he will land (the cue's spot), which is what the interrupt is.
+// A hit's ghost is a bigger, filled diamond; a miss shrinks it away in slate.
+static void Near_EcbFill(FighterData *fp, NearCue *n)
+{
+    Vec2 v[4];
+    Near_Ecb(fp, v);
+    float x = fp->phys.pos.X, y = fp->phys.pos.Y;
+    float px[4], py[4];
+    for (int i = 0; i < 4; i++)
+    {
+        if (!Hud_FromWorld(x + v[i].X, y + v[i].Y, &px[i], &py[i]))
+            return;
+    }
+    float S = Near_Scale(x, y + v[1].Y);
+    float lw = Near_Clamp(0.6f * S, 0.18f, 0.32f);
+    float mx = (px[0] + px[1] + px[2] + px[3]) / 4.f, my = (py[0] + py[1] + py[2] + py[3]) / 4.f;
+
+    if (n->mode == NMODE_COUNT || n->mode == NMODE_WINDOW)
+    {
+        int window = n->mode == NMODE_WINDOW;
+        float a = window ? 1.f : n->appear;
+        float level = window ? 1.f : Clamp01(1.f - (float)n->k / NEAR_FILL);
+        if (level > 0.f)
+        {
+            float ox[8], oy[8];
+            int m = Near_ClipBelow(px, py, 4, py[2] + (py[0] - py[2]) * level, ox, oy);
+            if (m >= 3)
+            {
+                float cx = 0.f, cy = 0.f;
+                for (int i = 0; i < m; i++)
+                {
+                    cx += ox[i] / m;
+                    cy += oy[i] / m;
+                }
+                Hud_Fan(cx, cy, ox, oy, m, Color_Over(window ? Color_Mix(n->col, color_white, n->now ? 0.5f : 0.f) : n->col, 0.72f * a));
+            }
+        }
+        // a soft glow around the outline: the diamond is small and Falcon's
+        // own colors run through it, so it needs to stand off him
+        Hud_Line(px, py, 4, 1, lw + 0.55f, PX, Color_Over(n->col, 0.22f * a));
+        Hud_Line(px, py, 4, 1, lw + 0.12f, PX, Color_Over(color_plate, 0.45f * a));
+        Hud_Line(px, py, 4, 1, lw, PX, Color_Over(n->col, 0.8f * a));
+
+        // ticks for the last three frames' levels, lit once the fill has reached them
+        float xr = px[1] > px[3] ? px[1] : px[3];
+        for (int j = 1; j <= 3; j++)
+        {
+            float ty = py[2] + (py[0] - py[2]) * (1.f - (float)j / NEAR_FILL);
+            int lit = window || n->k <= j;
+            Hud_Rect(xr + 0.25f, ty - 0.1f, xr + 0.95f, ty + 0.1f, Color_Over(color_plate, 0.5f * a));
+            Hud_Rect(xr + 0.3f, ty - 0.05f, xr + 0.9f, ty + 0.05f, Color_Over(color_white, (lit ? 0.95f : 0.4f) * a));
+        }
+
+        if (window)
+        {
+            float sx, sy;
+            if (Hud_FromWorld(n->c->spot.X, n->c->spot.Y, &sx, &sy) && sy < py[2] - 0.3f)
+            {
+                float bw = Near_Clamp(0.45f * S, 0.12f, 0.26f);
+                Hud_Tri(px[2] - bw - 0.06f, py[2] + 0.06f, px[2] + bw + 0.06f, py[2] + 0.06f, sx, sy - 0.1f, Color_Over(color_plate, 0.5f));
+                Hud_Tri(px[2] - bw, py[2], px[2] + bw, py[2], sx, sy, Color_Over(n->col, 1.f));
+                Hud_Rect(sx - 0.5f, sy - 0.05f, sx + 0.5f, sy + 0.1f, Color_Over(n->now ? color_white : n->col, 1.f));
+            }
+        }
+    }
+    else if (n->mode == NMODE_FOLD || n->mode == NMODE_CUT)
+    {
+        float q = n->mode == NMODE_FOLD ? Clamp01((float)n->age / LL_FADE) : (float)n->age / LL_CUT;
+        float k = n->mode == NMODE_FOLD ? 1.f - Ease_Out(q) : 1.f;
+        float sx[4], sy[4];
+        for (int i = 0; i < 4; i++)
+        {
+            sx[i] = mx + (px[i] - mx) * k;
+            sy[i] = my + (py[i] - my) * k;
+        }
+        GXColor fc = n->mode == NMODE_FOLD ? Color_Over(n->col, 0.8f * (1.f - q)) : Color_Over(color_skip, 0.3f * (1.f - q));
+        Hud_Line(sx, sy, 4, 1, lw + 0.12f, PX, Color_Over(color_plate, 0.3f * (1.f - q)));
+        Hud_Line(sx, sy, 4, 1, lw, PX, fc);
+    }
+
+    if (n->ghost >= 0)
+    {
+        float q = (float)n->ghost / LL_GHOST, fade = (1.f - q) * (1.f - q);
+        float g = 1.f + (n->bright ? 0.7f : 0.25f) * Ease_Out(q);
+        float gx[4], gy[4];
+        for (int i = 0; i < 4; i++)
+        {
+            gx[i] = mx + (px[i] - mx) * g;
+            gy[i] = my + (py[i] - my) * g;
+        }
+        Quad_Add(gx[0], gy[0], gx[1], gy[1], gx[2], gy[2], gx[3], gy[3],
+                 Color_Over(Color_Mix(n->base, color_white, 0.3f), (n->bright ? 0.5f : 0.18f) * fade));
+        Hud_Line(gx, gy, 4, 1, lw, PX, Color_Over(Color_Mix(n->base, color_white, 0.4f), (n->bright ? 0.95f : 0.45f) * fade));
+    }
+}
+
+// The count-in lights: 4 plus the window's width small lights in an arc over
+// Falcon's head, on a dark track. A thin fuse burns down along the arc until
+// 4 frames are left, then one white light comes on a frame; the window's
+// lights, in the cue's color, come on as its frames go by. A light that is
+// off is a dim fill in an outline of its color, so it still shows over a dark
+// stage. A hit's ghost swells the window's lights; a miss shrinks every light
+// away in slate. A window of more than 8 frames shows only its first 8.
+static void Near_Lights(FighterData *fp, NearCue *n)
+{
+    float x = fp->phys.pos.X, y = fp->phys.pos.Y + body_offset + 14.5f;
+    float hx, hy;
+    if (!Hud_FromWorld(x, y, &hx, &hy))
+        return;
+    float S = Near_Scale(x, y);
+    int lights = 4 + n->w;
+    if (lights > NEAR_LIGHTS_MAX)
+        lights = NEAR_LIGHTS_MAX;
+    float R = Near_Clamp(13.f * S, 3.f, 9.f);    // the arc's radius
+    float r = Near_Clamp(1.25f * S, 0.34f, 0.75f); // a light's
+    float da = 2.9f * r / R;                     // the angle between two
+    if ((lights - 1) * da > 2.8f)
+        da = 2.8f / (lights - 1);
+    float amax = (lights - 1) * da / 2.f;
+    if (hy > SAFE_H - 1.2f - r)
+        hy = SAFE_H - 1.2f - r; // keep it on the screen
+    float cyc = hy - R;         // the arc's center, below
+
+    float a = n->mode == NMODE_COUNT ? n->appear : 1.f;
+    int live = n->mode == NMODE_COUNT || n->mode == NMODE_WINDOW;
+    float q = n->mode == NMODE_FOLD ? Clamp01((float)n->age / LL_FADE) : n->mode == NMODE_CUT ? (float)n->age / LL_CUT : 0.f;
+    if (live || n->mode == NMODE_FOLD || n->mode == NMODE_CUT)
+        Near_Arc(hx, cyc, R, 3.f * r, NEAR_PI / 2.f - amax - da * 0.6f, NEAR_PI / 2.f + amax + da * 0.6f,
+                 Color_Over(color_plate, (live ? 0.5f : 0.35f) * (1.f - q) * a));
+
+    for (int i = 0; i < lights; i++)
+    {
+        float ang = (i - (lights - 1) / 2.f) * da;
+        float lx = hx + R * sin(ang), ly = cyc + R * cos(ang);
+        GXColor c = i < 4 ? color_white : n->col;
+        if (live)
+        {
+            int on = n->mode == NMODE_WINDOW ? i <= 4 + n->age : (i < 4 && i <= 4 - n->k);
+            if (on)
+                Near_Dot(lx, ly, r, Color_Over(c, 1.f));
+            else
+            {
+                Near_Dot(lx, ly, r * 1.1f, Color_Over(c, 0.6f * a));
+                Near_Dot(lx, ly, r * 0.62f, Color_Over(Color_Mix(c, color_plate, 0.75f), 0.95f * a));
+            }
+        }
+        else if (n->mode == NMODE_FOLD)
+            Near_Dot(lx, ly, r * (1.f - Ease_Out(q)), Color_Over(n->col, 0.8f * (1.f - q)));
+        else if (n->mode == NMODE_CUT)
+            Near_Dot(lx, ly, r, Color_Over(color_skip, 0.3f * (1.f - q)));
+    }
+
+    // the fuse, along the arc just inside the lights, burning down from the right
+    if (n->mode == NMODE_COUNT && n->k > 4)
+    {
+        float frac = Clamp01((n->k - 4) / 20.f);
+        float rf = R - 2.2f * r;
+        float a1 = NEAR_PI / 2.f + amax + da * 0.6f, a0 = a1 - frac * (2.f * amax + da * 1.2f);
+        Near_Arc(hx, cyc, rf, 0.2f + 0.12f, a0, a1, Color_Over(color_plate, 0.45f * a));
+        Near_Arc(hx, cyc, rf, 0.2f, a0, a1, Color_Over(color_white, 0.75f * a));
+    }
+
+    if (n->ghost >= 0)
+    {
+        float gq = (float)n->ghost / LL_GHOST, fade = (1.f - gq) * (1.f - gq);
+        for (int i = 4; i < lights; i++)
+        {
+            float ang = (i - (lights - 1) / 2.f) * da;
+            Near_Dot(hx + R * sin(ang), cyc + R * cos(ang), r * (1.f + (n->bright ? 1.6f : 0.6f) * Ease_Out(gq)),
+                     Color_Over(Color_Mix(n->base, color_white, 0.3f), (n->bright ? 0.7f : 0.3f) * fade));
+        }
+    }
+}
+
+// The near-Falcon timers other than the old strip, in the look picked in the
+// Timers menu. The bubble draws every cue that is live (and each kind's last
+// ending) at its own spot; the other looks draw only the soonest cue (the
+// smallest left; a tie goes to the AI, then the NIL, then the waveland) and
+// its ending, or with none counting down, whichever ending is freshest. A
+// ledge route that has the timer rows gets none of them.
+static void Near_Draw(FighterData *fp, int look)
+{
+    if (route_rows_active)
+        return;
+
+    float base = vis_k;
+    if (look == NEAR_BUBBLE)
+    {
+        for (int pass = 0; pass < 2; pass++)
+        {
+            for (int i = 0; i < CUE_NUM; i++)
+            {
+                vis_k = base * Fade_Factor(VG_TIMERS, i);
+                if (Near_Shown(i))
+                    Near_Bubble(i, pass ? &cue_live[i] : &cue_end[i]);
+            }
+        }
+        vis_k = base;
+        return;
+    }
+
+    // (a cue with nothing left to draw, like a press waiting for its touchdown
+    // once its ghost is over, doesn't hold the others back)
+    static const u8 order[CUE_NUM] = {CUE_AI, CUE_NIL, CUE_WL};
+    NearCue n;
+    int kind = -1, left = 0;
+    for (int i = 0; i < CUE_NUM; i++)
+    {
+        Cue *c = &cue_live[order[i]];
+        if (Near_Shown(order[i]) && Near_Cue(order[i], c, &n) && (kind < 0 || c->left < left))
+        {
+            kind = order[i];
+            left = c->left;
+        }
+    }
+    if (kind < 0)
+    {
+        int age = 0;
+        for (int i = 0; i < CUE_NUM; i++)
+        {
+            Cue *e = &cue_end[order[i]];
+            if (Near_Shown(order[i]) && Near_Cue(order[i], e, &n) && (kind < 0 || e->age < age))
+            {
+                kind = order[i];
+                age = e->age;
+            }
+        }
+    }
+    if (kind < 0)
+        return;
+
+    vis_k = base * Fade_Factor(VG_TIMERS, kind);
+    for (int pass = 0; pass < 2; pass++)
+    {
+        if (!Near_Cue(kind, pass ? &cue_live[kind] : &cue_end[kind], &n))
+            continue;
+        switch (look)
+        {
+        case NEAR_HALO:
+            Near_Halo(fp, &n);
+            break;
+        case NEAR_PINCERS:
+            Near_Pincers(fp, &n);
+            break;
+        case NEAR_ECB:
+            Near_EcbFill(fp, &n);
+            break;
+        case NEAR_LIGHTS:
+            Near_Lights(fp, &n);
+            break;
+        }
+    }
+    vis_k = base;
+}
+
+// The wavedash timers drawn at Falcon's feet (Pips, Ring); Cells is a row in
+// the strips.
+static void Wd_Draw(FighterData *fp)
+{
+    int look = Options_Timers[TOPT_WD].val;
+    if ((look != WDT_PIPS && look != WDT_RING) || !Cues_Waveland())
+        return;
+    float base = vis_k;
+    vis_k = base * Fade_Factor(VG_TIMERS, CUE_WL);
+    // the last one's ending first, the live one over it
+    for (int pass = 0; pass < 2; pass++)
+    {
+        Cue *c = pass ? &cue_live[CUE_WL] : &cue_end[CUE_WL];
+        if (!c->phase || !c->wd)
+            continue;
+        if (look == WDT_PIPS)
+            Wd_Pips(c, !pass);
+        else
+            Wd_Ring(c, !pass);
+    }
+    vis_k = base;
+}
+
 static void Spot_Draw(FighterData *fp)
 {
+    float base = vis_k;
     for (int pass = 0; pass < 2; pass++)
     {
         for (int i = 0; i < CUE_NUM; i++)
@@ -7338,12 +11415,17 @@ static void Spot_Draw(FighterData *fp)
                 continue;
             if (i == CUE_AI ? !Cues_Ai() : i == CUE_WL ? !Cues_Waveland() : !Cues_Nil())
                 continue;
+            vis_k = base * Fade_Factor(VG_TIMERS, i);
             if (i == CUE_WL)
-                Spot_Rails(c, fp, !pass);
-            else
+            {
+                if (Options_Timers[TOPT_WL].val != WLT_OFF)
+                    Spot_Rails(c, fp, !pass);
+            }
+            else if (Options_Timers[TOPT_SPOT].val)
                 Spot_Brackets(i, c, !pass);
         }
     }
+    vis_k = base;
 }
 
 ///////////////////////
@@ -7373,29 +11455,39 @@ static void Spot_Draw(FighterData *fp)
 // The Ring look: the whole controller in an ellipse 9.1 by 6.4 HUD units at
 // Small, the room TM-CE's own controller model takes (lab.dat). L and R are
 // the ellipse's halves, each a band from the gap at the top to the gap at
-// the bottom that swells into a pointed nub at the side. A press fills both
-// ends of the band to the middle, then floods the nub; the click flashes it
-// and it stays lit while held. The stick's gate is in the middle with the
-// buttons in the four bulbs around it, in the controller's own colors and
-// sizes: the X and Y kidneys top left, Z top right, A bottom left, B bottom
-// right. Below the gate the C-stick: four arrows for the direction the game
-// reads as a smash or aerial, around a small live gate whose trail shows
-// smash DI. Every edge is soft, so the small shapes don't look jagged.
+// the bottom that swells into a deep, pointed nub at the side. A press fills
+// both ends of the band to the middle, then floods the nub; a click lights
+// the whole half and keeps it lit while held. The stick's gate is in the
+// middle with the buttons in the four bays around it, filled in the
+// controller's own colors and lettered like the real ones: X and Y top left,
+// Z top right, B bottom left, A bottom right, each in the middle of its bay
+// (the widest circle that fits there). A press leaves a ghost of the button's
+// own fill that grows a little and fades in a few frames. Below the gate the
+// C-stick: four arrows for the direction the game reads as a smash or aerial,
+// around a small live gate whose trail shows smash DI. Every edge is soft, so
+// the small shapes don't look jagged.
 #define RING_A 4.55f    // the ellipse's half width
 #define RING_B 3.2f     // and half height
 #define RING_BAND 0.3f  // the triggers' band, where a light press shows
-#define RING_NUB 1.4f   // how far the nub reaches in past the band
-#define RING_NUB_W 48.f // the nub's half width, in degrees around the ellipse
+#define RING_NUB 2.2f   // how far the nub reaches in past the band
+#define RING_NUB_W 34.f // the nub's half width, in degrees around the ellipse
 #define RING_GAP 7.f    // degrees left open at the top and bottom
 #define RING_CH 0.5f    // the share of a trigger's travel that fills the band; the rest floods the nub
 #define RING_LIGHT (43.f / 140.f) // a light press, where the game starts counting a trigger
 #define RING_LEG_SEGS 4
 #define RING_NUB_SEGS 12
 #define RING_SEGS (2 * RING_LEG_SEGS + RING_NUB_SEGS)
-#define RING_STICK_Y 0.3f // the stick gate's center, above the ellipse's
-#define RING_STICK_R 1.55f
-#define RING_C_Y -2.2f // the C-stick's center
-#define RING_C_R 0.45f
+#define RING_STICK_Y 0.35f // the stick gate's center, above the ellipse's
+#define RING_STICK_R 1.45f
+#define RING_C_Y -2.16f // the C-stick's center, clear of the gate above it
+#define RING_C_R 0.4f
+
+// The Crest look's size, in units of its drawing at size 1 (y up from its
+// middle), and how much of a HUD unit that is: about the Ring's height.
+#define CREST_K 0.92f
+#define CREST_W 4.72f   // half its width, to the top blades' tips
+#define CREST_TOP 3.4f  // its top above its middle
+#define CREST_BOT 3.72f // its bottom below it
 
 // The inputs that glow.
 enum pad_input
@@ -7411,6 +11503,20 @@ enum pad_input
 
     PIN_COUNT
 };
+
+// Where each input was drawn this frame, for the controller cues: its
+// middle and about how big it is (r 0: not drawn).
+static struct
+{
+    float x, y, r;
+} pin_spot[PIN_COUNT];
+
+static void Pin_Spot(int in, float x, float y, float r)
+{
+    pin_spot[in].x = x;
+    pin_spot[in].y = y;
+    pin_spot[in].r = r;
+}
 
 static Vec2 pad_trail[PAD_TRAIL];   // the last frames' raw stick, newest at pad_trail_pos
 static int pad_trail_pos;
@@ -7500,10 +11606,10 @@ static HSD_Pad *Pad_Live(FighterData *fp)
 static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
 {
     int buttons = Options_Hud[HOPT_BUTTONS].val;
-    int ring = buttons && Options_Hud[HOPT_LOOK].val == LOOK_RING;
+    int look = buttons ? Options_Hud[HOPT_LOOK].val : -1;
     float rs = ring_sizes[Options_Hud[HOPT_PAD_SIZE].val];
-    float w = ring ? 2 * RING_A * rs : buttons ? PAD_W : PAD_STICK_W;
-    float h = ring ? 2 * RING_B * rs : buttons ? PAD_H : PAD_STICK_H;
+    float w = look == LOOK_RING ? 2 * RING_A * rs : look == LOOK_CREST ? 2 * CREST_W * CREST_K * rs : buttons ? PAD_W : PAD_STICK_W;
+    float h = look == LOOK_RING ? 2 * RING_B * rs : look == LOOK_CREST ? (CREST_TOP + CREST_BOT) * CREST_K * rs : buttons ? PAD_H : PAD_STICK_H;
     float left = SAFE_W - w, bottom = -SAFE_H + 0.4f;
     int place = Options_Hud[HOPT_STICK].val;
     if (place == STICK_LEFT)
@@ -7544,6 +11650,13 @@ static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
             bottom = cand[pick][1];
         }
     }
+    // TM-CE's version text sits in the bottom right corner (TM_CreateWatermark:
+    // right edge at x 615, top at y 446 of the 640 x 480 picture); a display
+    // over it goes up above it
+    Box wm = {(470 - 320) * PX, -SAFE_H - 1.f, (620 - 320) * PX, -(443 - 240) * PX};
+    Box b = {left, bottom, left + w, bottom + h};
+    if (Box_Hit(&b, &wm))
+        bottom = wm.y1;
     *x0 = left;
     *y0 = bottom;
     *x1 = left + w;
@@ -7609,6 +11722,7 @@ static void Hud_PillRing(float cx, float cy, float w, float h, float rot, float 
 // ring on the frame it goes down.
 static void Pad_Button(float cx, float cy, float r, GXColor c, int in, float glow)
 {
+    Pin_Spot(in, cx, cy, r);
     Hud_Ring(cx, cy, r - 0.035f, 0.07f, Color_Fill(c, 0.5f));
     if (glow > 0)
         Hud_Disc(cx, cy, r - 0.07f, Color_Fill(c, glow));
@@ -7634,22 +11748,118 @@ static void Pad_Trigger(float x, float by, float analog, float glow)
         Hud_Rect(x + 0.06f, by + 4.86f, x1 - 0.06f, by + 5.24f, Color_Fill(c, glow));
 }
 
+// The shield drop zone: the stick angles that drop Falcon through a platform
+// out of his shield, shaded in the gate while he stands or shields on one.
+//
+// Checked in the decomp:
+// - The drop is ftCo_80099F1C (ftCo_Pass.c), reached through ftCo_8009A080:
+//   L or R held, stick y <= -PlCo 0x464, the y timer (active_timer.lstick.y,
+//   the frames since the stick left the tilt zone; timer_lstick_tilt_y here)
+//   below PlCo 0x468, and mpColl_IsOnPlatform on the floor under him (the
+//   line's platform flag, desc->is_unk). It never looks at x, so everything
+//   below the line drops: the zone is a cap of the gate.
+// - It's the last check in GuardOn's and Guard's IASA (ftCo_Guard.c). The
+//   spotdodge is ahead of it (ftCo_8009980C, ftCo_Escape.c): stick y <=
+//   PlCo 0x314 with that timer below PlCo 0x318, or the C-stick down as far.
+//   A flick that gets that far down fast enough spotdodges and never drops.
+//   The sideways roll check (ftCo_8009917C) is ahead of it too, but goes by
+//   the x flick, so it isn't drawn.
+// Inferred, not checked on a console:
+// - The signs: 0x314 is compared as it is (so negative), 0x464 negated (so
+//   positive). The decomp types 0x468 as a float where the other windows are
+//   ints, so Common_Frames reads it either way. Event_Init logs all four.
+// - Standing (Wait) and the two shield states are where to show it.
+static int Pad_DropShown(FighterData *fp)
+{
+    int sid = fp->state_id;
+    int id = fp->coll_data.ground_index;
+    RawCollLine *lines = (RawCollLine *)*stc_collline;
+    return Options_Hud[HOPT_SHIELD_DROP].val && fp->phys.air_state == 0 &&
+           (sid == ASID_WAIT || sid == ASID_GUARDON || sid == ASID_GUARD) &&
+           common_drop_stick > 0.3f && common_drop_stick < 1.f && // as read from the game
+           lines && id >= 0 && lines[id].desc->is_unk;            // is_unk is the platform flag
+}
+
+// The part of the gate (an octagon) at or below the stick height lim (-1 to
+// 1), tinted c at a, with a line along its top edge at la (none if 0). Cut
+// like any convex polygon: the points that are below it, and where the edges
+// that cross it do.
+static void Pad_Cap(float cx, float cy, float R, float k, float lim, GXColor c, float a, float la)
+{
+    float vx[8], vy[8], px[10], py[10], ex[2];
+    float y = cy + lim * R;
+    Circle_Points(cx, cy, R, 8, vx, vy);
+    int n = 0, e = 0;
+    for (int i = 0; i < 8; i++)
+    {
+        int j = (i + 1) % 8;
+        int in0 = vy[i] <= y, in1 = vy[j] <= y;
+        if (in0)
+        {
+            px[n] = vx[i];
+            py[n++] = vy[i];
+        }
+        if (in0 != in1 && e < 2)
+        {
+            ex[e] = vx[i] + (vx[j] - vx[i]) * (y - vy[i]) / (vy[j] - vy[i]);
+            px[n] = ex[e++];
+            py[n++] = y;
+        }
+    }
+    if (e < 2 || n < 3)
+        return;
+    float mx = 0, my = 0;
+    for (int i = 0; i < n; i++)
+    {
+        mx += px[i] / n;
+        my += py[i] / n;
+    }
+    Hud_Fan(mx, my, px, py, n, Color_Over(c, a));
+    if (la > 0)
+        Hud_Seg(ex[0], y, ex[1], y, 0.06f * k, Color_Over(c, la));
+}
+
+// The zone in the stick's gate: blue where a press drops, with amber over
+// where a flick down fast enough spotdodges instead (a slow one still drops
+// there). Each brightens while the stick is doing it now, as the fastfall
+// line does.
+static void Pad_DropZone(FighterData *fp, float cx, float cy, float R, float k)
+{
+    if (!Pad_DropShown(fp))
+        return;
+    float y = fp->input.lstick.Y;
+    int flick = (u8)fp->input.timer_lstick_tilt_y;
+    int dodges = y <= common_spot_stick && flick < common_spot_window;
+    int drops = y <= -common_drop_stick && flick < common_drop_window && !dodges;
+    GXColor blue = {100, 170, 255, 255}, amber = {255, 175, 60, 255};
+    Pad_Cap(cx, cy, R, k, -common_drop_stick, blue, drops ? 0.36f : 0.2f, drops ? 0.9f : 0.5f);
+    if (common_spot_stick > -1.f && common_spot_stick < -0.3f)
+    {
+        // the two lines would sit on each other if the thresholds are close
+        int apart = fabs(common_spot_stick + common_drop_stick) > 0.08f;
+        Pad_Cap(cx, cy, R, k, common_spot_stick, amber, dodges ? 0.34f : 0.14f, !apart ? 0 : dodges ? 0.9f : 0.5f);
+    }
+}
+
 // The stick: its gate, the band Melee reads as zero, the last frames as a
-// trail, where the stick is, and while falling the line where pulling down
-// starts a fastfall (lit while a fastfall flick is live). R is the gate's
-// radius, k scales the marks inside it.
+// trail, where the stick is, while falling the line where pulling down
+// starts a fastfall (lit while a fastfall flick is live), and on a platform
+// the shield drop zone. R is the gate's radius, k scales the marks inside it.
 static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R, float k)
 {
     Pad_Gate(cx, cy, R, 0.12f * k, Color_Fill(color_white, 0.45f));
 
-    // the deadzone cross, where an axis reads as zero
+    // the deadzone cross, where an axis reads as zero; fainter in the Ring
+    // look, so the gate and the stick read first
     float rx = pad->fstickX, ry = pad->fstickY;
     float dzx = Common_Float(0x0), dzy = Common_Float(0x4);
-    GXColor band = Color_Over(color_white, 0.25f);
+    GXColor band = Color_Over(color_white, pad_soft ? 0.1f : 0.25f);
     float len = R * 0.88f;
     Hud_Rect(cx - dzx * R, cy - len, cx + dzx * R, cy + len, band);
     Hud_Rect(cx - len, cy - dzy * R, cx - dzx * R, cy + dzy * R, band);
     Hud_Rect(cx + dzx * R, cy - dzy * R, cx + len, cy + dzy * R, band);
+
+    Pad_DropZone(fp, cx, cy, R, k);
 
     // fastfall line: lit on the frames the game takes a flick past it (it
     // has to be falling, not fastfalling yet, and not in an airdodge or a
@@ -7663,7 +11873,7 @@ static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R
         float fy = cy - common_fastfall_stick * R;
         float fw = R * 0.62f;
         Hud_Rect(cx - fw, fy - 0.05f * k, cx + fw, fy + 0.05f * k, c);
-        Glyph_Draw(GLYPH_DOWN, cx + fw + 0.3f * k, fy, 0.2f * k, c);
+        Glyph_Draw(GLYPH_FF, cx + fw + 0.3f * k, fy, 0.2f * k, c);
     }
 
     // trail, oldest first
@@ -7704,16 +11914,16 @@ static void Pad_CStick(HSD_Pad *pad, float cx, float cy, float aerial)
     Hud_Rect(dx - 0.17f, dy - 0.17f, dx + 0.17f, dy + 0.17f, c);
 }
 
-// The nub's depth past the band, t degrees from its middle: broad
-// shoulders that flow out of the band, and a pointed tip.
+// The nub's depth past the band, t degrees from its middle: a smooth bell,
+// since a point flares into a spike where the soft outline turns.
 static float Ring_Swell(float t)
 {
     float u = fabs(t) / RING_NUB_W;
     if (u >= 1)
         return 0;
     float sh = 1 - u * u;
-    float tip = 1 - u / 0.38f;
-    return RING_NUB * (0.6f * sh * sh + (tip > 0 ? 0.4f * tip * sqrtf(tip) : 0));
+    sh *= sh;
+    return RING_NUB * sh * sh;
 }
 
 // A point of the ring's left half at size s: t degrees around the ellipse
@@ -7726,6 +11936,16 @@ static void Ring_Point(float t, float off, float s, float *x, float *y)
     float nx = c / RING_A, ny = sn / RING_B, m = sqrtf(nx * nx + ny * ny);
     *x = (RING_A * c - nx / m * off) * s;
     *y = (RING_B * sn - ny / m * off) * s;
+}
+
+// A point on the inner edge of the left half, pushed d units further in
+// toward the middle (the nub): straight across rather than along the
+// ellipse's normal, which folds over itself once it's deeper than the
+// ellipse's curve at the side is round.
+static void Ring_Inner(float t, float d, float s, float *x, float *y)
+{
+    Ring_Point(t, RING_BAND, s, x, y);
+    *x += d * s;
 }
 
 // The angle of the k-th sample along a half, from its top end (k = 0) to its
@@ -7742,23 +11962,23 @@ static float Ring_Angle(int k)
     return n1 + (bot - n1) * k / RING_LEG_SEGS;
 }
 
-// A quad of a half between the angles t0 and t1, from the offset o0 in to
-// the offset o1 (each given at both angles). m is 1 for the left half and
-// -1 for the right one.
-static void Ring_Quad(float cx, float cy, float s, float m, float t0, float t1, float o0a, float o0b, float o1a, float o1b, GXColor c)
+// A quad of a half between the angles t0 and t1, from the offset o0 in to the
+// band's inner edge pushed d further in (each given at both angles). m is 1
+// for the left half and -1 for the right one.
+static void Ring_Quad(float cx, float cy, float s, float m, float t0, float t1, float o0a, float o0b, float d1a, float d1b, GXColor c)
 {
     float x[4], y[4];
     Ring_Point(t0, o0a, s, &x[0], &y[0]);
     Ring_Point(t1, o0b, s, &x[1], &y[1]);
-    Ring_Point(t1, o1b, s, &x[2], &y[2]);
-    Ring_Point(t0, o1a, s, &x[3], &y[3]);
+    Ring_Inner(t1, d1b, s, &x[2], &y[2]);
+    Ring_Inner(t0, d1a, s, &x[3], &y[3]);
     Quad_Add(cx + m * x[0], cy + y[0], cx + m * x[1], cy + y[1], cx + m * x[2], cy + y[2], cx + m * x[3], cy + y[3], c);
 }
 
 // One trigger as a half of the ring around (cx, cy): side -1 is L, 1 is R.
-// analog is how far it's pressed, click whether it's clicked, flash the
-// click's flash.
-static void Ring_Trigger(float cx, float cy, float s, int side, float analog, int click, float flash)
+// analog is how far it's pressed, click whether it's clicked, lit how lit the
+// click leaves it (1 while it's held, fading after), flash the press's flash.
+static void Ring_Trigger(float cx, float cy, float s, int side, float analog, int click, float lit, float flash)
 {
     GXColor c = color_in_dodge;
     float m = -side;
@@ -7769,7 +11989,7 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         float t = Ring_Angle(k);
         int o = k, i = n - 1 - k;
         Ring_Point(t, 0, s, &px[o], &py[o]);
-        Ring_Point(t, RING_BAND + Ring_Swell(t - 180), s, &px[i], &py[i]);
+        Ring_Inner(t, Ring_Swell(t - 180), s, &px[i], &py[i]);
         px[o] = cx + m * px[o];
         py[o] += cy;
         px[i] = cx + m * px[i];
@@ -7778,8 +11998,18 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
     GXColor plate = Color_Fill(color_plate, 0.55f);
     for (int k = 0; k < RING_SEGS; k++)
         Quad_Add(px[k], py[k], px[k + 1], py[k + 1], px[n - 2 - k], py[n - 2 - k], px[n - 1 - k], py[n - 1 - k], plate);
-    // the outline, under the fill so a light press isn't hidden by it
-    Hud_Line(px, py, n, 1, 0.05f * s, PX, Color_Fill(c, 0.8f));
+    {
+        float mx = 0, my = 0;
+        for (int k = 0; k < n; k++)
+        {
+            mx += px[k];
+            my += py[k];
+        }
+        Pin_Spot(side > 0 ? PIN_R : PIN_L, mx / n, my / n, 0.8f * s);
+    }
+    // the outline, under the fill so a light press isn't hidden by it; a
+    // lit half has a bright, heavier one
+    Hud_Line(px, py, n, 1, (0.05f + 0.04f * lit) * s, PX, Color_Mix(Color_Fill(c, 0.8f), color_white, lit));
 
     // the fill: both ends of the band run in to the middle, then the nub
     // floods from its base to its tip
@@ -7794,9 +12024,9 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         {
             float t0 = Ring_Angle(k), t1 = Ring_Angle(k + 1);
             if (t0 < f0)
-                Ring_Quad(cx, cy, s, m, t0, t1 < f0 ? t1 : f0, 0, 0, RING_BAND, RING_BAND, fc);
+                Ring_Quad(cx, cy, s, m, t0, t1 < f0 ? t1 : f0, 0, 0, 0, 0, fc);
             if (t1 > f1)
-                Ring_Quad(cx, cy, s, m, t0 > f1 ? t0 : f1, t1, 0, 0, RING_BAND, RING_BAND, fc);
+                Ring_Quad(cx, cy, s, m, t0 > f1 ? t0 : f1, t1, 0, 0, 0, 0, fc);
         }
     }
     if (as > 0.002f)
@@ -7806,31 +12036,33 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         {
             float t0 = Ring_Angle(k), t1 = Ring_Angle(k + 1);
             float d0 = Ring_Swell(t0 - 180), d1 = Ring_Swell(t1 - 180);
-            Ring_Quad(cx, cy, s, m, t0, t1, RING_BAND * 0.5f, RING_BAND * 0.5f,
-                      RING_BAND + (d0 < level ? d0 : level), RING_BAND + (d1 < level ? d1 : level), fc);
+            Ring_Quad(cx, cy, s, m, t0, t1, RING_BAND * 0.5f, RING_BAND * 0.5f, d0 < level ? d0 : level, d1 < level ? d1 : level, fc);
         }
     }
 
-    // a tick on each way in where a light press counts
+    // a mark on each way in where a light press counts: a short bar across
+    // the band with a pointer under it
     for (int e = 0; e < 2; e++)
     {
         float end = e ? 270 - RING_GAP : 90 + RING_GAP;
         float t = end + (180 - end) * (RING_LIGHT / RING_CH);
         float tx[2], ty[2];
-        Ring_Point(t, -0.06f, s, &tx[0], &ty[0]);
-        Ring_Point(t, RING_BAND + 0.06f, s, &tx[1], &ty[1]);
+        Ring_Point(t, 0.03f, s, &tx[0], &ty[0]);
+        Ring_Point(t, RING_BAND - 0.03f, s, &tx[1], &ty[1]);
         tx[0] = cx + m * tx[0];
         tx[1] = cx + m * tx[1];
         ty[0] += cy;
         ty[1] += cy;
-        Hud_Line(tx, ty, 2, 0, 0.05f * s, PX, Color_Fill(color_white, 0.8f));
+        Hud_Line(tx, ty, 2, 0, 0.07f * s, PX, Color_Over(color_white, 0.95f));
     }
 
-    // the click: a white flash over the whole half, and lit while it's held
-    float w = click && flash < 0.5f ? 0.5f : flash;
+    // a click lights the whole half, as bright as the flash it starts with,
+    // and keeps it so while it's held (the flash is the same light, brighter,
+    // settling into it)
+    float w = 0.68f * lit + (1.f - 0.68f * lit) * flash;
     if (w > 0)
     {
-        GXColor fl = Color_Fill(color_white, w);
+        GXColor fl = Color_Over(color_white, w);
         for (int k = 0; k < RING_SEGS; k++)
             Quad_Add(px[k], py[k], px[k + 1], py[k + 1], px[n - 2 - k], py[n - 2 - k], px[n - 1 - k], py[n - 1 - k], fl);
     }
@@ -7849,31 +12081,129 @@ static void Ring_Backing(float cx, float cy, float s)
     Hud_Fan(cx, cy, px, py, 32, Color_Fill(color_plate, 0.45f)); // the triggers' outlines soften its edge
 }
 
-// A round button: a faint fill of its color so it reads even unlit, a soft
-// outline, its glow, and a bigger ring on the frame it goes down.
-static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in, float glow)
+// A button's fill: its own color at rest, lighter and fully opaque the more
+// it's pressed.
+static GXColor Ring_Lit(GXColor c, float glow)
 {
-    float px[18], py[18];
-    Circle_Points(cx, cy, r, 18, px, py);
-    Hud_Fan(cx, cy, px, py, 18, Color_Fill(c, glow > 0.22f ? glow : 0.22f));
-    Hud_Line(px, py, 18, 1, 0.07f * s, PX, Color_Fill(c, 0.9f));
-    if (pad_glow[in] >= 1.f && pad_glow_prev[in] < 1.f)
+    // up: a dark well in the button's color, its rim and letter in the
+    // color; down: filled solid and bright, the way a trigger fills
+    return Color_Mix(Color_Over(Color_Mix(c, color_plate, 0.72f), 0.88f), Color_Over(Color_Mix(c, color_white, 0.3f), 1.f), glow);
+}
+
+// A button's outline, lighter than its fill.
+static GXColor Ring_Edge(GXColor c)
+{
+    return Color_Over(Color_Mix(c, color_white, 0.35f), 0.9f);
+}
+
+// The ghost a press leaves, a copy of the button's fill, from the button's
+// flash (1 on the frame it went down, times 0.6 on each after, so a few
+// frames in all): how far it has grown (1 and up) ...
+static float Ghost_Grow(float flash)
+{
+    return 1.15f + 0.2f * (1.f - flash);
+}
+
+#define GHOST_MIN 0.1f
+
+// ... and fading to nothing as the flash reaches GHOST_MIN
+static GXColor Ghost_Color(GXColor c, float flash)
+{
+    return Color_Over(Color_Mix(c, color_white, 0.45f), 0.9f * sqrtf((flash - GHOST_MIN) / (1.f - GHOST_MIN)));
+}
+
+// One stroke of a button's letter: n points in units of the letter's height h,
+// from -0.5 to 0.5 each way, around (cx, cy).
+static void Ring_Stroke(float cx, float cy, float h, GXColor c, int n, const float *xy)
+{
+    float px[7], py[7];
+    for (int i = 0; i < n; i++)
     {
-        Circle_Points(cx, cy, r + 0.2f * s, 18, px, py);
-        Hud_Line(px, py, 18, 1, 0.08f * s, PX, Color_Mix(c, color_white, 0.5f));
+        px[i] = cx + xy[2 * i] * h;
+        py[i] = cy + xy[2 * i + 1] * h;
+    }
+    Hud_Line(px, py, n, 0, (0.17f * h > 0.095f ? 0.17f * h : 0.095f), PX * 0.6f, c);
+}
+
+// The letter printed on a button, in strokes since there's no text engine.
+static void Ring_Letter(int in, float cx, float cy, float h, GXColor bc, float glow)
+{
+    Pin_Spot(in, cx, cy, h);
+    // light in the button's color on the dark well, dark on the lit fill
+    GXColor c = Color_Mix(Color_Over(Color_Mix(bc, color_white, 0.5f), 0.95f), Color_Over(color_plate, 0.92f), glow);
+    switch (in)
+    {
+    case PIN_A:
+    {
+        float legs[] = {-0.34f, -0.5f, 0, 0.5f, 0.34f, -0.5f};
+        float bar[] = {-0.2f, -0.14f, 0.2f, -0.14f};
+        Ring_Stroke(cx, cy, h, c, 3, legs);
+        Ring_Stroke(cx, cy, h, c, 2, bar);
+        break;
+    }
+    case PIN_B:
+    {
+        float top[] = {-0.3f, -0.5f, -0.3f, 0.5f, 0.08f, 0.5f, 0.3f, 0.36f, 0.3f, 0.16f, 0.08f, 0, -0.3f, 0};
+        float low[] = {0.08f, 0, 0.34f, -0.14f, 0.34f, -0.36f, 0.08f, -0.5f, -0.3f, -0.5f};
+        Ring_Stroke(cx, cy, h, c, 7, top);
+        Ring_Stroke(cx, cy, h, c, 5, low);
+        break;
+    }
+    case PIN_X:
+    {
+        float down[] = {-0.32f, 0.5f, 0.32f, -0.5f};
+        float up[] = {-0.32f, -0.5f, 0.32f, 0.5f};
+        Ring_Stroke(cx, cy, h, c, 2, down);
+        Ring_Stroke(cx, cy, h, c, 2, up);
+        break;
+    }
+    case PIN_Y:
+    {
+        float arms[] = {-0.34f, 0.5f, 0, 0.02f, 0.34f, 0.5f};
+        float stem[] = {0, 0.02f, 0, -0.5f};
+        Ring_Stroke(cx, cy, h, c, 3, arms);
+        Ring_Stroke(cx, cy, h, c, 2, stem);
+        break;
+    }
+    case PIN_Z:
+    {
+        float z[] = {-0.32f, 0.5f, 0.32f, 0.5f, -0.32f, -0.5f, 0.32f, -0.5f};
+        Ring_Stroke(cx, cy, h, c, 4, z);
+        break;
+    }
     }
 }
 
+// A round button: filled in its color, lettered, with a soft outline, and on
+// a press a ghost of its fill that grows a little and fades in a few frames.
+static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in, float glow)
+{
+    float px[18], py[18];
+    float flash = pad_flash[in];
+    if (flash > GHOST_MIN)
+    {
+        Circle_Points(cx, cy, r * Ghost_Grow(flash), 18, px, py);
+        Hud_Fan(cx, cy, px, py, 18, Ghost_Color(c, flash));
+    }
+    Circle_Points(cx, cy, r, 18, px, py);
+    Hud_Fan(cx, cy, px, py, 18, Ring_Lit(c, glow));
+    Hud_Line(px, py, 18, 1, 0.07f * s, PX, Ring_Edge(c));
+    Ring_Letter(in, cx, cy, 0.95f * r, c, glow);
+}
+
 // A kidney, the shape of the X and Y buttons (and here Z): an arc rho from
-// (cx, cy) between the angles a0 and a1 (degrees, a0 < a1), w thick with
-// round ends, filled by its glow (faintly while unlit) with a soft outline.
+// the middle of its line (mx, my) bulging toward dir degrees, span degrees
+// long and w thick with round ends.
 #define KIDNEY_ARC 6
 #define KIDNEY_CAP 4
 #define KIDNEY_POINTS (2 * KIDNEY_ARC + 2 * KIDNEY_CAP)
-static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float w, float s, GXColor c, int in, float glow)
+
+// Its outline into px and py, and the centers of its round ends into ends.
+static void Kidney_Points(float mx, float my, float dir, float rho, float span, float w, float *px, float *py, float *ends)
 {
-    float px[KIDNEY_POINTS], py[KIDNEY_POINTS];
-    float h = w / 2, d2r = 0.01745329f;
+    float d2r = 0.01745329f;
+    float cx = mx - cos(dir * d2r) * rho, cy = my - sin(dir * d2r) * rho; // the arc's center
+    float a0 = dir - span / 2, a1 = dir + span / 2, h = w / 2;
     int n = 0;
     for (int i = 0; i <= KIDNEY_ARC; i++) // the outside, a0 to a1
     {
@@ -7881,12 +12211,14 @@ static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float
         px[n] = cx + cos(a) * (rho + h);
         py[n++] = cy + sin(a) * (rho + h);
     }
-    float e = a1 * d2r, ex = cx + cos(e) * rho, ey = cy + sin(e) * rho;
+    float e = a1 * d2r;
+    ends[0] = cx + cos(e) * rho;
+    ends[1] = cy + sin(e) * rho;
     for (int i = 1; i < KIDNEY_CAP; i++) // round end at a1
     {
         float a = e + 3.1415927f * i / KIDNEY_CAP;
-        px[n] = ex + cos(a) * h;
-        py[n++] = ey + sin(a) * h;
+        px[n] = ends[0] + cos(a) * h;
+        py[n++] = ends[1] + sin(a) * h;
     }
     for (int i = 0; i <= KIDNEY_ARC; i++) // the inside, a1 back to a0
     {
@@ -7894,14 +12226,19 @@ static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float
         px[n] = cx + cos(a) * (rho - h);
         py[n++] = cy + sin(a) * (rho - h);
     }
-    float b = a0 * d2r, bx = cx + cos(b) * rho, by = cy + sin(b) * rho;
+    float b = a0 * d2r;
+    ends[2] = cx + cos(b) * rho;
+    ends[3] = cy + sin(b) * rho;
     for (int i = 1; i < KIDNEY_CAP; i++) // round end at a0
     {
         float a = b + 3.1415927f + 3.1415927f * i / KIDNEY_CAP;
-        px[n] = bx + cos(a) * h;
-        py[n++] = by + sin(a) * h;
+        px[n] = ends[2] + cos(a) * h;
+        py[n++] = ends[3] + sin(a) * h;
     }
-    GXColor f = Color_Fill(c, glow > 0.22f ? glow : 0.22f);
+}
+
+static void Kidney_Fill(const float *px, const float *py, const float *ends, GXColor f)
+{
     for (int i = 0; i < KIDNEY_ARC; i++)
     {
         int o = i, in0 = 2 * KIDNEY_ARC + KIDNEY_CAP - i; // the inside point at the same angle
@@ -7910,23 +12247,29 @@ static void Ring_Kidney(float cx, float cy, float rho, float a0, float a1, float
     for (int i = 0; i < KIDNEY_CAP; i++)
     {
         int j = KIDNEY_ARC + i;
-        Hud_Tri(ex, ey, px[j], py[j], px[j + 1], py[j + 1], f);
+        Hud_Tri(ends[0], ends[1], px[j], py[j], px[j + 1], py[j + 1], f);
         j = 2 * KIDNEY_ARC + KIDNEY_CAP + i;
-        Hud_Tri(bx, by, px[j], py[j], px[(j + 1) % KIDNEY_POINTS], py[(j + 1) % KIDNEY_POINTS], f);
+        Hud_Tri(ends[2], ends[3], px[j], py[j], px[(j + 1) % KIDNEY_POINTS], py[(j + 1) % KIDNEY_POINTS], f);
     }
-    Hud_Line(px, py, n, 1, 0.07f * s, PX, Color_Fill(c, 0.9f));
-    if (pad_glow[in] >= 1.f && pad_glow_prev[in] < 1.f)
+}
+
+// Filled in its color, lettered, with a soft outline and the press ghost.
+static void Ring_Kidney(float mx, float my, float dir, float rho, float span, float w, float s, GXColor c, int in, float glow)
+{
+    float px[KIDNEY_POINTS], py[KIDNEY_POINTS], ends[4];
+    float flash = pad_flash[in];
+    if (flash > GHOST_MIN)
     {
-        float r = (rho + h + 0.18f * s);
-        float ox[12], oy[12];
-        for (int i = 0; i < 12; i++)
-        {
-            float a = (a0 + (a1 - a0) * i / 11) * d2r;
-            ox[i] = cx + cos(a) * r;
-            oy[i] = cy + sin(a) * r;
-        }
-        Hud_Line(ox, oy, 12, 0, 0.08f * s, PX, Color_Mix(c, color_white, 0.5f));
+        // the same shape grown about its middle
+        Kidney_Points(mx, my, dir, rho * Ghost_Grow(flash), span, w * Ghost_Grow(flash), px, py, ends);
+        Kidney_Fill(px, py, ends, Ghost_Color(c, flash));
     }
+    Kidney_Points(mx, my, dir, rho, span, w, px, py, ends);
+    Kidney_Fill(px, py, ends, Ring_Lit(c, glow));
+    Hud_Line(px, py, KIDNEY_POINTS, 1, 0.07f * s, PX, Ring_Edge(c));
+    // Z's bean runs diagonally under its letter, so the letter's corners
+    // reach the edges sooner
+    Ring_Letter(in, mx, my, (in == PIN_Z ? 0.64f : 0.85f) * w, c, glow);
 }
 
 // The Ring look's C-stick around (cx, cy): the four arrows, lit the way the
@@ -7939,16 +12282,19 @@ static void Ring_CStick(HSD_Pad *pad, float cx, float cy, float s)
     {
         float g = d == dir ? 1.f : pad_cdir_glow[d];
         int level = d % 2 == 0; // left and right have more room
-        float base = (level ? 0.72f : 0.62f) * s;
-        float len = (level ? 0.32f : 0.27f) * s, half = (level ? 0.27f : 0.22f) * s;
+        float base = (level ? 0.58f : 0.52f) * s;
+        float len = (level ? 0.26f : 0.22f) * s, half = (level ? 0.23f : 0.2f) * s;
         float ux = d == 0 ? 1 : d == 2 ? -1 : 0, uy = d == 1 ? 1 : d == 3 ? -1 : 0;
         float ax[3] = {cx + ux * base - uy * half, cx + ux * (base + len), cx + ux * base + uy * half};
         float ay[3] = {cy + uy * base + ux * half, cy + uy * (base + len), cy + uy * base - ux * half};
-        Hud_Tri(ax[0], ay[0], ax[1], ay[1], ax[2], ay[2], Color_Fill(yel, g > 0.22f ? g : 0.22f));
-        Hud_Line(ax, ay, 3, 1, 0.06f * s, PX, Color_Mix(Color_Fill(yel, 0.8f), color_white, g * 0.5f));
+        Hud_Tri(ax[0], ay[0], ax[1], ay[1], ax[2], ay[2], Ring_Lit(yel, g));
+        Hud_Line(ax, ay, 3, 1, 0.06f * s, PX, Ring_Edge(yel));
     }
     float R = RING_C_R * s;
-    Pad_Gate(cx, cy, R, 0.06f * s, Color_Fill(color_white, 0.7f));
+    float vx[8], vy[8];
+    Circle_Points(cx, cy, R, 8, vx, vy);
+    Hud_Fan(cx, cy, vx, vy, 8, Color_Over(yel, 0.3f)); // the stick is yellow too
+    Pad_Gate(cx, cy, R, 0.06f * s, Color_Over(yel, 0.8f));
     for (int n = PAD_CTRAIL - 1; n >= 1; n--)
     {
         Vec2 *p = &pad_ctrail[(pad_ctrail_pos - n + PAD_CTRAIL) % PAD_CTRAIL];
@@ -7974,28 +12320,355 @@ static void Ring_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
 
     pad_soft = 1;
     Ring_Backing(cx, cy, s);
-    Ring_Trigger(cx, cy, s, -1, pad->ftriggerLeft, held[PIN_L], pad_flash[PIN_L]);
-    Ring_Trigger(cx, cy, s, 1, pad->ftriggerRight, held[PIN_R], pad_flash[PIN_R]);
+    Ring_Trigger(cx, cy, s, -1, pad->ftriggerLeft, held[PIN_L], glow[PIN_L], pad_flash[PIN_L]);
+    Ring_Trigger(cx, cy, s, 1, pad->ftriggerRight, held[PIN_R], glow[PIN_R], pad_flash[PIN_R]);
 
-    // the stick in the middle, the buttons in the bulbs around it
+    // the stick in the middle, the buttons in the bays around it, each in
+    // the middle of its bay (where its outline keeps the most room)
     float sx = cx, sy = cy + RING_STICK_Y * s;
     Pad_Stick(fp, pad, sx, sy, RING_STICK_R * s, 0.72f * s);
-    // Y over X, curled around a point in the top left bulb the way they curl
-    // around A on the controller, mirrored across the bulb; Z mirrors the
-    // gap between them in the top right
-    float kx = 1.7f * s, ky = cy + 1.1f * s;
-    Ring_Kidney(cx - kx, ky, 1.0f * s, 67, 115, 0.6f * s, s, color_btn_xy, PIN_Y, glow[PIN_Y]);
-    Ring_Kidney(cx - kx, ky, 1.0f * s, 155, 203, 0.6f * s, s, color_btn_xy, PIN_X, glow[PIN_X]);
-    Ring_Kidney(cx + kx, ky, 1.0f * s, 14, 76, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
-    Ring_Button(cx + 2.3f * s, cy - 1.5f * s, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
-    Ring_Button(cx - 2.3f * s, cy - 1.5f * s, 0.42f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
+    float tx = 2.22f * s, ty = cy + 1.26f * s, lx = 1.92f * s, ly = cy - 1.38f * s;
+    // Y left of X and a little above it, the same bean mirrored
+    Ring_Kidney(cx - tx - 0.55f * s, ty + 0.1f * s, 180, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_Y, glow[PIN_Y]);
+    Ring_Kidney(cx - tx + 0.55f * s, ty - 0.1f * s, 0, 0.8f * s, 60, 0.5f * s, s, color_btn_xy, PIN_X, glow[PIN_X]);
+    // Z well above the pair's middle: its bean hangs down to the right, so
+    // its weight lines up with theirs only when its top is a little above Y's
+    Ring_Kidney(cx + tx, ty + 0.4f * s, 45, 0.9f * s, 65, 0.55f * s, s, color_btn_z, PIN_Z, glow[PIN_Z]);
+    Ring_Button(cx + lx, ly, 0.68f * s, s, color_btn_a, PIN_A, glow[PIN_A]);
+    Ring_Button(cx - lx, ly, 0.5f * s, s, color_btn_b, PIN_B, glow[PIN_B]);
 
     Ring_CStick(pad, cx, cy + RING_C_Y * s, s);
     pad_soft = 0;
 }
 
+
+// The Crest look: the controller as a crest, a shield with a wing off each
+// shoulder and the C-stick for a tail. Each wing is a trigger: four swept
+// blades, their upper edges curved like the trigger's finger groove. A press
+// fills every blade from its tip in toward the shoulder, the top blade
+// leading: gray until the game counts the press, cyan after, with a notch
+// across each blade where that happens. The click lights the spine at the
+// wing's root and, as in the Ring, the whole wing. The buttons are cut gems
+// in the controller's colors: long pointed X and Y stacked on the left, Z on
+// the right, round B and A at the bottom, each with a lighter table. Units
+// are the drawing's (see CREST_K), the left wing built and the right one its
+// mirror.
+#define CREST_ROOT 1.95f   // the wings' roots, either side of the middle
+#define CREST_BLADE_H 0.5f // a blade's height at its root
+#define CREST_SEGS 6       // segments along a blade
+#define CREST_LEAD 1.24f   // the top blade's fill runs this far ahead of the press
+#define CREST_LAG 0.08f    // and each blade under it this much behind the one above
+
+static const float crest_blades[4][3] = {
+    // the root's top, the sweep in degrees, the length
+    {2.05f, 150, 3.2f},
+    {1.4f, 158, 2.8f},
+    {0.75f, 166, 2.4f},
+    {0.1f, 174, 2.f},
+};
+
+// The shield behind it all, clockwise from its top left; a fan from its
+// middle covers it.
+static const float crest_plate[][2] = {
+    {-1.9f, 2.45f}, {1.9f, 2.45f}, {2.05f, -0.35f}, {3.75f, -0.5f}, {3.1f, -2.62f}, {1.15f, -3.3f},
+    {0, -3.72f}, {-1.15f, -3.3f}, {-3.1f, -2.62f}, {-3.75f, -0.5f}, {-2.05f, -0.35f},
+};
+
+// The spine at the left wing's root, with a talon at its foot.
+static const float crest_spine[6][2] = {
+    {-1.93f, 2.2f}, {-1.65f, 2.05f}, {-1.65f, -0.25f}, {-1.9f, -0.85f}, {-2.07f, -0.2f}, {-2.07f, 2.05f},
+};
+
+// A point of blade i on its top edge (or its bottom one), u of the way from
+// its root (0) to its tip (1), in HUD units: m is -1 for the left wing and 1
+// for the right one, k the drawing's scale.
+static void Crest_BladePoint(int i, float u, int top, float m, float k, float cx, float cy, float *x, float *y)
+{
+    float yt = crest_blades[i][0], ang = crest_blades[i][1] * 0.01745329f, len = crest_blades[i][2];
+    float dx = cos(ang), dy = sin(ang);
+    float tx = -CREST_ROOT + dx * len, ty = yt - CREST_BLADE_H / 2 + dy * len;
+    float rx = -CREST_ROOT, ry = top ? yt : yt - CREST_BLADE_H;
+    float px = rx + (tx - rx) * u, py = ry + (ty - ry) * u;
+    // both edges swell a little between root and tip, the top one more and
+    // nearer the root, like the trigger's dish
+    if (top)
+    {
+        float d = 0.16f * sin(3.1415927f * sqrtf(u) * sqrtf(sqrtf(u)));
+        px += dy * d;
+        py -= dx * d;
+    }
+    else
+    {
+        float d = 0.07f * sin(3.1415927f * u);
+        px += dy * d;
+        py += dx * d;
+    }
+    *x = cx - m * px * k;
+    *y = cy + py * k;
+}
+
+// The blade between u0 and u1 along it, as quads between its edges.
+static void Crest_BladeQuads(int i, float u0, float u1, float m, float k, float cx, float cy, GXColor c)
+{
+    float tx0, ty0, bx0, by0;
+    Crest_BladePoint(i, u0, 1, m, k, cx, cy, &tx0, &ty0);
+    Crest_BladePoint(i, u0, 0, m, k, cx, cy, &bx0, &by0);
+    for (int j = 1; j <= CREST_SEGS; j++)
+    {
+        float u = u0 + (u1 - u0) * j / CREST_SEGS, tx1, ty1, bx1, by1;
+        Crest_BladePoint(i, u, 1, m, k, cx, cy, &tx1, &ty1);
+        Crest_BladePoint(i, u, 0, m, k, cx, cy, &bx1, &by1);
+        Quad_Add(tx0, ty0, tx1, ty1, bx1, by1, bx0, by0, c);
+        tx0 = tx1, ty0 = ty1, bx0 = bx1, by0 = by1;
+    }
+}
+
+// One wing: side -1 is L, 1 is R; analog, click, lit and flash as for the Ring.
+static void Crest_Wing(float cx, float cy, float k, int side, float analog, int click, float lit, float flash)
+{
+    {
+        float mx, my;
+        Crest_BladePoint(1, 0.5f, 1, side, k, cx, cy, &mx, &my);
+        Pin_Spot(side > 0 ? PIN_R : PIN_L, mx, my, 0.9f * k);
+    }
+    float m = side;
+    float a = click ? 1.f : Clamp01(analog);
+    int counted = a >= RING_LIGHT;
+    GXColor cyan = color_in_dodge;
+    GXColor fc = click ? Color_Over(Color_Mix(cyan, color_white, 0.5f), 1.f) : counted ? Color_Fill(cyan, 0.6f + 0.35f * a) : Color_Over(color_skip, 0.55f);
+    float w = 0.68f * lit + (1.f - 0.68f * lit) * flash;
+    for (int i = 0; i < 4; i++)
+    {
+        // its outline: out along the top edge, back along the bottom one
+        float px[2 * CREST_SEGS + 2], py[2 * CREST_SEGS + 2];
+        int n = 2 * CREST_SEGS + 2;
+        for (int j = 0; j <= CREST_SEGS; j++)
+        {
+            float u = (float)j / CREST_SEGS;
+            Crest_BladePoint(i, u, 1, m, k, cx, cy, &px[j], &py[j]);
+            Crest_BladePoint(i, u, 0, m, k, cx, cy, &px[n - 1 - j], &py[n - 1 - j]);
+        }
+        Crest_BladeQuads(i, 0, 1, m, k, cx, cy, Color_Fill(color_plate, 0.62f));
+        // a lighter facet along the top edge, an edge that catches the light
+        for (int j = 0; j < CREST_SEGS; j++)
+        {
+            int b0 = n - 1 - j, b1 = n - 2 - j;
+            float mx0 = px[j] * 0.62f + px[b0] * 0.38f, my0 = py[j] * 0.62f + py[b0] * 0.38f;
+            float mx1 = px[j + 1] * 0.62f + px[b1] * 0.38f, my1 = py[j + 1] * 0.62f + py[b1] * 0.38f;
+            Quad_Add(px[j], py[j], px[j + 1], py[j + 1], mx1, my1, mx0, my0, Color_Over(color_white, 0.07f));
+        }
+        // the press, from the tip in
+        float f = Clamp01(a * CREST_LEAD - i * CREST_LAG);
+        if (f > 0.003f)
+            Crest_BladeQuads(i, 1.f - f, 1.f, m, k, cx, cy, fc);
+        // the notch where the fill stands when a light press counts
+        float un = 1.f - Clamp01(RING_LIGHT * CREST_LEAD - i * CREST_LAG);
+        float nx[2], ny[2];
+        Crest_BladePoint(i, un, 1, m, k, cx, cy, &nx[0], &ny[0]);
+        Crest_BladePoint(i, un, 0, m, k, cx, cy, &nx[1], &ny[1]);
+        Hud_Line(nx, ny, 2, 0, 0.06f * k, PX, Color_Over(color_white, 0.85f));
+        Hud_Line(px, py, n, 1, (0.05f + 0.04f * lit) * k, PX, Color_Mix(Color_Fill(cyan, 0.8f), color_white, lit));
+        // the click lights the whole wing, as bright as its flash, while held
+        if (w > 0.01f)
+            Crest_BladeQuads(i, 0, 1, m, k, cx, cy, Color_Over(color_white, w));
+    }
+    float sx[6], sy[6], mx = 0, my = 0;
+    for (int i = 0; i < 6; i++)
+    {
+        sx[i] = cx - m * crest_spine[i][0] * k;
+        sy[i] = cy + crest_spine[i][1] * k;
+        mx += sx[i] / 6;
+        my += sy[i] / 6;
+    }
+    Hud_Fan(mx, my, sx, sy, 6, click ? color_white : Color_Over(Color_Mix(color_plate, cyan, 0.25f), 0.9f));
+    Hud_Line(sx, sy, 6, 1, 0.05f * k, PX, Color_Over(Color_Mix(cyan, color_white, lit), 0.85f));
+}
+
+#define GEM_MAX 18
+
+// A long pointed gem's outline (a marquise) around (gx, gy): l long, w wide,
+// turned ang degrees. 2 * GEM_SIDE points.
+#define GEM_SIDE 8
+static void Gem_Marquise(float gx, float gy, float l, float w, float ang, float *px, float *py)
+{
+    float c = cos(ang * 0.01745329f), sn = sin(ang * 0.01745329f);
+    for (int i = 0; i < 2 * GEM_SIDE; i++)
+    {
+        // along the top from the left point, then back along the bottom
+        float u = i <= GEM_SIDE ? (float)i / GEM_SIDE : (float)(2 * GEM_SIDE - i) / GEM_SIDE;
+        float v = sin(3.1415927f * u);
+        float h = w / 2 * sqrtf(v) * sqrtf(sqrtf(v)) * (i <= GEM_SIDE ? 1 : -1);
+        float x = -l / 2 + l * u;
+        px[i] = gx + x * c - h * sn;
+        py[i] = gy + x * sn + h * c;
+    }
+}
+
+// A gem as a button: the press ghost, the fill, the outline, the table and
+// the letter. Its outline (n points) and table (tn points) go round (gx, gy).
+static void Gem_Button(const float *px, const float *py, int n, const float *tx, const float *ty, int tn, float gx, float gy,
+                       float k, float letter, GXColor c, int in, float glow)
+{
+    float flash = pad_flash[in];
+    if (flash > GHOST_MIN)
+    {
+        float g = Ghost_Grow(flash), qx[GEM_MAX], qy[GEM_MAX];
+        for (int i = 0; i < n; i++)
+        {
+            qx[i] = gx + (px[i] - gx) * g;
+            qy[i] = gy + (py[i] - gy) * g;
+        }
+        Hud_Fan(gx, gy, qx, qy, n, Ghost_Color(c, flash));
+    }
+    Hud_Fan(gx, gy, px, py, n, Ring_Lit(c, glow));
+    Hud_Line(px, py, n, 1, 0.07f * k, PX, Ring_Edge(c));
+    Hud_Fan(gx, gy, tx, ty, tn, Color_Over(color_white, 0.16f + 0.1f * glow));
+    Ring_Letter(in, gx, gy, letter, c, glow);
+}
+
+static void Crest_Marquise(float cx, float cy, float k, float gx, float gy, float l, float w, float ang, float letter,
+                           GXColor c, int in, float glow)
+{
+    float px[2 * GEM_SIDE], py[2 * GEM_SIDE], tx[2 * GEM_SIDE], ty[2 * GEM_SIDE];
+    gx = cx + gx * k;
+    gy = cy + gy * k;
+    Gem_Marquise(gx, gy, l * k, w * k, ang, px, py);
+    Gem_Marquise(gx, gy, 0.59f * l * k, 0.43f * w * k, ang, tx, ty);
+    Gem_Button(px, py, 2 * GEM_SIDE, tx, ty, 2 * GEM_SIDE, gx, gy, k, letter * k, c, in, glow);
+}
+
+// A round gem with an eight-sided table.
+static void Crest_Round(float cx, float cy, float k, float gx, float gy, float r, float letter, GXColor c, int in, float glow)
+{
+    float px[GEM_MAX], py[GEM_MAX], tx[8], ty[8];
+    gx = cx + gx * k;
+    gy = cy + gy * k;
+    Circle_Points(gx, gy, r * k, GEM_MAX, px, py);
+    for (int i = 0; i < 8; i++)
+    {
+        float ang = (i + 0.5f) * 0.7853982f;
+        tx[i] = gx + cos(ang) * 0.6f * r * k;
+        ty[i] = gy + sin(ang) * 0.6f * r * k;
+    }
+    Gem_Button(px, py, GEM_MAX, tx, ty, 8, gx, gy, k, letter * k, c, in, glow);
+}
+
+// The Crest look, from the box's bottom left corner.
+static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
+{
+    float k = CREST_K * ring_sizes[Options_Hud[HOPT_PAD_SIZE].val];
+    float cx = bx + CREST_W * k, cy = by + CREST_BOT * k;
+
+    int held[PIN_COUNT];
+    Pad_Held(pad, held);
+    float glow[PIN_COUNT];
+    for (int i = 0; i < PIN_COUNT; i++)
+        glow[i] = held[i] ? 1.f : pad_glow[i];
+
+    pad_soft = 1;
+    int n = countof(crest_plate);
+    float px[countof(crest_plate)], py[countof(crest_plate)];
+    for (int i = 0; i < n; i++)
+    {
+        px[i] = cx + crest_plate[i][0] * k;
+        py[i] = cy + crest_plate[i][1] * k;
+    }
+    Hud_Fan(cx, cy - 0.4f * k, px, py, n, Color_Fill(color_plate, 0.5f));
+    Hud_Line(px, py, n, 1, 0.05f * k, PX, Color_Over(color_white, 0.22f));
+    Crest_Wing(cx, cy, k, -1, pad->ftriggerLeft, held[PIN_L], glow[PIN_L], pad_flash[PIN_L]);
+    Crest_Wing(cx, cy, k, 1, pad->ftriggerRight, held[PIN_R], glow[PIN_R], pad_flash[PIN_R]);
+
+    Pad_Stick(fp, pad, cx, cy + 0.6f * k, 1.35f * k, 0.7f * k);
+    // X and Y stacked on the left, Y above, clear of each other and of B
+    Crest_Marquise(cx, cy, k, -2.88f, -0.92f, 1.25f, 0.56f, -25, 0.3f, color_btn_xy, PIN_Y, glow[PIN_Y]);
+    Crest_Marquise(cx, cy, k, -2.62f, -1.74f, 1.25f, 0.56f, -25, 0.3f, color_btn_xy, PIN_X, glow[PIN_X]);
+    Crest_Marquise(cx, cy, k, 2.62f, -1.12f, 1.6f, 0.64f, 25, 0.42f, color_btn_z, PIN_Z, glow[PIN_Z]);
+    Crest_Round(cx, cy, k, -1.47f, -2.42f, 0.48f, 0.44f, color_btn_b, PIN_B, glow[PIN_B]);
+    Crest_Round(cx, cy, k, 1.55f, -2.32f, 0.62f, 0.56f, color_btn_a, PIN_A, glow[PIN_A]);
+    Ring_CStick(pad, cx, cy - 2.35f * k, 0.9f * k);
+    pad_soft = 0;
+}
+
 // The controller display. Reads the pad live; the trails and glows come
 // from what Pad_Record saw.
+// Controller Cues: the input a live AI or waveland window wants, timed
+// around where it's drawn. The Closing Ring shrinks onto it from twice its
+// size over the last frames before the window, and sits snug and thick
+// while the window is open; the Gauge is a ring going round it, closed as
+// the window opens. Either is only an outline in the cue's color, never a
+// fill, so it can't be taken for a press.
+#define PADCUE_LEAD 20 // frames ahead it shows
+static void Pad_CueAt(int in, GXColor col, int ahead, int open);
+static void Pad_CueOne(int in, int kind)
+{
+    Cue *c = &cue_live[kind];
+    if (cue_log && c->phase && (!pin_spot[in].r || c->dim || c->held))
+        OSReport("LLPADCUE %d pin %d kind %d skipped: r %.2f phase %d dim %d held %d left %d\n", event_vars->game_timer, in,
+                 kind, pin_spot[in].r, c->phase, c->dim, c->held, c->left);
+    if (!pin_spot[in].r || !c->phase || c->dim || c->held)
+        return;
+    int open = c->phase == PH_WINDOW;
+    vis_k = Kind_K(VG_TIMERS, kind);
+    Pad_CueAt(in, Cue_Color(kind), open ? 0 : c->left - 1, open);
+}
+
+// The cue itself, on input in, ahead frames before its window (0 and open
+// while it's open).
+static void Pad_CueAt(int in, GXColor col, int ahead, int open)
+{
+    if (!pin_spot[in].r || ahead > PADCUE_LEAD || ahead < 0)
+        return;
+    float x = pin_spot[in].x, y = pin_spot[in].y, r = pin_spot[in].r;
+    float t = open ? 0 : (float)ahead / PADCUE_LEAD; // 1 far, 0 at the window
+    if (cue_log)
+        OSReport("LLPADCUE %d pin %d ahead %d open %d at %.2f %.2f r %.2f\n", event_vars->game_timer, in, ahead, open, x, y,
+                 r);
+    float w = open ? 0.16f : 0.09f;
+    if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_RING)
+    {
+        float rr = r * (1.25f + 1.1f * t);
+        Hud_Ring(x, y, rr, w, Color_Over(col, open ? 1.f : 0.55f + 0.45f * (1.f - t)));
+        return;
+    }
+    // the gauge: an arc from the top, clockwise, as much of the way round
+    // as the window is near
+    float rr = r * 1.35f, frac = open ? 1.f : 1.f - t;
+    int n = 2 + (int)(frac * 22);
+    float px[24], py[24];
+    for (int i = 0; i < n; i++)
+    {
+        float a = 1.5707963f - 6.2831853f * frac * i / (n - 1);
+        px[i] = x + cos(a) * rr;
+        py[i] = y + sin(a) * rr;
+    }
+    Hud_Ring(x, y, rr, 0.05f, Color_Over(col, 0.25f)); // the track
+    Hud_Line(px, py, n, 0, w, PX, Color_Over(col, open ? 1.f : 0.8f));
+}
+
+static void Pad_Cues(void)
+{
+    // a ledge route has its own steps; a jump's route (Jump Timing) cues
+    // the jump buttons as well as the AI and waveland ones
+    if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_OFF || (route_rows_active && !jump_rows_active))
+        return;
+    float k = vis_k;
+    int jump = Jump_PressAhead();
+    if (jump >= 0)
+    {
+        vis_k = Group_K(VG_TIMERS);
+        Pad_CueAt(PIN_X, color_in_jump, jump, jump == 0);
+        Pad_CueAt(PIN_Y, color_in_jump, jump, jump == 0);
+    }
+    if (Cues_Ai())
+        Pad_CueOne(PIN_A, CUE_AI);
+    if (Cues_Waveland())
+    {
+        Pad_CueOne(PIN_L, CUE_WL);
+        Pad_CueOne(PIN_R, CUE_WL);
+    }
+    vis_k = k;
+}
+
 static void Pad_Draw(FighterData *fp)
 {
     if (Options_Hud[HOPT_STICK].val == STICK_OFF)
@@ -8004,10 +12677,18 @@ static void Pad_Draw(FighterData *fp)
     Pad_Box(fp, &bx, &by, &x1, &y1);
     HSD_Pad *pad = Pad_Live(fp);
     int buttons = Options_Hud[HOPT_BUTTONS].val;
+    memset(pin_spot, 0, sizeof(pin_spot));
 
     if (buttons && Options_Hud[HOPT_LOOK].val == LOOK_RING)
     {
         Ring_Draw(fp, pad, bx, by);
+        Pad_Cues();
+        return;
+    }
+    if (buttons && Options_Hud[HOPT_LOOK].val == LOOK_CREST)
+    {
+        Crest_Draw(fp, pad, bx, by);
+        Pad_Cues();
         return;
     }
     Pad_Stick(fp, pad, buttons ? bx + PAD_STICK_X : bx + PAD_R, by + PAD_R, PAD_R, 1.f);
@@ -8023,6 +12704,8 @@ static void Pad_Draw(FighterData *fp)
 
     Pad_Trigger(bx, by, pad->ftriggerLeft, glow[PIN_L]);
     Pad_Trigger(bx + PAD_W - 0.5f, by, pad->ftriggerRight, glow[PIN_R]);
+    Pin_Spot(PIN_L, bx + 0.25f, by + 2.4f, 0.7f);
+    Pin_Spot(PIN_R, bx + PAD_W - 0.25f, by + 2.4f, 0.7f);
 
     Pad_Button(bx + 8.3f, by + 2.6f, 0.8f, color_btn_a, PIN_A, glow[PIN_A]);
     Pad_Button(bx + 7.0f, by + 1.5f, 0.48f, color_btn_b, PIN_B, glow[PIN_B]);
@@ -8038,6 +12721,7 @@ static void Pad_Draw(FighterData *fp)
         Hud_PillRing(zx, zy, 1.3f, 0.66f, 0, 0.1f, Color_Mix(color_btn_z, color_white, 0.5f));
 
     Pad_CStick(pad, bx + 10.6f, by + 1.3f, glow[PIN_C]);
+    Pad_Cues();
 }
 
 ///////////////////////
@@ -8051,10 +12735,12 @@ static void Pad_Draw(FighterData *fp)
 
 static void Panel_Line(float x, float y, int right, const char *text, int kind)
 {
+    if (!text[0] || (text[0] == '-' && !text[1]))
+        return; // nothing to say ("-"): no plate or square either
     float size = 0.45f;
     float w = 1.7f + Text_Width(text, size);
     float x0 = right ? x - w : x;
-    Hud_Rect(x0, y + 0.15f, x0 + w, y + 2.35f, Color_Fill(color_plate, 0.6f));
+    Text_Plate(x0, x0 + w, y);
     GXColor sq = kind >= 0 ? Cue_Color(kind) : Color_Fill(color_white, kind == -2 ? 0 : 0.3f); // -2: no square
     GXColor tc = {235, 235, 235, 255};
     if (right)
@@ -8069,13 +12755,32 @@ static void Panel_Line(float x, float y, int right, const char *text, int kind)
     }
 }
 
+// A quick toggle's new setting, shown for a moment at the top of the panel
+// (even with the panel off).
+static char toast_text[40];
+static int toast_timer;
+static u8 hide_all; // everything the event draws hidden but the toast (L or R, Z and D-pad up or down)
+#define TOAST_FRAMES 90
+
+static void Toast(const char *t)
+{
+    strcpy(toast_text, t);
+    toast_timer = TOAST_FRAMES;
+    OSReport("LLTOAST %s\n", t);
+}
+
 static void Panel_Draw(void)
 {
-    if (!Options_Hud[HOPT_PANEL].val)
-        return;
     int right = !panel_left;
     float x = right ? SAFE_W : -SAFE_W;
     float y = SAFE_H - 3.0f;
+    if (toast_timer > 0)
+    {
+        Panel_Line(x, y, right, toast_text, -2);
+        y -= 2.4f;
+    }
+    if (!Options_Hud[HOPT_PANEL].val || hide_all)
+        return;
     Panel_Line(x, y, right, text_next, next_kind);
     if (text_steps[0])
     {
@@ -8103,6 +12808,8 @@ static void Panel_Draw(void)
 // exact mapping), and what the timers and the prediction hold. Logged from
 // the draw so the camera is the one this frame is rendered with.
 static int script_cur; // defined with the scripts below
+// test scripts log everything
+static int Log_Level(void) { return script_cur >= 0 ? LOG_ALL : Options_Dev[DOPT_LOG].val; }
 static int capture_clean; // hide everything the event draws (D-pad up in Frame Advance, with the Debug Log on)
 
 static void Log_Camera(FighterData *fp)
@@ -8113,7 +12820,7 @@ static void Log_Camera(FighterData *fp)
         return;
     last = event_vars->game_timer;
 
-    COBJ *cobj = *stc_matchcam_cobj;
+    COBJ *cobj = View_CObj();
     char buf[512];
     int n = sprintf(buf, "LLCAM %d vp %.1f %.1f %.1f %.1f pts", event_vars->game_timer,
                     cobj->viewport_left, cobj->viewport_right, cobj->viewport_top, cobj->viewport_bottom);
@@ -8189,18 +12896,24 @@ static void Log_Camera(FighterData *fp)
             if (p->ai_mask[j] & ~p->ai_lag_mask[j])
                 raw = j;
         }
+        u8 raw_mask = raw ? p->ai_mask[raw] & ~p->ai_lag_mask[raw] : 0;
         sprintf(buf, "LLPRED %d land %d kind %d at %.3f %.3f lag %d ai %d w%d wl %d w%d raw %d t%d m%x\n",
                 event_vars->game_timer, k, p->land_kind, p->pos[k].X, p->pos[k].Y + p->bottom[k], p->lag, p->ai_first,
-                p->ai_width, p->wl_first, p->wl_width, raw, raw ? raw + p->ai_delay[raw] : 0,
-                raw ? p->ai_mask[raw] & ~p->ai_lag_mask[raw] : 0);
+                p->ai_width, p->wl_first, p->wl_width, raw, raw ? raw + Ai_FirstDelay(p, raw, raw_mask) : 0, raw_mask);
         Log(buf);
     }
 }
 
 static void Draw_SlideOff(void);
 static void Draw_RoutePath(void);
+static void Draw_JumpPath(void);
+static int Jump_Showing(void);
 static void Markers_Draw(void);
 static void Compass_Draw(void);
+#ifdef LL_GROUND_GUIDE
+static void Guide_Draw(FighterData *fp);
+static int gd_bake = -1; // the ground guide height being baked, -1 none, -2 asked for by the script
+#endif
 
 // Platform Glow: the floor a waveland or wavedash slides along lights up
 // in the stage, at Falcon's depth. A faint glow marks the slide while the
@@ -8220,18 +12933,18 @@ static void Glow_Span(float xa, float xb, float y, float h, GXColor c)
     GXColor top = {0, 0, 0, 0};
     float ym = y + h * 0.3f;
     World_Start(8, GX_QUADS, 0);
-    GFX_AddVtx(xa, y, GLOW_Z, c);
-    GFX_AddVtx(xb, y, GLOW_Z, c);
-    GFX_AddVtx(xb, ym, GLOW_Z, mid);
-    GFX_AddVtx(xa, ym, GLOW_Z, mid);
-    GFX_AddVtx(xa, ym, GLOW_Z, mid);
-    GFX_AddVtx(xb, ym, GLOW_Z, mid);
-    GFX_AddVtx(xb, y + h, GLOW_Z, top);
-    GFX_AddVtx(xa, y + h, GLOW_Z, top);
+    World_Vtx(xa, y, GLOW_Z, c);
+    World_Vtx(xb, y, GLOW_Z, c);
+    World_Vtx(xb, ym, GLOW_Z, mid);
+    World_Vtx(xa, ym, GLOW_Z, mid);
+    World_Vtx(xa, ym, GLOW_Z, mid);
+    World_Vtx(xb, ym, GLOW_Z, mid);
+    World_Vtx(xb, y + h, GLOW_Z, top);
+    World_Vtx(xa, y + h, GLOW_Z, top);
     GXColor line = Color_Mix(c, Color_Fill(color_white, c.a / 255.f), 0.3f);
     World_Start(2, GX_LINES, 42);
-    GFX_AddVtx(xa, y + 0.1f, GLOW_Z, line);
-    GFX_AddVtx(xb, y + 0.1f, GLOW_Z, line);
+    World_Vtx(xa, y + 0.1f, GLOW_Z, line);
+    World_Vtx(xb, y + 0.1f, GLOW_Z, line);
 }
 
 // How the glow ends: a hit bursts white-cyan and rises off the floor, a
@@ -8329,13 +13042,15 @@ static void World_GX(GOBJ *gobj, int pass)
 
     FighterData *fp = Fighter_GetGObj(0)->userdata;
     compass_num = 0;
-    if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+    if (Log_Level() >= LOG_ALL)
         Log_Camera(fp);
-    if (capture_clean)
+    if (capture_clean || hide_all)
         return;
     world_on_top = 1;
+    vis_k = 1.f;
     if (Options_Dev[DOPT_COLL].val)
         Draw_CurrentEcb(fp);
+    vis_k = Group_K(VG_PATHS);
     // a ledge route stays on top all the way down
     world_on_top = route_active;
 
@@ -8360,13 +13075,96 @@ static void World_GX(GOBJ *gobj, int pass)
     }
     world_on_top = 0;
     world_add = 1;
+    vis_k = Kind_K(VG_CUES, CUE_WL);
     Plat_Glow(fp);
     world_add = 0;
     world_on_top = 1;
+#ifdef LL_GROUND_GUIDE
+    Guide_Draw(fp); // sets each kind's own level
+#endif
+    vis_k = Group_K(VG_LEDGE);
+    vis_k = Group_K(VG_LEDGE);
     Draw_RoutePath();
+    Draw_JumpPath();
     // along the floor, where the depth test can't tell the line from it
+    vis_k = Group_K(VG_PATHS);
     Draw_SlideOff();
     world_on_top = 0;
+    vis_k = 1.f;
+}
+
+// The name picker's grid (Naming above), over everything else.
+#define NAMER_CELL_W 3.2f
+#define NAMER_CELL_H 3.0f
+#define NAMER_TOP 4.6f
+static void Namer_Key(int r, int c, float *x0, float *y0, float *x1, float *y1)
+{
+    float left = -NAMER_COLS * NAMER_CELL_W / 2;
+    float w = r == NAMER_ROWS - 1 ? NAMER_COLS * NAMER_CELL_W / NAMER_KEYS : NAMER_CELL_W;
+    *x0 = left + c * w + 0.15f;
+    *x1 = left + (c + 1) * w - 0.15f;
+    *y1 = NAMER_TOP - r * NAMER_CELL_H;
+    *y0 = *y1 - NAMER_CELL_H + 0.3f;
+}
+
+// The quick menu, Preset Deck (Deck_* below): up while L or R is held with
+// the game frozen.
+static u8 deck_on;
+static u8 deck_frozen; // ... and the game frozen under it (not while it plays out)
+static void Deck_Draw(void);
+static void Deck_Open(void);
+
+static void Namer_Draw(void)
+{
+    static const char *keys[NAMER_KEYS] = {"Space", "Delete", 0, "Done"};
+    GXColor ink = {235, 235, 235, 255}, dark = {10, 12, 24, 255}, lit = {120, 150, 255, 255};
+    Hud_Rect(-40.f, -30.f, 40.f, 30.f, Color_Over(color_plate, 0.6f));
+    float px = NAMER_COLS * NAMER_CELL_W / 2 + 1.2f;
+    Hud_Rect(-px, -13.6f, px, 13.f, Color_Over(color_plate, 0.92f));
+    Hud_Frame(-px, -13.6f, px, 13.f, 0.12f, Color_Over(lit, 0.6f));
+    Hud_TextAligned(namer.title, -px + 1.f, 10.f, 0.5f, ink, 0);
+    // the name so far, with the cursor after it
+    Hud_Rect(-px + 1.f, 6.6f, px - 1.f, 9.4f, Color_Over(color_white, 0.08f));
+    Hud_Rect(-px + 1.f, 6.6f, px - 1.f, 6.75f, Color_Over(lit, 0.8f));
+    char line[NAME_LEN + 2];
+    sprintf(line, "%s_", namer.buf);
+    Hud_TextAligned(line, -px + 1.6f, 6.75f, 0.6f, color_white, 0);
+
+    for (int r = 0; r < NAMER_ROWS; r++)
+    {
+        int cols = r == NAMER_ROWS - 1 ? NAMER_KEYS : NAMER_COLS;
+        for (int c = 0; c < cols; c++)
+        {
+            float x0, y0, x1, y1;
+            Namer_Key(r, c, &x0, &y0, &x1, &y1);
+            int on = r == namer.cy && c == namer.cx;
+            Hud_Rect(x0, y0, x1, y1, on ? Color_Over(lit, 1.f) : Color_Over(color_white, 0.1f));
+            if (on)
+                Hud_Frame(x0 - 0.1f, y0 - 0.1f, x1 + 0.1f, y1 + 0.1f, 0.15f, color_white);
+            if (!namer.dirty || !namer.text)
+                continue;
+            int i = r * NAMER_COLS + c;
+            char glyph[2] = {0, 0};
+            const char *label;
+            if (r < NAMER_ROWS - 1)
+            {
+                glyph[0] = namer_rows[namer.lower][r][c];
+                label = glyph;
+            }
+            else
+                label = keys[c] ? keys[c] : namer.lower ? "ABC" : "abc";
+            float size = r < NAMER_ROWS - 1 ? 0.55f : 0.45f;
+            // as Hud_TextAligned places a row 2.5 tall whose bottom is y
+            float y = (y0 + y1) / 2 - 1.25f;
+            Text_SetText(namer.text, i, label);
+            Text_SetScale(namer.text, i, size, size);
+            Text_SetPosition(namer.text, i, (x0 + x1) / 2 * 10.f, y * -10.f - 37.5f);
+            Text_SetColor(namer.text, i, on ? &dark : &ink);
+        }
+    }
+    namer.dirty = 0;
+    Hud_TextAligned("A type   B delete   Y space   X case   Start done", -px + 1.f, -12.9f, 0.4f,
+                    (GXColor){180, 185, 200, 255}, 0);
 }
 
 static void Hud_GX(GOBJ *gobj, int pass)
@@ -8381,24 +13179,52 @@ static void Hud_GX(GOBJ *gobj, int pass)
     COBJ *prev = COBJ_GetCurrent();
     CObj_SetCurrent(event_vars->hudcam_gobj->hsd_object);
     quad_num = 0;
-
+    if (namer.on)
+    {
+        Namer_Draw();
+        Quad_Flush();
+        CObj_SetCurrent(prev);
+        return;
+    }
+    if (hide_all)
+    {
+        Panel_Draw(); // the toast that says so
+        // a quiet reminder that it's only hidden, and how to bring it back
+        Hud_TextAligned("Effects hidden  (L+R + D-pad up)", -SAFE_W, SAFE_H - 2.5f, 0.3f,
+                        (GXColor){200, 205, 220, 110}, 0);
+        if (deck_on)
+            Deck_Draw();
+        Quad_Flush();
+        CObj_SetCurrent(prev);
+        return;
+    }
     Meter_Build();
-    if (Options_Hud[HOPT_SPOT].val)
-        Spot_Draw(fp);
-    int timer = Options_Hud[HOPT_TIMER].val;
+    vis_k = Group_K(route_rows_active ? VG_LEDGE : VG_TIMERS);
+    Spot_Draw(fp);
+    int near = Options_Timers[TOPT_NEAR].val;
     if (meter_rows == 0)
         Pin_Idle();
     else
     {
-        if (timer == TIMER_FALCON || timer == TIMER_BOTH)
+        if (near == NEAR_STRIP)
             Meter_Above(fp);
-        if (timer == TIMER_FIXED || timer == TIMER_BOTH)
+        if (Options_Timers[TOPT_STRIP].val != STRIP_OFF)
             Meter_Fixed(fp);
     }
+    if (near != NEAR_OFF && near != NEAR_STRIP)
+        Near_Draw(fp, near);
+    Wd_Draw(fp);
+    int route_marks = (hang_ledge >= 0 && route_show_num > 0) || (route_active && !route_dj_done) || Jump_Showing();
+    vis_k = Group_K(route_marks ? VG_LEDGE : VG_PATHS);
     Markers_Draw();
+    vis_k = Group_K(VG_PATHS);
     Compass_Draw();
+    vis_k = Group_K(VG_PAD);
     Pad_Draw(fp);
+    vis_k = 1.f;
     Panel_Draw();
+    if (deck_on)
+        Deck_Draw();
     if (quad_num > quad_peak)
         quad_peak = quad_num;
     Quad_Flush();
@@ -8429,7 +13255,7 @@ static int Advance_CheckPause(void)
 {
     HSD_Update *update = stc_hsd_update;
     int paused = update->pause_kind & 1;
-    return paused != (Options_Game[GOPT_FRAME_ADV].val || assist_frozen);
+    return paused != (Options_Game[GOPT_FRAME_ADV].val || assist_frozen || namer.on || deck_frozen);
 }
 
 static int Advance_CheckStep(void)
@@ -8440,6 +13266,8 @@ static int Advance_CheckStep(void)
     HSD_Pad *engine = PadGetEngine(port);
     int button = adv_button_masks[Options_Game[GOPT_ADV_BUTTON].val];
 
+    if (namer.on || deck_frozen)
+        return 0; // the name grid or the quick menu has the buttons
     if (assist_advance)
     {
         assist_advance = 0;
@@ -8507,6 +13335,22 @@ static int Advance_CheckStep(void)
 //   mark [label]               only write a line to the log
 //   autorun                    (anywhere) play All, or the only script, as
 //                              soon as the event starts
+// Steps that do what the menu would, so a test needs no menuing:
+//   set <Menu>/<Option> = <v>  an option's value, its place in the list
+//                              (Menu: Cues, Timers, Paths, HUD, Sounds, Ledge,
+//                              Jump, Camera, Speed or Dev)
+//   get <Menu>/<Option>        write an option's value to the log
+//   closemenu                  what closing the pause menu does
+//   preset load|save|start <name>  the Presets menu's actions on that preset
+//   card flush                 finish writing the memory card, waiting
+//   card restart               as if the event started over: every option
+//                              back to its default, then the card read again
+//   chord lr|z|lrz up|down|left|right  a quick toggle
+//   view save|load|show <1-8>  Camera > Save View, picking that View, or
+//                              logging where the camera is against it
+//   view name <1-8> <word>     name a saved view
+//   view shift 1 <dx> <dy>     slide the Advanced camera
+//   fadereset                  Intensity > Reset Fade
 // Inputs: A B X Y Z L R (L and R fully pressed), s:x,y (stick), c:x,y
 // (C-stick), lt:v (light press, no click), with x, y, v from -1 to 1. A
 // stick value is round(80 v), pulled back onto the rim if it's past it.
@@ -8527,6 +13371,20 @@ enum script_op_kind
     SOP_LAND,
     SOP_SHOT,
     SOP_MARK,
+    SOP_CMD, // count: which (SCMD_*), label: the rest of the line
+};
+
+enum script_cmd
+{
+    SCMD_SET,
+    SCMD_CLOSEMENU,
+    SCMD_PRESET,
+    SCMD_CARD,
+    SCMD_CHORD,
+    SCMD_FADE,
+    SCMD_GET,
+    SCMD_VIEW,
+    SCMD_BAKE,
 };
 
 typedef struct ScriptInput
@@ -8563,6 +13421,7 @@ static int script_shown; // the first ones are listed in the menu
 static int script_autorun;
 
 static int script_cur = -1; // running script, -1 = none
+static char shot_label[48];  // the last shot's label, for the heartbeat
 static int script_pc;       // its current step
 static int script_left;     // frames left in that step
 static int script_wait;     // frames a wl/ai/land step has waited
@@ -8798,6 +13657,14 @@ static void Script_Parse(void)
             op->kind = w[0] == 's' ? SOP_SHOT : SOP_MARK;
             op->label = Script_Trim(rest);
         }
+        else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
+                 Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset") ||
+                 Script_Is(w, "bake"))
+        {
+            op->kind = SOP_CMD;
+            op->count = w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
+            op->label = Script_Trim(rest);
+        }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
         {
             char *n = Script_Word(&rest);
@@ -8955,6 +13822,7 @@ static void Script_ResetTracking(void)
     seg_valid = 0;
     live_visible = 0;
     ghost_visible = 0;
+    jt_active = 0;
     Cues_Clear();
     Window_Forget();
 }
@@ -9145,6 +14013,244 @@ static void Script_Next(void)
     script_left = op ? op->count : 0;
 }
 
+static void Chord(int lr, int z, int down);
+
+// An option by "Menu/Option name", or 0.
+static EventOption *Script_FindOption(char *spec)
+{
+    char menu[24];
+    int n = 0;
+    while (spec[n] && spec[n] != '/' && n < (int)sizeof(menu) - 1)
+    {
+        menu[n] = spec[n];
+        n++;
+    }
+    if (spec[n] != '/')
+        return 0;
+    menu[n] = 0;
+    char *name = spec + n + 1;
+    if (Script_Is(menu, "Dev"))
+    {
+        for (int i = 0; i < DOPT_COUNT; i++)
+            if (Script_Is(Options_Dev[i].name, name))
+                return &Options_Dev[i];
+        return 0;
+    }
+    for (int m = 0; m < (int)countof(preset_menus); m++)
+        if (Script_Is(preset_menus[m].tag, menu))
+            for (int i = 0; i < preset_menus[m].num; i++)
+                if (Script_Is(preset_menus[m].opts[i].name, name))
+                    return &preset_menus[m].opts[i];
+    return 0;
+}
+
+static int Script_Preset(const char *name)
+{
+    for (int i = 0; i < PS_COUNT; i++)
+        if (Script_Is(preset_names[i], name))
+            return i;
+    return -1;
+}
+
+// A step that does what the menu would. The line is copied first: the
+// script can run again.
+static void Script_Cmd(ScriptOp *op)
+{
+    char line[96], buf[160];
+    int len = strlen(op->label);
+    if (len > (int)sizeof(line) - 1)
+        len = sizeof(line) - 1;
+    memcpy(line, op->label, len);
+    line[len] = 0;
+    char *rest = line;
+    int ok = 1;
+    switch (op->count)
+    {
+    case SCMD_SET:
+    {
+        char *eq = line;
+        while (*eq && *eq != '=')
+            eq++;
+        ok = *eq == '=';
+        if (!ok)
+            break;
+        *eq = 0;
+        char *v = Script_Trim(eq + 1);
+        EventOption *o = Script_FindOption(Script_Trim(line));
+        int val = (int)Script_Number(&v);
+        ok = o != 0 && *v == 0 && Preset_Fits(o, val);
+        if (!ok)
+            break;
+        int cam = o == &Options_Camera[CAMOPT_MODE] && o->val != val;
+        int start = o == &Options_Ledge[LOPT_START] && o->val != val;
+        o->val = val;
+        if (cam)
+            preset_cam_pending = 1;
+        if (start)
+            Event_ChangeLedgeStart(0, val);
+        Event_ChangeRoutes(0, 0);
+        sprintf(buf, "LLSET %s = %d\n", line, val);
+        Log(buf);
+        return;
+    }
+    case SCMD_GET:
+    {
+        EventOption *o = Script_FindOption(Script_Trim(line));
+        ok = o != 0;
+        if (!ok)
+            break;
+        if (o->kind == OPTKIND_STRING && o->val >= 0 && o->val < o->value_num)
+            sprintf(buf, "LLGET %s = %d (%s)\n", line, o->val, o->values[o->val]);
+        else
+            sprintf(buf, "LLGET %s = %d\n", line, o->val);
+        Log(buf);
+        return;
+    }
+    case SCMD_CLOSEMENU:
+        Presets_KeepUser();
+        return;
+    case SCMD_VIEW:
+    {
+        char *what = Script_Word(&rest), *n = Script_Word(&rest);
+        int v = n ? (int)Script_Number(&n) : 0;
+        ok = what && v >= 1 && v <= VIEW_SLOTS;
+        if (!ok)
+            break;
+        if (Script_Is(what, "show"))
+        {
+            // where the camera is now, to compare with view v as saved
+            COBJ *cobj = View_CObj();
+            CamView *w = View_Find(v);
+            Vec3 eye = {0}, at = {0};
+            if (cobj)
+            {
+                COBJ_GetEyePosition(cobj, &eye);
+                COBJ_GetInterest(cobj, &at);
+            }
+            sprintf(buf, "LLVIEW show: eye %.1f %.1f %.1f at %.1f %.1f %.1f fov %.1f; view %d \"%s\" on stage %d %s\n", eye.X,
+                    eye.Y, eye.Z, at.X, at.Y, at.Z, cobj ? cobj->projection_param.perspective.fov : 0.f, v, view_label[v - 1],
+                    Stage_GetExternalID(),
+                    !w ? "unsaved"
+                    : fabs(eye.X - w->eye.X) + fabs(eye.Y - w->eye.Y) + fabs(eye.Z - w->eye.Z) < 0.5f ? "matches" : "differs");
+            Log(buf);
+            break;
+        }
+        if (Script_Is(what, "shift"))
+        {
+            // view shift 1 dx dy: slides the Advanced camera (eye and what
+            // it looks at) by dx dy, to check effects follow it; the number
+            // after shift is ignored
+            char *a = Script_Word(&rest), *b = Script_Word(&rest);
+            ok = a && b;
+            if (ok)
+            {
+                float dx = Script_Number(&a), dy = Script_Number(&b);
+                Options_Camera[CAMOPT_MODE].val = CAM_ADVANCED;
+                Event_ChangeCamera(0, CAM_ADVANCED);
+                COBJ *cobj = View_CObj();
+                if (cobj)
+                {
+                    COBJ_GetEyePosition(cobj, &dev_cam->free_eye_pos);
+                    COBJ_GetInterest(cobj, &dev_cam->free_int_pos);
+                    dev_cam->free_fov = cobj->projection_param.perspective.fov;
+                }
+                dev_cam->free_eye_pos.X += dx;
+                dev_cam->free_eye_pos.Y += dy;
+                dev_cam->free_int_pos.X += dx;
+                dev_cam->free_int_pos.Y += dy;
+            }
+            break;
+        }
+        if (Script_Is(what, "name"))
+        {
+            // view name N Word: names a saved view without the letter grid
+            CamView *w = View_Find(v);
+            char *t = Script_Word(&rest);
+            ok = w && t;
+            if (ok)
+            {
+                Name_Copy(w->name, t);
+                preset_dirty = 1;
+                Labels_Refresh();
+            }
+            break;
+        }
+        Options_Camera[CAMOPT_VIEW].val = v;
+        if (Script_Is(what, "save"))
+            Event_SaveView(0);
+        else if (Script_Is(what, "load"))
+            Event_ChangeView(0, v);
+        else
+            ok = 0;
+        break;
+    }
+    case SCMD_PRESET:
+    {
+        char *what = Script_Word(&rest);
+        int which = Script_Preset(Script_Trim(rest));
+        ok = what && which >= 0;
+        if (!ok)
+            break;
+        if (Script_Is(what, "load") || Script_Is(what, "save"))
+        {
+            Options_Presets[PROPT_PICK].val = which;
+            if (what[0] == 'l')
+                Event_PresetLoad(0);
+            else
+                Event_PresetSave(0);
+        }
+        else if (Script_Is(what, "start"))
+        {
+            Options_Presets[PROPT_START].val = which;
+            Event_ChangePresetStart(0, which);
+        }
+        else
+            ok = 0;
+        break;
+    }
+    case SCMD_CARD:
+        if (Script_Is(rest, "flush"))
+            Card_Flush();
+        else if (Script_Is(rest, "restart"))
+        {
+            Card_Flush();
+            Preset_Apply(&preset_builtin[PS_DEFAULTS - PS_SAVED]);
+            Card_Load();
+        }
+        else
+            ok = 0;
+        break;
+    case SCMD_FADE:
+        Event_FadeReset(0); // Auto Fade's hit rates from earlier runs
+        break;
+    case SCMD_BAKE:
+#ifdef LL_GROUND_GUIDE
+        gd_bake = -2; // the ground guide's tables, from the next frame
+#else
+        ok = 0;
+#endif
+        break;
+    case SCMD_CHORD:
+    {
+        char *mods = Script_Word(&rest), *dir = Script_Word(&rest);
+        ok = mods && dir;
+        if (!ok)
+            break;
+        int lr = mods[0] == 'l', z = mods[0] == 'z' || mods[2] == 'z';
+        int down = Script_Is(dir, "up") ? HSD_BUTTON_DPAD_UP : Script_Is(dir, "down") ? HSD_BUTTON_DPAD_DOWN : Script_Is(dir, "left") ? HSD_BUTTON_DPAD_LEFT : Script_Is(dir, "right") ? HSD_BUTTON_DPAD_RIGHT : 0;
+        ok = down != 0 && (lr || z);
+        if (ok)
+            Chord(lr, z, down);
+        break;
+    }
+    }
+    if (!ok)
+    {
+        sprintf(buf, "LLSCRIPT can't do this step: %s\n", op->label);
+        Log(buf);
+    }
+}
+
 // Steps that take no frame. Before a frame (pre) a start or air places
 // Falcon; after one, a shot or mark goes right after the inputs before it,
 // and a start or air waits for the next frame. Returns 0 once the script is over.
@@ -9192,6 +14298,11 @@ static int Script_Instant(GOBJ *ft, int pre)
         else if (op->kind == SOP_SHOT)
         {
             Options_Game[GOPT_FRAME_ADV].val = 1;
+            int n = strlen(op->label);
+            if (n > (int)sizeof(shot_label) - 1)
+                n = sizeof(shot_label) - 1;
+            memcpy(shot_label, op->label, n);
+            shot_label[n] = 0;
             sprintf(buf, "LLSHOT %s %s at %d\n", scripts[script_cur].name, op->label, event_vars->game_timer);
             Log(buf);
         }
@@ -9200,9 +14311,15 @@ static int Script_Instant(GOBJ *ft, int pre)
             sprintf(buf, "LLMARK %s %s at %d\n", scripts[script_cur].name, op->label, event_vars->game_timer);
             Log(buf);
         }
+        else if (op->kind == SOP_CMD)
+            Script_Cmd(op);
         else
             return 1;
         Script_Next();
+        // the steps after a shot wait for the next frame, so the frozen
+        // frame shows what the script set up for it
+        if (op->kind == SOP_SHOT && !pre)
+            return 1;
     }
 }
 
@@ -9388,20 +14505,24 @@ void Event_ChangeScript(GOBJ *menu, int value)
 // wait, fastfall, double jump toward the stage, then land with no lag (NIL)
 // or press an aerial that interrupts the landing (AI). Every combination of
 // up to LR_WAIT frames of waiting and LR_FF of fastfall is simulated once
-// per ledge, a few hundred simulated frames per game frame, and the best of
-// each kind of route kept. The main stage's two ledges are searched as the
-// event starts; any other ledge when Falcon first hangs from it.
+// per ledge, a few hundred simulated frames per game frame, and every
+// distinct route kept (up to LR_ROUTES of each kind), best first. The Route
+// option browses them. The main stage's two ledges are searched as the event
+// starts; any other ledge when Falcon first hangs from it.
 
-#define LR_KEEP 3           // routes shown
+#define LR_KEEP 3           // route rows shown: the chosen route and the next ones
 #define LR_LEDGES 8         // ledges remembered
 #define LR_WAIT 8           // most frames let go before the fastfall or jump
 #define LR_FF 8             // most frames held down before the jump
 #define LR_DJ_X 3           // sticks tried on the double jump
 #define LR_CANDIDATES (2 * 2 * 2 * (LR_WAIT + 1) * (LR_FF + 1) * LR_DJ_X)
-#define LR_SIGS 16          // kind x drop x fastfall x hold
+#define LR_ROUTES 48        // routes kept per ledge and kind (NIL, AI)
+#define LR_WINDOWS 3        // press windows kept per aerial and candidate
+#define LR_TRY (1 + 5 * LR_WINDOWS) // routes one candidate gives: a NIL and the aerials' windows
 #define LR_SIM 45           // frames simulated after the jump
 #define LR_BUDGET 1500      // simulated frames per game frame, on the ground or ledge
 #define LR_BUDGET_AIR 400   // ... and while the live prediction runs too
+#define LR_TIME_US 2000     // the most real time the search takes in a frame (it can run over by one route)
 
 // The stick on the double jump: all the way in, 45 degrees down and in (a
 // partial drift that clears the underside of stages like Battlefield's when
@@ -9444,18 +14565,34 @@ typedef struct LedgeRoute
     s16 ff_at;  // frame the fastfall starts, -1 none
 } LedgeRoute;
 
+// The routes a search found: for each order the Route Sort option can ask
+// for (GALINT, Easiest) and each kind (NIL, AI), the best LR_ROUTES in that
+// order. Each order is kept on its own, so Easiest finds the easy routes
+// that keep little GALINT too, not only the easiest of the best ones.
+typedef struct RouteList
+{
+    int n[2][2];                    // routes kept: [order][kind]
+    LedgeRoute r[2][2][LR_ROUTES];  // ... best first
+} RouteList;
+
 typedef struct LedgeEntry
 {
     u8 used;
-    u8 done;
+    u8 done;     // the search has been through every candidate
+    u8 have;     // a search finished: list holds its routes
     u8 logged;   // its routes went to the log
     s8 facing;   // the way Falcon faces while hanging: toward the stage
     float x, y;  // where he hangs
     int next;    // the next candidate to simulate
-    LedgeRoute sig[LR_SIGS]; // the best route of each kind
+    int version; // finished searches, so what was built from the routes knows they changed
+    RouteList list; // the last finished search's routes; it keeps showing while the next one runs
+    u8 has_pick;      // a route was chosen on this ledge ...
+    LedgeRoute pick;  // ... this one, found again when the list is rebuilt
 } LedgeEntry;
 
 static LedgeEntry *ledges; // [LR_LEDGES], allocated in Event_Init
+static RouteList *route_build;   // the search under way fills this, one ledge at a time
+static int route_build_ledge = -1; // ... the ledge it is for, -1 none
 static Prediction *pred_route;
 static Vec2 *route_path;          // [LR_PATH]
 static float *route_path_bottom;  // [LR_PATH]
@@ -9464,13 +14601,25 @@ static LedgeRoute route_path_of;  // the route the path is for
 static int route_path_ledge = -1;
 static int ledges_found;
 
+// the browser: the routes of one ledge in the order the menu chose
+static LedgeRoute *route_list;    // [2 * LR_ROUTES], allocated in Event_Init
+static int route_list_num;
+static int route_list_ledge = -1; // ledge it was built for
+static int route_list_version;    // ... from which search
+static int route_list_kind = -1;  // ... and with which Route Kind and Route Sort
+static int route_list_sort = -1;
+static int route_browse = -1;     // the ledge the Route option browses: where Falcon hangs, or last did
+
 // while hanging
 static int hang_ledge = -1;   // the ledge Falcon hangs from, -1 none
-static LedgeRoute route_show[LR_KEEP];
+static LedgeRoute route_show[LR_KEEP]; // the chosen route, then the ones after it
 static int route_show_num;
+static int route_show_rank;   // the chosen route's place in the list, 0 first
 
 // after letting go
 static LedgeRoute route_cur;
+static int route_cur_num;     // its place in the browser's list, 1 first
+static int route_cur_total;   // ... of this many
 static int route_ledge;       // ledge it started from
 static int route_drop;        // game frame of the drop (the first frame falling)
 static int route_e;           // frames since the drop
@@ -9498,7 +14647,7 @@ static int drill_side = 1;   // facing on the ledge to start from
 
 static int assist_wait; // real frames Assist has waited
 
-static void Route_Text(LedgeRoute *r, int galint);
+static void Route_Text(LedgeRoute *r, int galint, int num, int total);
 static void Drill_Finish(int success);
 
 static int Routes_On(void)
@@ -9525,13 +14674,15 @@ static int Ledge_Add(float x, float y, int facing)
         LedgeEntry *L = &ledges[i];
         if (fabs(L->x - x) > 0.01f || fabs(L->y - y) > 0.01f)
         {
-            // learned where Falcon really hangs: search again from there
+            // learned where Falcon really hangs: search again from there.
+            // The routes of the search before keep showing until this one
+            // is done.
             L->x = x;
             L->y = y;
             L->done = 0;
-            L->logged = 0;
             L->next = 0;
-            memset(L->sig, 0, sizeof(L->sig));
+            if (route_build_ledge == i)
+                route_build_ledge = -1; // what it found so far is for the old spot
         }
         return i;
     }
@@ -9604,36 +14755,43 @@ static void Ledge_Start(LedgeEntry *L, SimStart *s)
     s->skip_line = -1;
 }
 
-// The order an aerial is offered in when several interrupt: the easiest
-// press first.
-static int Aerial_Pick(u8 mask)
+// The order an aerial is offered in when several interrupt in the same way:
+// the easiest press first.
+static int Aerial_Order(int rank)
 {
     static const u8 order[5] = {TS_AIRN, TS_AIRF, TS_AIRB, TS_AIRLW, TS_AIRHI};
+    return order[rank];
+}
+
+static int Aerial_Rank(int aerial)
+{
     for (int i = 0; i < 5; i++)
     {
-        if (mask & AERIAL_BIT(order[i]))
-            return order[i];
+        if (Aerial_Order(i) == aerial)
+            return i;
     }
-    return -1;
+    return 5;
 }
 
 // One route: the drop, wait frames let go, ff frames held down, the double
 // jump (stick in, down-in or let go), then holding toward the stage or not.
 // With fall_away the stick drifts away from the stage until the jump (down-
-// away for the fastfall), for room under the stage's lip. Fills nil when it
-// lands with no lag and ai with the first aerial interrupt that has no
-// aerial lag; either comes back not valid. With path, also records where
-// Falcon goes, frame by frame from the drop to the touchdown.
+// away for the fastfall), for room under the stage's lip. Gives, in out
+// (up to LR_TRY, n of them), a NIL when it lands with no lag, and for each
+// aerial the first few windows of press frames that touch down together
+// with no aerial lag. Of those the best is the touchdown soonest, then the
+// widest window, then the aerial Aerial_Order offers first (Route_Better
+// sorts them that way). With path, also records where Falcon goes, frame by
+// frame from the drop to the touchdown.
 static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff, int hold, int dj_x, int fall_away,
-                      LedgeRoute *nil, LedgeRoute *ai, Vec2 *path, float *bottom, int *num)
+                      LedgeRoute *out, int *n_out, Vec2 *path, float *bottom, int *num)
 {
     SimStart st;
     SimState s;
     SimStep step;
     Ledge_Start(L, &st);
     Sim_Init(&st, &s);
-    memset(nil, 0, sizeof(*nil));
-    memset(ai, 0, sizeof(*ai));
+    *n_out = 0;
     int dj = 1 + wait + ff;
     int prev_down = 0, ff_at = -1, n = 0;
     float tilt_dz = Common_Float(0xC);
@@ -9724,40 +14882,60 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
     base.press = -1;
     base.ff_at = ff_at;
 
+    int nr = 0;
     if (p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame)
     {
-        *nil = base;
-        nil->valid = 1;
-        nil->kind = LAND_NIL;
-        nil->land = dj + p->land_frame;
-        nil->act = nil->land;
+        LedgeRoute *r = &out[nr++];
+        *r = base;
+        r->valid = 1;
+        r->kind = LAND_NIL;
+        r->land = dj + p->land_frame;
+        r->act = r->land;
     }
 
+    // An aerial pressed on frame k touches down when its own ECB comes into
+    // use, at k + its delay: during the post-jump lock that's when the lock
+    // runs out, so presses on several frames can share one touchdown (a
+    // window). The aerials touch down at different frames, so each is
+    // followed on its own.
     int last = p->land_frame ? p->land_frame - 1 : p->num;
-    for (int k = 1; k <= last && k < p->uncertain_from; k++)
+    for (int a = 0; a < 5; a++)
     {
-        u8 m = p->ai_mask[k] & ~p->ai_lag_mask[k];
-        if (!m)
-            continue;
-        int aerial = Aerial_Pick(m);
-        int touch = k + p->ai_delay[k];
-        int w = 1;
-        while (k + w <= last && (p->ai_mask[k + w] & ~p->ai_lag_mask[k + w] & AERIAL_BIT(aerial)) &&
-               k + w + p->ai_delay[k + w] == touch)
-            w++;
-        *ai = base;
-        ai->valid = 1;
-        ai->kind = LAND_AI;
-        ai->aerial = aerial;
-        ai->press = dj + k;
-        ai->press_w = w;
-        ai->land = dj + touch;
-        ai->act = ai->land + (int)fp->attr.normal_landing_lag;
-        break;
+        int aerial = Aerial_Order(a);
+        u8 bit = AERIAL_BIT(aerial);
+        int windows = 0;
+        for (int k = 1; k <= last && k < p->uncertain_from && windows < LR_WINDOWS; k++)
+        {
+            if (!(p->ai_mask[k] & ~p->ai_lag_mask[k] & bit))
+                continue;
+            int touch = k + Ai_Delay(p, k, aerial);
+            int w = 1;
+            while (k + w <= last && (p->ai_mask[k + w] & ~p->ai_lag_mask[k + w] & bit) &&
+                   k + w + Ai_Delay(p, k + w, aerial) == touch)
+                w++;
+            LedgeRoute *r = &out[nr++];
+            *r = base;
+            r->valid = 1;
+            r->kind = LAND_AI;
+            r->aerial = aerial;
+            r->press = dj + k;
+            r->press_w = w;
+            r->land = dj + touch;
+            r->act = r->land + (int)fp->attr.normal_landing_lag;
+            windows++;
+            k += w - 1;
+        }
     }
+    *n_out = nr;
 }
 
-// Better: acts sooner; then a wider aerial window; then fewer inputs.
+// Better: acts sooner; then a wider aerial window (a NIL has no aerial to
+// time, so it's the widest); then fewer inputs.
+static int Route_Wide(LedgeRoute *r)
+{
+    return r->kind == LAND_NIL ? 99 : r->press_w;
+}
+
 static int Route_Better(LedgeRoute *a, LedgeRoute *b)
 {
     if (!b->valid)
@@ -9766,48 +14944,134 @@ static int Route_Better(LedgeRoute *a, LedgeRoute *b)
         return 0;
     if (a->act != b->act)
         return a->act < b->act;
-    if (a->press_w != b->press_w)
-        return a->press_w > b->press_w;
+    if (Route_Wide(a) != Route_Wide(b))
+        return Route_Wide(a) > Route_Wide(b);
     if ((a->ff > 0) != (b->ff > 0))
         return a->ff == 0;
     if (a->wait + a->ff != b->wait + b->ff)
         return a->wait + a->ff < b->wait + b->ff;
     if (a->fall_away != b->fall_away)
         return !a->fall_away;
-    return a->dj_x < b->dj_x;
+    if (a->dj_x != b->dj_x)
+        return a->dj_x < b->dj_x;
+    // nothing left to tell them apart by, so that the order never depends
+    // on the order they were found in
+    if (a->drop != b->drop)
+        return a->drop < b->drop;
+    if (a->hold != b->hold)
+        return a->hold < b->hold;
+    if (a->kind != b->kind)
+        return a->kind == LAND_NIL;
+    if (a->aerial != b->aerial)
+        return Aerial_Rank(a->aerial) < Aerial_Rank(b->aerial);
+    return a->press < b->press;
 }
 
-static int Route_Sig(LedgeRoute *r)
+// Easier: fewer frame-exact inputs. A wider aerial window first, then no
+// fastfall, then less waiting, then the one that keeps more GALINT.
+static int Route_Easier(LedgeRoute *a, LedgeRoute *b)
 {
-    return (r->kind == LAND_AI) * 8 + r->drop * 4 + (r->ff > 0) * 2 + r->hold;
+    if (Route_Wide(a) != Route_Wide(b))
+        return Route_Wide(a) > Route_Wide(b);
+    if ((a->ff > 0) != (b->ff > 0))
+        return a->ff == 0;
+    if (a->wait + a->ff != b->wait + b->ff)
+        return a->wait + a->ff < b->wait + b->ff;
+    return Route_Better(a, b);
 }
 
-static void Ledge_Keep(LedgeEntry *L, LedgeRoute *r)
+// The same route: the same inputs and the same press. Holding toward the
+// stage after the jump or not doesn't make another one.
+static int Route_Same(LedgeRoute *a, LedgeRoute *b)
 {
-    if (!r->valid)
+    return a->kind == b->kind && a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->dj_x == b->dj_x &&
+           a->fall_away == b->fall_away && a->aerial == b->aerial && a->press == b->press;
+}
+
+static int Route_Galint(LedgeRoute *r, int e, int intang);
+
+// r goes before b in the order Route Sort asked for.
+static int Route_Order(LedgeRoute *a, LedgeRoute *b, int order)
+{
+    return order == ROUTES_SORT_EASIEST ? Route_Easier(a, b) : Route_Better(a, b);
+}
+
+// Put a route in one of the lists, in order. A route already there with the
+// same inputs and press stays, or goes if this one comes before it; past
+// LR_ROUTES the last one falls off.
+static void Route_Insert(LedgeRoute *a, int *count, LedgeRoute *r, int order)
+{
+    int n = *count;
+    for (int i = 0; i < n; i++)
+    {
+        if (!Route_Same(r, &a[i]))
+            continue;
+        if (!Route_Order(r, &a[i], order))
+            return;
+        for (int j = i; j < n - 1; j++)
+            a[j] = a[j + 1];
+        n--;
+        break;
+    }
+    int at = n;
+    while (at > 0 && Route_Order(r, &a[at - 1], order))
+        at--;
+    if (at < LR_ROUTES)
+    {
+        if (n == LR_ROUTES)
+            n--;
+        for (int j = n; j > at; j--)
+            a[j] = a[j - 1];
+        a[at] = *r;
+        n++;
+    }
+    *count = n;
+}
+
+// Add a route the search found to the lists of both orders. One that keeps
+// no GALINT even right after the grab isn't a route.
+static void Ledge_Keep(RouteList *list, LedgeRoute *r)
+{
+    if (!r->valid || Route_Galint(r, -1, (*stc_ftcommon)->cliff_invuln_time) <= 0)
         return;
-    LedgeRoute *best = &L->sig[Route_Sig(r)];
-    if (Route_Better(r, best))
-        *best = *r;
+    int kind = r->kind == LAND_AI;
+    for (int order = 0; order < 2; order++)
+        Route_Insert(list->r[order][kind], &list->n[order][kind], r, order);
 }
 
 // Search on: the first ledge not done yet, until the budget of simulated
-// frames is spent.
+// frames or of real time is spent, whichever comes first. The routes of a
+// finished search take the place of the ones shown before it all at once.
 static void Ledge_Solve(FighterData *fp, int budget)
 {
-    LedgeEntry *L = 0;
+    if (!Routes_On())
+        return;
+    int at = -1;
     if (hang_ledge >= 0 && !ledges[hang_ledge].done)
-        L = &ledges[hang_ledge]; // the ledge Falcon hangs from first
-    for (int i = 0; i < LR_LEDGES && !L; i++)
+        at = hang_ledge; // the ledge Falcon hangs from first
+    for (int i = 0; i < LR_LEDGES && at < 0; i++)
     {
         if (ledges[i].used && !ledges[i].done)
-            L = &ledges[i];
+            at = i;
     }
-    if (!L)
+    if (at < 0)
         return;
+    LedgeEntry *L = &ledges[at];
+
+    // one search is kept at a time: moving to another ledge starts that one
+    // over, and this one again later
+    if (route_build_ledge != at)
+    {
+        if (route_build_ledge >= 0)
+            ledges[route_build_ledge].next = 0;
+        memset(route_build, 0, sizeof(RouteList));
+        route_build_ledge = at;
+        L->next = 0;
+    }
 
     Floor_BuildCache();
     int start = sim_steps;
+    int t0 = OSGetTick();
     while (L->next < LR_CANDIDATES && sim_steps - start < budget)
     {
         int c = L->next++;
@@ -9815,89 +15079,132 @@ static void Ledge_Solve(FighterData *fp, int budget)
         c /= 8;
         int wait = c % (LR_WAIT + 1), ff = (c / (LR_WAIT + 1)) % (LR_FF + 1);
         int dj_x = c / ((LR_WAIT + 1) * (LR_FF + 1));
-        LedgeRoute nil, ai;
-        Ledge_Try(fp, L, drop, wait, ff, hold, dj_x, fall_away, &nil, &ai, 0, 0, 0);
-        Ledge_Keep(L, &nil);
-        Ledge_Keep(L, &ai);
+        LedgeRoute found[LR_TRY];
+        int found_n;
+        Ledge_Try(fp, L, drop, wait, ff, hold, dj_x, fall_away, found, &found_n, 0, 0, 0);
+        for (int i = 0; i < found_n; i++)
+            Ledge_Keep(route_build, &found[i]);
+        if (OSTicksToMicroseconds(OSGetTick() - t0) >= LR_TIME_US)
+            break;
     }
     if (L->next >= LR_CANDIDATES)
+    {
+        memcpy(&L->list, route_build, sizeof(RouteList));
+        route_build_ledge = -1;
         L->done = 1;
-}
-
-static int Route_Same(LedgeRoute *a, LedgeRoute *b)
-{
-    return a->drop == b->drop && a->wait == b->wait && a->ff == b->ff && a->kind == b->kind && a->press == b->press;
-}
-
-static int Route_Galint(LedgeRoute *r, int e, int intang);
-
-// The best routes of the kind chosen in the menu, best first. Routes that
-// only differ in holding toward the stage after the jump count once, and a
-// route that keeps no GALINT even right after the grab isn't one.
-static int Ledge_Top(LedgeEntry *L, LedgeRoute *out, int max)
-{
-    int kinds = Options_Ledge[LOPT_KIND].val;
-    int full = (*stc_ftcommon)->cliff_invuln_time;
-    int n = 0;
-    LedgeRoute pool[LR_SIGS];
-    int pool_n = 0;
-    for (int i = 0; i < LR_SIGS; i++)
-    {
-        LedgeRoute *r = &L->sig[i];
-        if (!r->valid)
-            continue;
-        if (kinds == ROUTES_NIL && r->kind != LAND_NIL)
-            continue;
-        if (kinds == ROUTES_AI && r->kind != LAND_AI)
-            continue;
-        if (Route_Galint(r, -1, full) <= 0)
-            continue;
-        pool[pool_n++] = *r;
+        L->have = 1;
+        L->version++;
+        L->logged = 0;
     }
-    while (n < max)
-    {
-        int best = -1;
-        for (int i = 0; i < pool_n; i++)
-        {
-            if (!pool[i].valid)
-                continue;
-            int dup = 0;
-            for (int j = 0; j < n; j++)
-                dup |= Route_Same(&pool[i], &out[j]);
-            if (dup)
-            {
-                pool[i].valid = 0;
-                continue;
-            }
-            if (best < 0 || Route_Better(&pool[i], &pool[best]))
-                best = i;
-        }
-        if (best < 0)
-            break;
-        out[n++] = pool[best];
-        pool[best].valid = 0;
-    }
-    return n;
 }
 
-// The chosen route first: Best, Second or Third.
-static int Ledge_Routes(LedgeEntry *L, LedgeRoute *out)
+static void Route_MenuText(void);
+
+// The ledge's routes in the order the Route Sort option chose, of the kind
+// Route Kind chose, for the Route option to browse. Rebuilt when the ledge,
+// its search or either option changes, and then the Route number is held to
+// the routes there are.
+// The same inputs (and aerial) as r: the route found again after a new
+// search or in another order. Its frames may have moved by one, so an exact
+// match wins over the first one with the same inputs. -1 none.
+static int Route_Find(LedgeRoute *list, int n, LedgeRoute *r)
 {
-    LedgeRoute top[LR_KEEP];
-    int n = Ledge_Top(L, top, LR_KEEP);
-    int pick = Options_Ledge[LOPT_PICK].val;
-    if (pick >= n)
-        pick = n - 1;
-    if (n == 0)
-        return 0;
-    out[0] = top[pick];
-    int k = 1;
+    int near = -1;
     for (int i = 0; i < n; i++)
     {
-        if (i != pick)
-            out[k++] = top[i];
+        LedgeRoute *a = &list[i];
+        if (a->kind != r->kind || a->drop != r->drop || a->wait != r->wait || a->ff != r->ff || a->hold != r->hold ||
+            a->dj_x != r->dj_x || a->fall_away != r->fall_away || (r->kind == LAND_AI && a->aerial != r->aerial))
+            continue;
+        if (a->dj == r->dj && a->press == r->press)
+            return i;
+        if (near < 0)
+            near = i;
     }
-    return n;
+    return near;
+}
+
+// Returns 1 when it built the list anew.
+static int Routes_Update(int ledge)
+{
+    int kinds = Options_Ledge[LOPT_KIND].val;
+    int sort = Options_Ledge[LOPT_SORT].val;
+    LedgeEntry *L = ledge >= 0 ? &ledges[ledge] : 0;
+    int have = L && L->have;
+    int version = have ? L->version : -1;
+    if (ledge == route_list_ledge && version == route_list_version && kinds == route_list_kind && sort == route_list_sort)
+        return 0;
+    route_list_ledge = ledge;
+    route_list_version = version;
+    route_list_kind = kinds;
+    route_list_sort = sort;
+    route_list_num = 0;
+
+    if (have)
+    {
+        // each kind's list is in the chosen order already: merge them
+        RouteList *list = &L->list;
+        int n = 0, i = 0, j = 0;
+        int ni = kinds == ROUTES_AI ? 0 : list->n[sort][0];
+        int nj = kinds == ROUTES_NIL ? 0 : list->n[sort][1];
+        while (i < ni || j < nj)
+        {
+            if (j >= nj || (i < ni && Route_Order(&list->r[sort][0][i], &list->r[sort][1][j], sort)))
+                route_list[n++] = list->r[sort][0][i++];
+            else
+                route_list[n++] = list->r[sort][1][j++];
+        }
+        route_list_num = n;
+
+        // the Route number is 1 to the routes found. The route chosen on
+        // this ledge stays chosen when the list is put in another order or
+        // searched again. Each order keeps its own best routes, so it may
+        // not be in this one: then the list starts at its first route, and
+        // the choice comes back with an order that has it. A ledge with
+        // none chosen keeps the number.
+        EventOption *o = &Options_Ledge[LOPT_PICK];
+        o->value_num = n > 0 ? n : 1;
+        if (L->has_pick)
+        {
+            int found = Route_Find(route_list, n, &L->pick);
+            o->val = found >= 0 ? found + 1 : 1;
+        }
+        if (o->val > o->value_num)
+            o->val = o->value_num;
+        if (o->val < 1)
+            o->val = 1;
+    }
+    Route_MenuText();
+    return 1;
+}
+
+// Remember the route the Route option shows as the one chosen on its ledge.
+static void Route_RememberPick(void)
+{
+    int pick = Options_Ledge[LOPT_PICK].val - 1;
+    if (route_list_ledge < 0 || pick < 0 || pick >= route_list_num)
+        return;
+    LedgeEntry *L = &ledges[route_list_ledge];
+    L->pick = route_list[pick];
+    L->has_pick = 1;
+}
+
+// The routes the rows show: the chosen route, then the ones after it in
+// the list's order.
+static void Routes_Show(void)
+{
+    route_show_num = 0;
+    route_show_rank = 0;
+    if (route_list_num == 0)
+        return;
+    int pick = Options_Ledge[LOPT_PICK].val - 1;
+    if (pick >= route_list_num)
+        pick = route_list_num - 1;
+    if (pick < 0)
+        pick = 0;
+    route_show_rank = pick;
+    for (int i = 0; i < LR_KEEP && pick + i < route_list_num; i++)
+        route_show[route_show_num++] = route_list[pick + i];
 }
 
 // GALINT the route keeps if it goes as planned, e frames after the drop
@@ -9913,9 +15220,10 @@ static void Route_Path(FighterData *fp, int ledge, LedgeRoute *r)
     if (route_path_ledge == ledge && o->drop == r->drop && o->wait == r->wait && o->ff == r->ff && o->hold == r->hold &&
         o->dj_x == r->dj_x && o->fall_away == r->fall_away && o->kind == r->kind)
         return;
-    LedgeRoute nil, ai;
+    LedgeRoute found[LR_TRY];
+    int found_n;
     Floor_BuildCache();
-    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, r->dj_x, r->fall_away, &nil, &ai, route_path,
+    Ledge_Try(fp, &ledges[ledge], r->drop, r->wait, r->ff, r->hold, r->dj_x, r->fall_away, found, &found_n, route_path,
               route_path_bottom, &route_path_num);
     route_path_of = *r;
     route_path_ledge = ledge;
@@ -9974,7 +15282,7 @@ static void Row_Route(MeterRow *row, LedgeRoute *r, int e, int facing, int galin
     int away = facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
     int ff = r->ff > 0 ? Route_FF(r) : -1;
     int act = Route_ActCell(r);
-    int ff_glyph = !r->fall_away ? GLYPH_DOWN : facing > 0 ? GLYPH_DOWN_LEFT : GLYPH_DOWN_RIGHT;
+    int ff_glyph = !r->fall_away ? GLYPH_FF : facing > 0 ? GLYPH_FF_DOWN_LEFT : GLYPH_FF_DOWN_RIGHT;
     Route_Cell(row, base, 0, CELL_PRESS, r->drop == DROP_AWAY ? away : GLYPH_DOWN);
     for (int n = 1; n < r->land; n++)
         Route_Cell(row, base, n, n == ff || n == r->dj ? CELL_PRESS : CELL_AIR,
@@ -10000,6 +15308,18 @@ static void Row_Route(MeterRow *row, LedgeRoute *r, int e, int facing, int galin
         row->hot = 2;
     if (galint > 0)
         sprintf(row->info, "%d GALINT", galint);
+}
+
+// 1st, 2nd, 3rd, 4th ... 11th, 12th, 13th ... 21st
+static const char *Ordinal(int n)
+{
+    static char text[16];
+    int last = n % 10;
+    const char *suffix = last == 1 ? "st" : last == 2 ? "nd" : last == 3 ? "rd" : "th";
+    if (n % 100 >= 11 && n % 100 <= 13)
+        suffix = "th";
+    sprintf(text, "%d%s", n, suffix);
+    return text;
 }
 
 static void Meter_AddRoutes(void)
@@ -10047,9 +15367,8 @@ static void Meter_AddRoutes(void)
         return;
     for (int i = 0; i < route_show_num; i++)
     {
-        static const char *names[LR_KEEP] = {"1st", "2nd", "3rd"};
         LedgeRoute *r = &route_show[i];
-        MeterRow *row = Meter_Add(land_kind_colors[r->kind], names[i]);
+        MeterRow *row = Meter_Add(land_kind_colors[r->kind], Ordinal(route_show_rank + i + 1));
         if (!row)
             return;
         Row_Route(row, r, -1, ledges[hang_ledge].facing, Route_Galint(r, -1, intang));
@@ -10060,9 +15379,1735 @@ static void Meter_AddRoutes(void)
     route_rows_active = 1;
 }
 
+///////////////////////
+/// Jump timing     ///
+///////////////////////
+
+// While Falcon falls with his double jump left, the jumps worth making: for
+// each frame to jump on (JT_D of them from the anchor, the frame the search
+// started from) and each stick to jump with, the fall is simulated on, and
+// the touchdown it ends in is kept when it is a NIL or an aerial interrupt
+// (AI). The fall before the jump is simulated once, keeping the stick as it
+// was at the anchor, and each frame of it kept to jump from. The best jump
+// of each kind is shown like a ledge route: its path, a JUMP row counting
+// down to the frame, the aerial's press window as an AI shows it, and the
+// panel's line. Frames are counted from the anchor's own frame (0), the
+// same game frames the simulation steps through: the jump after d frames of
+// fall is frame d + 1.
+
+#define JT_D 31             // frames to jump on: d = 0 to 30 frames of fall first
+#define JT_STICKS 5
+#define JT_CANDIDATES (JT_D * JT_STICKS * 2) // frame, stick, and then holding its x or not
+#define JT_SIM 80           // frames simulated after the jump
+#define JT_BEST 8           // routes kept per kind
+#define JT_BOTTOM 30.f      // how far under the lowest floor a fall is given up on
+#define JT_REANCHOR (JT_D - 5) // frames after which the anchor has too few jump frames left
+#define JT_STICK_TOL 0.05f  // how far the stick may move before the anchor's fall is wrong
+#define JT_DRIFT_TOL 0.05f  // ... and how far Falcon may be from the simulated fall
+#define JT_HOP_STILL 0.1f   // from the ground, a stick this near the middle is at rest
+#define JT_AHEAD 3          // the search starts this many frames ahead: it does about one frame's jumps per
+                            // frame, so starting at the next frame it would only ever find jumps due now
+#define JT_BUDGET LR_BUDGET // simulated frames per game frame (the time limit LR_TIME_US holds it too)
+#define JT_TRY (1 + 5 * LR_WINDOWS)
+#define JT_PATH (JT_D + 1 + JT_SIM + 10) // + a jumpsquat from the ground
+
+// The stick on the jump: all the way up, diagonally up either way (a flick
+// up and over), or all the way sideways. Afterwards it is let go, or its x
+// is kept.
+enum jt_stick
+{
+    JT_UP,
+    JT_UPLEFT,
+    JT_UPRIGHT,
+    JT_LEFT,
+    JT_RIGHT,
+};
+static const float jt_stick_xy[JT_STICKS][2] = {{0.f, 1.f}, {-0.7f, 0.7f}, {0.7f, 0.7f}, {-1.f, 0.f}, {1.f, 0.f}};
+static const char *jt_stick_names[JT_STICKS] = {"up", "up-left", "up-right", "left", "right"};
+
+typedef struct JumpRoute
+{
+    u8 valid;
+    u8 kind;    // LAND_NIL or LAND_AI
+    u8 stick;   // the stick on the jump: JT_*
+    u8 hold;    // after the jump: 1 = keep the stick's x, 0 = let go
+    u8 aerial;  // AI: the aerial (TS_AIR*)
+    u8 press_w; // AI: frames the aerial's window lasts
+    u8 changes; // stick changes the route asks for
+    u8 where;   // what it lands on: JWHERE_* bits
+    u8 hop;     // from the ground: GT_SH or GT_FH, 0 for a double jump from the air
+    s8 hj;      // ... with a double jump hj frames after the takeoff, -1 for the hop alone
+    s16 hp;     // ... the frame the hop is pressed on
+    u8 d;       // frames of fall before the jump
+    s16 dj;     // frame of the double jump
+    s16 press;  // AI: first frame of the aerial's window
+    s16 land;   // touchdown
+    s16 act;    // the frame Falcon can act: the touchdown for a NIL, the end of the landing lag for an AI
+} JumpRoute;
+
+static SimState *jt_cache;      // [JT_D], allocated in Event_Init: the fall to jump from, d frames in
+static int jt_cache_n;          // ... how many of them: past that the fall lands or bonks
+static SimStart jt_start;       // the anchor: Falcon as the search started
+static int jt_anchor;           // its game frame
+static int jt_next;             // the next candidate to simulate
+static int jt_done;             // the search has been through every candidate
+static int jt_found;            // routes it found
+static float jt_bottom;         // how far down a fall is followed
+static float jt_stick_x;        // the stick at the anchor: the fall assumes it held
+static int jt_stick_down, jt_stick_drop;
+static int jt_prev_ts = -1, jt_prev_tilt;
+static JumpRoute jt_best[2][JT_BEST]; // per kind (NIL, AI), best first
+static int jt_best_n[2];
+static JumpRoute jt_route;      // the one shown
+static int jt_have;             // ... there is one
+static Vec2 *jt_path;           // [JT_PATH], allocated in Event_Init: where it goes, from the anchor
+static float *jt_path_bottom;
+static int jt_path_num;
+static JumpRoute jt_path_of;    // the route the path is for
+static int jt_path_anchor = -1;
+static int jt_target;           // Land On as the search started
+static int jt_hop;              // From the Ground as the search started
+static int jt_steps, jt_tries;  // the search's cost, for the log
+static JumpRoute gt_plan;       // the standstill plan shown last, with its double jump
+static u8 gt_plan_ok;
+static u8 gt_squat_short;       // the jumpsquat is a short hop's
+
+// From the ground (Hop Timing): the anchor is on the ground, and a
+// candidate's d is the frames Falcon keeps moving before the jump is
+// pressed. Where he is and how fast he goes, d frames on, assuming the
+// stick stays as it is: a run or walk keeps its speed, and with the stick
+// at rest friction slows him.
+#define GT_SH 1
+#define GT_FH 2
+typedef struct GroundStep
+{
+    float x, y, v;
+} GroundStep;
+static u8 jt_ground;          // the anchor is on the ground
+static GroundStep *gt_steps;  // [JT_D], allocated in Event_Init
+static int gt_steps_n;
+static int gt_sid;            // the state at the anchor
+static u8 gt_still;           // ... standing still: every frame's hop is the same, so the search tries the
+                              // next frame's alone, and the anchor stays while he does
+
+// Frames since the anchor, as the routes count them: standing still, the
+// anchor is always now.
+static int Jump_E(void)
+{
+    return jt_ground && gt_still ? 0 : event_vars->game_timer - jt_anchor;
+}
+
+// What a floor is, for Land On.
+#define JWHERE_FLOOR 1
+#define JWHERE_PLATFORM 2
+#define JWHERE_TOP 4
+#define JWHERE_LEFT 8
+#define JWHERE_RIGHT 16
+#define JWHERE_SIDE 10.f // how far from the stage's middle a platform's middle is on a side
+
+// What Falcon lands on with his feet at (x, y): the floor at x nearest
+// that height. For an AI, (x, y) is where the plain fall has him on the
+// frame the aerial touches down, which for a rising one can be well above
+// the floor or, coming up through a platform, a little under it. Platforms
+// move on some stages, so this is worked out each time.
+static int Jump_Where(float x, float y)
+{
+    FloorLine *best = 0;
+    float best_y = 0, l, ly, r, ry;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        Floor_Ends(f, &l, &ly, &r, &ry);
+        if (r - l < 0.001f || x < l - 0.5f || x > r + 0.5f)
+            continue;
+        float h = ly + (ry - ly) * (x - l) / (r - l);
+        if (h <= y + 15.f && h >= y - 40.f && (!best || fabs(h - y) < fabs(best_y - y)))
+        {
+            best = f;
+            best_y = h;
+        }
+    }
+    if (!best)
+        return 0;
+    if (!best->is_platform)
+        return JWHERE_FLOOR;
+    int where = JWHERE_PLATFORM;
+    float top = -100000.f;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        float h = f->y0 > f->y1 ? f->y0 : f->y1;
+        if (f->is_platform && h > top)
+            top = h;
+    }
+    if ((best->y0 > best->y1 ? best->y0 : best->y1) >= top - 1.f)
+        where |= JWHERE_TOP;
+    float mid = (best->x0 + best->x1) * 0.5f;
+    if (mid < -JWHERE_SIDE)
+        where |= JWHERE_LEFT;
+    else if (mid > JWHERE_SIDE)
+        where |= JWHERE_RIGHT;
+    return where;
+}
+
+// Does a route land where Land On asks?
+static int Jump_OnTarget(JumpRoute *r)
+{
+    static const u8 need[] = {0, JWHERE_TOP, JWHERE_LEFT, JWHERE_RIGHT, JWHERE_PLATFORM, JWHERE_FLOOR};
+    return jt_target <= JTGT_ANY || jt_target >= (int)countof(need) || (r->where & need[jt_target]);
+}
+
+static int Jump_Showing(void)
+{
+    return jt_active && jt_have && Options_Jump[JOPT_SHOW].val && !route_active && hang_ledge < 0;
+}
+
+// Frames to the shown route's next jump press (0: this frame), or -1.
+static int Jump_PressAhead(void)
+{
+    if (!Jump_Showing())
+        return -1;
+    JumpRoute *r = &jt_route;
+    int e = Jump_E();
+    if (r->hop && r->hp - e - 1 >= 0)
+        return r->hp - e - 1;
+    if (r->hop && r->hj < 0)
+        return -1;
+    int u = r->dj - e - 1;
+    return u >= 0 ? u : -1;
+}
+
+// Stick changes a jump asks for: to the jump's stick, and from it to rest
+// (or to its x alone, which is no change for a stick that has no y).
+static int Jump_Changes(int stick, int hold)
+{
+    return 1 + !(hold && (stick == JT_LEFT || stick == JT_RIGHT));
+}
+
+// Better: acts sooner; then a wider aerial window (a NIL has no aerial to
+// time, so it's the widest); then fewer stick changes; then the one with
+// more time to get ready.
+static int Jump_Wide(JumpRoute *r)
+{
+    return r->kind == LAND_NIL ? 99 : r->press_w;
+}
+
+static int Jump_Better(JumpRoute *a, JumpRoute *b)
+{
+    if (!b->valid)
+        return a->valid;
+    if (!a->valid)
+        return 0;
+    if (a->act != b->act)
+        return a->act < b->act;
+    if (Jump_Wide(a) != Jump_Wide(b))
+        return Jump_Wide(a) > Jump_Wide(b);
+    if (a->changes != b->changes)
+        return a->changes < b->changes;
+    // nothing left to tell them apart by, so that the order never depends
+    // on the order they were found in
+    if (a->dj != b->dj)
+        return a->dj > b->dj;
+    if (a->stick != b->stick)
+        return a->stick < b->stick;
+    if (a->kind != b->kind)
+        return a->kind == LAND_NIL;
+    if (a->aerial != b->aerial)
+        return Aerial_Rank(a->aerial) < Aerial_Rank(b->aerial);
+    if (a->press != b->press)
+        return a->press < b->press;
+    return a->hold < b->hold;
+}
+
+// The same route: the same jump and press. Keeping the stick's x after the
+// jump or not doesn't make another one.
+static int Jump_Same(JumpRoute *a, JumpRoute *b)
+{
+    return a->kind == b->kind && a->d == b->d && a->stick == b->stick && a->aerial == b->aerial && a->press == b->press &&
+           a->hop == b->hop && a->hj == b->hj;
+}
+
+// The first input a route asks for: the hop, or the double jump.
+static int Jump_First(JumpRoute *r)
+{
+    return r->hop ? r->hp : r->dj;
+}
+
+// Put a route in a kind's list, in order, as Route_Insert does.
+static void Jump_Insert(JumpRoute *a, int *count, JumpRoute *r)
+{
+    int n = *count;
+    for (int i = 0; i < n; i++)
+    {
+        if (!Jump_Same(r, &a[i]))
+            continue;
+        if (!Jump_Better(r, &a[i]))
+            return;
+        for (int j = i; j < n - 1; j++)
+            a[j] = a[j + 1];
+        n--;
+        break;
+    }
+    int at = n;
+    while (at > 0 && Jump_Better(r, &a[at - 1]))
+        at--;
+    if (at < JT_BEST)
+    {
+        if (n == JT_BEST)
+            n--;
+        for (int j = n; j > at; j--)
+            a[j] = a[j - 1];
+        a[at] = *r;
+        n++;
+    }
+    *count = n;
+}
+
+// One jump: d frames of fall with the stick as at the anchor, the double
+// jump with a stick, then holding its x or not. Gives, in out (up to
+// JT_TRY, n of them), a NIL when it lands with no lag, and for each aerial
+// the first few windows of press frames that touch down together with no
+// aerial lag, the way Ledge_Try does. The aerials the AI Filter and AI
+// Aerial options leave out are left out, and unless the filter shows all of
+// them, so are the ones that are not worth the press (Windows_Summarize).
+// With path, also records where Falcon goes, frame by frame from the
+// anchor to the touchdown.
+typedef struct JumpCand
+{
+    int d;     // frames before the jump (in the air) or the hop (on the ground)
+    int stick; // the double jump's stick, JT_*
+    int hold;  // after the double jump (or the hop): keep its x
+    int hop;   // on the ground: GT_SH or GT_FH
+    int hj;    // ... a double jump this many frames after the takeoff, or -1
+} JumpCand;
+
+static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, Vec2 *path, float *bottom, int *num)
+{
+    int d = c->d, stick = c->stick, hold = c->hold;
+    SimStart ps;
+    int n = 0, off;
+    *n_out = 0;
+    if (path)
+        *num = 0;
+    if (jt_ground)
+    {
+        // d frames on the ground, the press, the squat, the takeoff
+        GroundStep *g = &gt_steps[d];
+        float slide[12];
+        int until = Sim_GroundJumpAt(fp, c->hop == GT_SH, g->x, g->y, g->v, jt_stick_x, 1, &ps, slide);
+        if (until - 1 > (int)countof(slide))
+            return;
+        ps.stick_x = hold ? jt_stick_x : 0;
+        ps.stick_y = 0;
+        off = d + until;
+        if (path)
+        {
+            for (int i = 0; i <= d; i++)
+            {
+                path[n] = (Vec2){gt_steps[i].x, gt_steps[i].y};
+                bottom[n++] = 0;
+            }
+            for (int i = 0; i < until - 1; i++)
+            {
+                path[n] = (Vec2){slide[i], g->y};
+                bottom[n++] = 0;
+            }
+            path[n] = ps.pos;
+            bottom[n++] = 0;
+        }
+        if (c->hj >= 0)
+        {
+            // the hop with the stick as on the ground, then the double jump
+            SimStart st = ps;
+            SimState s;
+            SimStep step;
+            st.stick_x = jt_stick_x;
+            Sim_Init(&st, &s);
+            for (int i = 0; i < c->hj; i++)
+            {
+                Sim_Step(fp, &st, &s, -1, 0, &step);
+                if (step.landed || step.ceiling)
+                    return;
+                if (path)
+                {
+                    path[n] = (Vec2){s.x, s.y};
+                    bottom[n++] = s.bottom;
+                }
+            }
+            st.skip_line = -1;
+            st.stick_x = jt_stick_xy[stick][0];
+            st.stick_y = jt_stick_xy[stick][1];
+            Sim_DoubleJump(fp, &st, &s, &step);
+            if (path)
+            {
+                path[n] = (Vec2){s.x, s.y};
+                bottom[n++] = s.bottom;
+            }
+            if (step.landed || step.ceiling)
+                return;
+            st.stick_x = hold ? jt_stick_xy[stick][0] : 0;
+            st.stick_y = 0;
+            Sim_ToStart(&s, &st, &ps);
+            off += c->hj + 1;
+        }
+    }
+    else
+    {
+        SimStart st = jt_start;
+        SimState s = jt_cache[d];
+        SimStep step;
+        if (path)
+        {
+            for (int i = 0; i <= d; i++)
+            {
+                path[n] = (Vec2){jt_cache[i].x, jt_cache[i].y};
+                bottom[n++] = jt_cache[i].bottom;
+            }
+        }
+
+        // the game forgets the platform dropped through on any state change
+        st.skip_line = -1;
+        st.stick_x = jt_stick_xy[stick][0];
+        st.stick_y = jt_stick_xy[stick][1];
+        Sim_DoubleJump(fp, &st, &s, &step);
+        if (path)
+        {
+            path[n] = (Vec2){s.x, s.y};
+            bottom[n++] = s.bottom;
+        }
+        if (step.landed || step.ceiling)
+            return;
+
+        st.stick_x = hold ? jt_stick_xy[stick][0] : 0;
+        st.stick_y = 0;
+        Sim_ToStart(&s, &st, &ps);
+        off = d + 1;
+    }
+    sim_limit = JT_SIM;
+    sim_bottom_y = jt_bottom;
+    sim_rising_only = !ai_show_all;
+    if (sim_rising_only)
+        sim_stop_vy = Fighter_GetSoftLandVelocity(fp) - 0.001f;
+    int steps0 = sim_steps;
+    Predict(fp, &ps, pred_route, BR_AI);
+    jt_steps += sim_steps - steps0;
+    jt_tries++;
+    sim_rising_only = 0;
+    sim_stop_vy = -100000.f;
+    sim_limit = LL_SIM_FRAMES;
+    sim_bottom_y = -100000.f;
+
+    Prediction *p = pred_route;
+    if (path)
+    {
+        int last = p->land_frame ? p->land_frame : p->num;
+        for (int k = 1; k <= last && n < JT_PATH; k++)
+        {
+            path[n] = p->pos[k];
+            bottom[n++] = p->bottom[k];
+        }
+        *num = n;
+    }
+
+    JumpRoute base = {0};
+    base.stick = stick;
+    base.hold = hold;
+    base.hop = jt_ground ? c->hop : 0;
+    base.hj = jt_ground ? c->hj : -1;
+    base.hp = jt_ground ? d + 1 : 0;
+    base.d = d;
+    base.dj = jt_ground && c->hj >= 0 ? off : d + 1;
+    base.press = -1;
+    base.changes = !jt_ground ? Jump_Changes(stick, hold) : c->hj >= 0 ? 1 + Jump_Changes(stick, hold) : 1 + !hold;
+
+    int nr = 0;
+    if (p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame)
+    {
+        JumpRoute *r = &out[nr++];
+        *r = base;
+        r->valid = 1;
+        r->kind = LAND_NIL;
+        r->land = off + p->land_frame;
+        r->act = r->land;
+        r->where = Jump_Where(p->pos[p->land_frame].X, p->pos[p->land_frame].Y);
+    }
+
+    int normal_lag = (int)fp->attr.normal_landing_lag;
+    int hold_done = p->land_frame ? p->land_frame + p->lag : 2 * LL_SIM_FRAMES;
+    int last = p->land_frame ? p->land_frame - 1 : p->num;
+    for (int a = 0; a < 5; a++)
+    {
+        int aerial = Aerial_Order(a);
+        u8 bit = AERIAL_BIT(aerial);
+        if (ai_only && !(ai_only & bit))
+            continue;
+        int windows = 0;
+        for (int k = 1; k <= last && k < p->uncertain_from && windows < LR_WINDOWS; k++)
+        {
+            if (!(p->ai_mask[k] & ~p->ai_lag_mask[k] & bit))
+                continue;
+            int touch = k + Ai_Delay(p, k, aerial);
+            int w = 1;
+            while (k + w <= last && (p->ai_mask[k + w] & ~p->ai_lag_mask[k + w] & bit) &&
+                   k + w + Ai_Delay(p, k + w, aerial) == touch)
+                w++;
+            // worth it: done with the landing sooner than holding would be,
+            // and rising as it touches down
+            int worth = ai_show_all || (hold_done - (touch + normal_lag) >= LL_AI_MIN_GAIN &&
+                                        !(touch <= p->num && p->pos[touch].Y <= p->pos[touch - 1].Y));
+            if (worth)
+            {
+                JumpRoute *r = &out[nr++];
+                *r = base;
+                r->valid = 1;
+                r->kind = LAND_AI;
+                r->aerial = aerial;
+                r->press = off + k;
+                r->press_w = w;
+                r->land = off + touch;
+                r->act = r->land + normal_lag;
+                int at = touch <= p->num ? touch : p->num;
+                r->where = Jump_Where(p->pos[at].X, p->pos[at].Y);
+                windows++;
+            }
+            k += w - 1;
+        }
+    }
+    *n_out = nr;
+}
+
+
+#ifdef LL_GROUND_GUIDE // shelved until after 1.0 (Stephen, 2026-10-10): see docs/ground-guide.md
+///////////////////////
+/// Ground guide    ///
+///////////////////////
+
+// Jump timing from the ground, worked out ahead of time (Stephen, 0.8.3
+// notes: takeoff bands plus reach marks). For each height a platform is over
+// a floor on this stage, each hop, and five run speeds, every way on (the
+// hop alone, or a double jump on each of its frames with each stick, its x
+// kept or let go) is simulated once, from a takeoff press at x 0 in a world
+// of just a floor and a platform at that height spanning everything. Where
+// on the platform each one's NIL, rising AIs (their window's frames) and
+// waveland windows (the hop alone) touch down is counted, by distance from
+// the press. A spot on the floor then counts the timings that land on a
+// platform's own stretch (Takeoff Bands), and a spot on the platform the
+// ones that land there from where Falcon is (Reach Marks). Nothing waits on
+// a search, and nothing picks one route: brightness is how many work.
+//
+// The tables never change for a character, so they can be baked: the script
+// command "bake" works them out for every height from GD_LO to GD_HI and
+// logs them (LLGB lines), tools/guide_bake.py turns the log into
+// TM/llgdNN.bin (NN the character's kind), and a disc that has the file
+// reads each height's table from it when a platform needs it, Fountain's
+// moving ones too. Without the file they're worked out here, as before.
+#define GD_SLOTS 8
+#define GD_SPEEDS 5 // facing right: run back, walk back, still, walk, run; mirrored facing left
+#define GD_HJ 24    // double jumps 1 to 24 frames after the takeoff
+#define GD_DX 80    // distances -80 to 80
+#define GD_BINS (2 * GD_DX + 1)
+#define GD_COMBOS 9 // the double jump's stick and hold: up; the other four let go or held
+#define GD_WAYS (2 + GD_HJ * GD_COMBOS) // the hop alone (stick kept or let go), then the double jumps
+#define GD_PER_HEIGHT (2 * GD_SPEEDS * GD_WAYS)
+#define GD_KINDS 7 // the AI with each aerial (Aerial_Order), then waveland, then NIL
+#define GD_WL 5
+#define GD_NIL 6
+#define GD_BUDGET 1500
+#define GD_TIME_US 1500
+#define GD_BAKE_US 12000
+#define GD_LO 10.f
+#define GD_STEP 0.5f
+#define GD_NUM 121 // 10 to 70
+#define GD_MAGIC 0x4C4C4744 // "LLGD"
+#define GD_VERSION 1
+#define GD_DIMS (GD_SPEEDS | GD_KINDS << 8 | GD_DX << 16 | GD_HJ << 24)
+typedef struct GuideTable
+{
+    u8 n[2][GD_SPEEDS][GD_KINDS][GD_BINS]; // [short 0 / full 1][speed][kind][distance]
+} GuideTable;
+#define GD_STRIDE ((sizeof(GuideTable) + 31) & ~31)
+typedef struct GuideHead // the baked file's first 32 bytes; its tables follow, GD_STRIDE apart
+{
+    u32 magic, version, kind, num;
+    float lo, step;
+    u32 stride, dims;
+} GuideHead;
+static u8 *gd_mem;           // GD_SLOTS tables GD_STRIDE apart, 32-byte aligned for the disc
+static float gd_height[GD_SLOTS];
+static int gd_slice[GD_SLOTS]; // the baked height a slot holds, -1 none
+static u32 gd_used[GD_SLOTS];  // the frame a slot was last drawn from
+static int gd_heights = -1;    // -1: not looked at the stage yet
+static int gd_next, gd_done;
+static int gd_file = -1;       // the baked file's entry, -1 none (worked out here)
+static GuideHead gd_head;
+
+static GuideTable *Guide_Slot(int s)
+{
+    return (GuideTable *)(gd_mem + s * GD_STRIDE);
+}
+
+static void Guide_Add(GuideTable *t, int hop, int sp, int kind, float x, int count)
+{
+    int b = (int)(x + (x < 0 ? -0.5f : 0.5f)) + GD_DX;
+    if (b < 0 || b >= GD_BINS)
+        return;
+    u8 *c = &t->n[hop][sp][kind][b];
+    *c = *c + count > 255 ? 255 : *c + count;
+}
+
+// The heights platforms stand over the floors under them.
+static void Guide_Heights(void)
+{
+    gd_heights = 0;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *p = &floor_cache[i];
+        if (!p->is_platform)
+            continue;
+        float py = (p->y0 + p->y1) * 0.5f;
+        for (int j = 0; j < floor_num; j++)
+        {
+            FloorLine *f = &floor_cache[j];
+            if (f->x1 < p->x0 - 40.f || f->x0 > p->x1 + 40.f)
+                continue;
+            float h = py - (f->y0 + f->y1) * 0.5f;
+            if (h < 8.f || h > 90.f)
+                continue;
+            int have = 0;
+            for (int k = 0; k < gd_heights; k++)
+                if (fabs(gd_height[k] - h) < 1.f)
+                    have = 1;
+            if (!have && gd_heights < GD_SLOTS)
+                gd_height[gd_heights++] = h;
+        }
+    }
+    OSReport("LLGUIDE heights %d: %.1f %.1f %.1f %.1f\n", gd_heights, gd_heights > 0 ? gd_height[0] : 0,
+             gd_heights > 1 ? gd_height[1] : 0, gd_heights > 2 ? gd_height[2] : 0, gd_heights > 3 ? gd_height[3] : 0);
+}
+
+static float Guide_Speed(FighterData *fp, int sp, float *stick)
+{
+    static const float stick_of[GD_SPEEDS] = {-1.f, -0.8f, 0.f, 0.8f, 1.f};
+    float run = fp->attr.dashrun_terminal_velocity, walk = fp->attr.walk_maximum_velocity;
+    float v[GD_SPEEDS] = {-run, -walk, 0, walk, run};
+    *stick = stick_of[sp];
+    return v[sp];
+}
+
+// One way on, index i of a height's GD_PER_HEIGHT, counted into t. Every
+// aerial is counted on its own, so the table doesn't depend on AI Aerial.
+static void Guide_Try(FighterData *fp, GuideTable *t, float H, int i)
+{
+    int hop = i / (GD_SPEEDS * GD_WAYS);
+    int sp = (i / GD_WAYS) % GD_SPEEDS;
+    int way = i % GD_WAYS;
+    float stick_x;
+    float v = Guide_Speed(fp, sp, &stick_x);
+
+    // the world: a floor at 0 and a platform at H, both all the way across
+    floor_num = 2;
+    floor_cache[0] = (FloorLine){-1000.f, 0, 1000.f, 0, 9000, 0};
+    floor_cache[1] = (FloorLine){-1000.f, H, 1000.f, H, 9001, 1};
+    ceil_num = 0;
+    wall_num[0] = wall_num[1] = 0;
+
+    float facing = fp->facing_direction;
+    u8 only = ai_only;
+    ai_only = 0;
+    fp->facing_direction = 1.f;
+    SimStart ps;
+    float slide[12];
+    Sim_GroundJumpAt(fp, hop == 0, 0, 0, v, stick_x, 1, &ps, slide);
+    int alone = way < 2;
+    if (alone)
+        ps.stick_x = way ? stick_x : 0;
+    else
+    {
+        int hj = 1 + (way - 2) / GD_COMBOS, combo = (way - 2) % GD_COMBOS;
+        int stick = combo == 0 ? JT_UP : 1 + (combo - 1) / 2, hold = combo > 0 && (combo - 1) % 2;
+        SimStart st = ps;
+        SimState s;
+        SimStep step;
+        st.stick_x = stick_x;
+        Sim_Init(&st, &s);
+        for (int k = 0; k < hj; k++)
+        {
+            Sim_Step(fp, &st, &s, -1, 0, &step);
+            if (step.landed || step.ceiling)
+                goto done;
+        }
+        st.skip_line = -1;
+        st.stick_x = jt_stick_xy[stick][0];
+        st.stick_y = jt_stick_xy[stick][1];
+        Sim_DoubleJump(fp, &st, &s, &step);
+        if (step.landed || step.ceiling)
+            goto done;
+        st.stick_x = hold ? jt_stick_xy[stick][0] : 0;
+        st.stick_y = 0;
+        Sim_ToStart(&s, &st, &ps);
+    }
+
+    // a double jump only for its rising AIs and NIL; the hop alone for the
+    // wavelands too, which need the falling frames
+    sim_limit = JT_SIM;
+    sim_bottom_y = -30.f;
+    sim_rising_only = !alone;
+    if (sim_rising_only)
+        sim_stop_vy = Fighter_GetSoftLandVelocity(fp) - 0.001f;
+    Predict(fp, &ps, pred_route, alone ? BR_ALL : BR_AI);
+    sim_rising_only = 0;
+    sim_stop_vy = -100000.f;
+    sim_limit = LL_SIM_FRAMES;
+    sim_bottom_y = -100000.f;
+
+    Prediction *p = pred_route;
+    float half = H * 0.5f;
+    if (p->land_frame && p->land_kind == LAND_NIL && p->pos[p->land_frame].Y > half)
+        Guide_Add(t, hop, sp, GD_NIL, p->pos[p->land_frame].X, 1);
+    if (alone && p->wl_first && p->wl_first <= p->num && p->pos[p->wl_first].Y > half)
+        Guide_Add(t, hop, sp, GD_WL, p->pos[p->wl_first].X, p->wl_width);
+
+    int normal_lag = (int)fp->attr.normal_landing_lag;
+    int hold_done = p->land_frame ? p->land_frame + p->lag : 2 * LL_SIM_FRAMES;
+    int last = p->land_frame ? p->land_frame - 1 : p->num;
+    for (int a = 0; a < 5; a++)
+    {
+        u8 bit = AERIAL_BIT(Aerial_Order(a));
+        for (int k = 1; k <= last && k < p->uncertain_from; k++)
+        {
+            if (!(p->ai_mask[k] & ~p->ai_lag_mask[k] & bit))
+                continue;
+            int touch = k + Ai_Delay(p, k, Aerial_Order(a));
+            int w = 1;
+            while (k + w <= last && (p->ai_mask[k + w] & ~p->ai_lag_mask[k + w] & bit) &&
+                   k + w + Ai_Delay(p, k + w, Aerial_Order(a)) == touch)
+                w++;
+            int at = touch <= p->num ? touch : p->num;
+            int rising = !(touch <= p->num && p->pos[touch].Y <= p->pos[touch - 1].Y);
+            if (rising && hold_done - (touch + normal_lag) >= LL_AI_MIN_GAIN && p->pos[at].Y > half)
+                Guide_Add(t, hop, sp, a, p->pos[at].X, w);
+            k += w - 1;
+        }
+    }
+done:
+    fp->facing_direction = facing;
+    ai_only = only;
+}
+
+// The baked file for this character, if the disc has one that fits.
+static void Guide_Open(FighterData *fp)
+{
+    char path[32];
+    sprintf(path, "TM/llgd%02d.bin", fp->kind);
+    int entry = DVDConvertPathToEntrynum(path);
+    if (entry < 0)
+    {
+        OSReport("LLGUIDE no %s, working them out here\n", path);
+        return;
+    }
+    GuideHead *h = (GuideHead *)gd_mem; // slot 0 for now, 32-byte aligned
+    DCFlushRange(h, 32);
+    File_ReadSync(entry, 0, h, 32, 0x21, 1);
+    DCInvalidateRange(h, 32);
+    gd_head = *h;
+    if (gd_head.magic != GD_MAGIC || gd_head.version != GD_VERSION || gd_head.kind != (u32)fp->kind ||
+        gd_head.stride != GD_STRIDE || gd_head.dims != GD_DIMS || gd_head.num == 0 || gd_head.step <= 0)
+    {
+        OSReport("LLGUIDE %s doesn't fit this build, working them out here\n", path);
+        return;
+    }
+    gd_file = entry;
+    OSReport("LLGUIDE baked %s: %d heights from %.1f\n", path, gd_head.num, gd_head.lo);
+}
+
+// The slot with the table for a platform H over the floor, or -1.
+static int Guide_Find(float H)
+{
+    if (gd_file < 0)
+    {
+        int h = -1;
+        for (int j = 0; j < gd_heights; j++)
+            if (fabs(gd_height[j] - H) < 3.f)
+                h = j;
+        return h;
+    }
+    float f = (H - gd_head.lo) / gd_head.step + 0.5f;
+    if (f < 0)
+        return -1;
+    int s = (int)f;
+    if (s >= (int)gd_head.num)
+        return -1;
+    int old = 0;
+    for (int j = 0; j < GD_SLOTS; j++)
+    {
+        if (gd_slice[j] == s)
+        {
+            gd_used[j] = event_vars->game_timer;
+            return j;
+        }
+        if (gd_slice[j] < 0 || (gd_slice[old] >= 0 && gd_used[j] < gd_used[old]))
+            old = j;
+    }
+    u8 *t = (u8 *)Guide_Slot(old);
+    DCFlushRange(t, GD_STRIDE);
+    File_ReadSync(gd_file, sizeof(GuideHead) + s * GD_STRIDE, t, GD_STRIDE, 0x21, 1);
+    DCInvalidateRange(t, GD_STRIDE);
+    gd_slice[old] = s;
+    gd_used[old] = event_vars->game_timer;
+    OSReport("LLGUIDE read %.1f into %d\n", gd_head.lo + s * gd_head.step, old);
+    return old;
+}
+
+// One baked table into the log, the rows that aren't all 0.
+static void Guide_Dump(int slice)
+{
+    static const char hex[] = "0123456789abcdef";
+    const u8 *t = (const u8 *)Guide_Slot(0);
+    char line[48 * 2 + 1];
+    for (int off = 0; off < (int)sizeof(GuideTable); off += 48)
+    {
+        int n = sizeof(GuideTable) - off < 48 ? sizeof(GuideTable) - off : 48, any = 0;
+        for (int i = 0; i < n; i++)
+        {
+            any |= t[off + i];
+            line[2 * i] = hex[t[off + i] >> 4];
+            line[2 * i + 1] = hex[t[off + i] & 15];
+        }
+        line[2 * n] = 0;
+        if (any)
+            OSReport("LLGB %d %d %s\n", slice, off, line);
+    }
+}
+
+static void Guide_BakeStart(FighterData *fp)
+{
+    gd_bake = 0;
+    gd_next = 0;
+    memset(gd_mem, 0, GD_STRIDE);
+    OSReport("LLGBH %d %d %.2f %.2f %d %d\n", fp->kind, GD_NUM, GD_LO, GD_STEP, (int)GD_STRIDE, GD_DIMS);
+}
+
+// Bakes one table after another as fast as the frames allow.
+static void Guide_Bake(FighterData *fp)
+{
+    int t0 = OSGetTick();
+    while (OSTicksToMicroseconds(OSGetTick() - t0) < GD_BAKE_US)
+    {
+        Guide_Try(fp, Guide_Slot(0), GD_LO + gd_bake * GD_STEP, gd_next++);
+        if (gd_next < GD_PER_HEIGHT)
+            continue;
+        Guide_Dump(gd_bake);
+        memset(gd_mem, 0, GD_STRIDE);
+        gd_next = 0;
+        if (++gd_bake >= GD_NUM)
+        {
+            OSReport("LLGB end %d at %d\n", GD_NUM, event_vars->game_timer);
+            gd_bake = -1;
+            // what slot 0 held is gone: start over
+            for (int j = 0; j < GD_SLOTS; j++)
+                gd_slice[j] = -1;
+            gd_heights = -1;
+            gd_done = 0;
+            break;
+        }
+    }
+    Floor_BuildCache(); // the stage's own again
+}
+
+static void Guide_Solve(FighterData *fp)
+{
+    if (!gd_mem)
+        return;
+    if (gd_bake == -2)
+        Guide_BakeStart(fp);
+    if (gd_bake >= 0)
+    {
+        Guide_Bake(fp);
+        return;
+    }
+    if (gd_done || !(Options_Jump[JOPT_BANDS].val || Options_Jump[JOPT_MARKS].val))
+        return;
+    if (gd_heights < 0)
+    {
+        Guide_Open(fp);
+        if (gd_file >= 0)
+        {
+            gd_heights = 0;
+            gd_done = 1;
+            return;
+        }
+        Floor_BuildCache();
+        Guide_Heights();
+    }
+    Floor_BuildCache();
+    int total = gd_heights * GD_PER_HEIGHT, start = sim_steps, t0 = OSGetTick();
+    while (gd_next < total && sim_steps - start < GD_BUDGET && OSTicksToMicroseconds(OSGetTick() - t0) < GD_TIME_US)
+    {
+        Guide_Try(fp, Guide_Slot(gd_next / GD_PER_HEIGHT), gd_height[gd_next / GD_PER_HEIGHT], gd_next % GD_PER_HEIGHT);
+        gd_next++;
+    }
+    Floor_BuildCache(); // the stage's own again
+    if (gd_next >= total)
+    {
+        gd_done = 1;
+        OSReport("LLGUIDE done %d at %d\n", total, event_vars->game_timer);
+    }
+}
+
+// The count for a distance, facing either way (the table faces right). The
+// AI counts the aerials AI Aerial lets through.
+static int Guide_N(int h, int hop, int sp, int kind, int face, int dx)
+{
+    if (face < 0)
+    {
+        sp = GD_SPEEDS - 1 - sp;
+        dx = -dx;
+    }
+    dx += GD_DX;
+    if (dx < 0 || dx >= GD_BINS)
+        return 0;
+    GuideTable *t = Guide_Slot(h);
+    if (kind == CUE_NIL)
+        return t->n[hop][sp][GD_NIL][dx];
+    if (kind == CUE_WL)
+        return t->n[hop][sp][GD_WL][dx];
+    int n = 0;
+    for (int a = 0; a < 5; a++)
+        if (!ai_only || (ai_only & AERIAL_BIT(Aerial_Order(a))))
+            n += t->n[hop][sp][a][dx];
+    return n;
+}
+
+// Falcon's speed bucket, as the table counts it facing his way.
+static int Guide_Bucket(FighterData *fp)
+{
+    float v = fp->phys.self_vel_ground.X * (fp->facing_direction < 0 ? -1.f : 1.f), stick;
+    int best = 2;
+    float bd = 100.f;
+    for (int sp = 0; sp < GD_SPEEDS; sp++)
+    {
+        float d = fabs(Guide_Speed(fp, sp, &stick) - v);
+        if (d < bd)
+        {
+            bd = d;
+            best = sp;
+        }
+    }
+    return best;
+}
+
+// A strip of cells along y from x0, one a unit wide, each cell's color's
+// alpha scaled by a[i] (0 skips it).
+static void Guide_Strip(float x0, int n, const float *a, float y0, float y1, GXColor c)
+{
+    int cells = 0;
+    for (int i = 0; i < n; i++)
+        cells += a[i] > 0.01f;
+    if (!cells)
+        return;
+    World_Start(cells * 4, GX_QUADS, 0);
+    for (int i = 0; i < n; i++)
+    {
+        if (a[i] <= 0.01f)
+            continue;
+        GXColor k = Color_Fill(c, a[i]);
+        float xa = x0 + i, xb = xa + 1.f;
+        World_Vtx(xa, y0, GLOW_Z, k);
+        World_Vtx(xb, y0, GLOW_Z, k);
+        World_Vtx(xb, y1, GLOW_Z, k);
+        World_Vtx(xa, y1, GLOW_Z, k);
+    }
+}
+
+static int Guide_Floor(float x)
+{
+    int i = (int)x;
+    return x < i ? i - 1 : i;
+}
+
+#define GD_CELLS 200
+static void Guide_Draw(FighterData *fp)
+{
+    int bands = Options_Jump[JOPT_BANDS].val, marks = Options_Jump[JOPT_MARKS].val;
+    if (!gd_mem || !gd_done || gd_bake >= 0 || (!bands && !marks) ||
+        fp->phys.air_state != 0 || fp->state_id < ASID_WAIT || fp->state_id > ASID_RUNBRAKE || hang_ledge >= 0 || route_active)
+        return;
+    // the floor under him
+    FloorLine *S = 0;
+    for (int i = 0; i < floor_num; i++)
+        if (floor_cache[i].id == fp->coll_data.ground_index)
+            S = &floor_cache[i];
+    if (!S)
+        return;
+    float fx = fp->phys.pos.X, fy = fp->phys.pos.Y;
+    int face = fp->facing_direction < 0 ? -1 : 1, sp = Guide_Bucket(fp);
+    static const int kinds[CUE_NUM] = {CUE_AI, CUE_NIL, CUE_WL};
+    static float band[2][GD_CELLS];
+    int s0 = Guide_Floor(S->x0), sn = (int)(S->x1 - S->x0);
+    if (sn > GD_CELLS)
+        sn = GD_CELLS;
+    float k_was = vis_k;
+    int row = 0;
+    for (int ki = 0; ki < CUE_NUM; ki++)
+    {
+        int kind = kinds[ki];
+        if ((kind == CUE_AI && !Cues_Ai()) || (kind == CUE_NIL && !Cues_Nil()) || (kind == CUE_WL && !Cues_Waveland()))
+            continue;
+        memset(band, 0, sizeof(band));
+        float most = 0;
+        for (int pi = 0; pi < floor_num; pi++)
+        {
+            FloorLine *P = &floor_cache[pi];
+            if (!P->is_platform || P == S)
+                continue;
+            float H = (P->y0 + P->y1) * 0.5f - fy;
+            int h = Guide_Find(H);
+            if (h < 0)
+                continue;
+            int p0 = Guide_Floor(P->x0) + 1, p1 = Guide_Floor(P->x1);
+            // A: a spot on the floor, the timings landing anywhere on the
+            // platform (a running sum over the distances, so each spot is
+            // one subtraction)
+            for (int hop = 0; hop < 2 && bands; hop++)
+            {
+                static int cum[GD_BINS + 1];
+                cum[0] = 0;
+                for (int b = 0; b < GD_BINS; b++)
+                    cum[b + 1] = cum[b] + Guide_N(h, hop, sp, kind, face, b - GD_DX);
+                for (int t = 0; t < sn; t++)
+                {
+                    int T = s0 + t;
+                    int lo = p0 - T + GD_DX, hi = p1 - T + GD_DX; // bins lo..hi
+                    if (lo < 0)
+                        lo = 0;
+                    if (hi > GD_BINS - 1)
+                        hi = GD_BINS - 1;
+                    if (hi < lo)
+                        continue;
+                    band[hop][t] += cum[hi + 1] - cum[lo];
+                    if (band[hop][t] > most)
+                        most = band[hop][t];
+                }
+            }
+            // C: a spot on the platform, the timings landing there from here
+            if (marks)
+            {
+                float m[2][GD_CELLS], mm = 0;
+                int n = p1 - p0 + 1;
+                if (n > GD_CELLS)
+                    n = GD_CELLS;
+                for (int hop = 0; hop < 2; hop++)
+                    for (int x = 0; x < n; x++)
+                    {
+                        m[hop][x] = Guide_N(h, hop, sp, kind, face, Guide_Floor(p0 + x - fx + 0.5f));
+                        if (m[hop][x] > mm)
+                            mm = m[hop][x];
+                    }
+                if (mm > 0)
+                {
+                    vis_k = Kind_K(VG_CUES, kind);
+                    GXColor c = Cue_Color(kind);
+                    float norm = mm < 6.f ? 6.f : mm;
+                    for (int hop = 0; hop < 2; hop++)
+                    {
+                        for (int x = 0; x < n; x++)
+                            m[hop][x] = m[hop][x] > 0 ? 0.3f + 0.7f * sqrtf(m[hop][x] / norm) : 0;
+                        // short hop nearer the surface, full hop above it,
+                        // each kind its own pair
+                        float y = (P->y0 + P->y1) * 0.5f + 0.15f + row * 1.6f + hop * 0.75f;
+                        Guide_Strip((float)p0, n, m[hop], y, y + 0.6f, c);
+                    }
+                }
+            }
+        }
+        if (bands && most > 0)
+        {
+            vis_k = Kind_K(VG_CUES, kind);
+            GXColor c = Cue_Color(kind);
+            float norm = most < 6.f ? 6.f : most;
+            for (int hop = 0; hop < 2; hop++)
+            {
+                for (int t = 0; t < sn; t++)
+                    band[hop][t] = band[hop][t] > 0 ? 0.25f + 0.75f * sqrtf(band[hop][t] / norm) : 0;
+                float y = fy - 0.4f - row * 1.8f - hop * 0.85f;
+                Guide_Strip((float)s0, sn, band[hop], y - 0.7f, y, c);
+            }
+        }
+        row++;
+    }
+    vis_k = k_was;
+}
+
+#endif
+
+// The jumps still ahead, and the best of them of the kind Kind asks for.
+static void Jump_Prune(int e)
+{
+    for (int k = 0; k < 2; k++)
+    {
+        int n = 0;
+        for (int i = 0; i < jt_best_n[k]; i++)
+        {
+            if (Jump_First(&jt_best[k][i]) > e)
+                jt_best[k][n++] = jt_best[k][i];
+        }
+        jt_best_n[k] = n;
+    }
+}
+
+// The route r (its frames counted from anchor) among the ones found now
+// that are shown, or 0.
+#define JT_SWITCH 3
+#define JT_SETTLE 6
+static int jt_route_abs; // the anchor the shown route's frames count from
+static JumpRoute *Jump_Find(JumpRoute *r, int anchor)
+{
+    int kinds = Options_Jump[JOPT_KIND].val, shift = anchor - jt_anchor;
+    for (int k = 0; k < 2; k++)
+    {
+        if ((k == 0 && kinds == ROUTES_AI) || (k == 1 && kinds == ROUTES_NIL))
+            continue;
+        for (int i = 0; i < jt_best_n[k]; i++)
+        {
+            JumpRoute *x = &jt_best[k][i];
+            if (x->kind == r->kind && x->stick == r->stick && x->aerial == r->aerial && x->hop == r->hop &&
+                x->dj == r->dj + shift && (r->kind != LAND_AI || x->press == r->press + shift))
+                return x;
+        }
+    }
+    return 0;
+}
+
+static JumpRoute *Jump_Pick(void)
+{
+    int kinds = Options_Jump[JOPT_KIND].val;
+    JumpRoute *best = 0;
+    for (int k = 0; k < 2; k++)
+    {
+        if ((k == 0 && kinds == ROUTES_AI) || (k == 1 && kinds == ROUTES_NIL) || jt_best_n[k] == 0)
+            continue;
+        if (!best || Jump_Better(&jt_best[k][0], best))
+            best = &jt_best[k][0];
+    }
+    return best;
+}
+
+// Falcon with the fall as the anchor: the fall before the jump, stepped
+// once with the stick held, and every frame of it kept. Starts the search
+// over.
+static void Jump_Anchor(FighterData *fp, int ts)
+{
+    jt_active = 1;
+    jt_ground = 0;
+    jt_anchor = event_vars->game_timer;
+    jt_target = Options_Jump[JOPT_TARGET].val;
+    Sim_FromFighter(fp, ts, frame_in_state, &jt_start);
+    jt_stick_x = fp->input.lstick.X;
+    jt_stick_down = Stick_Down(fp->input.lstick.Y);
+    jt_stick_drop = Stick_Drop(fp->input.lstick.Y);
+
+    // how far down is lost: under the lowest floor
+    float low = 100000.f;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        float y = f->y0 < f->y1 ? f->y0 : f->y1;
+        if (y < low)
+            low = y;
+    }
+    jt_bottom = floor_num > 0 ? low - JT_BOTTOM : -100000.f;
+
+    SimState s;
+    SimStep step;
+    Sim_Init(&jt_start, &s);
+    jt_cache[0] = s;
+    jt_cache_n = 1;
+    for (int d = 1; d < JT_D; d++)
+    {
+        Sim_Step(fp, &jt_start, &s, -1, 0, &step);
+        if (step.landed || step.ceiling)
+            break;
+        jt_cache[d] = s;
+        jt_cache_n = d + 1;
+    }
+
+    jt_next = 0;
+    jt_done = 0;
+    jt_found = 0;
+    jt_steps = 0;
+    jt_tries = 0;
+    jt_best_n[0] = 0;
+    jt_best_n[1] = 0;
+    jt_have = 0;
+}
+
+// The same from the ground: where Falcon goes as he stands, walks or runs
+// with the stick held as it is, until the floor under him ends.
+static void Jump_AnchorGround(FighterData *fp, int sid)
+{
+    jt_active = 1;
+    jt_ground = 1;
+    jt_anchor = event_vars->game_timer;
+    jt_target = Options_Jump[JOPT_TARGET].val;
+    gt_sid = sid;
+    Floor_BuildCache();
+    memset(&jt_start, 0, sizeof(jt_start));
+    jt_start.pos = (Vec2){fp->phys.pos.X, fp->phys.pos.Y};
+    jt_start.facing = fp->facing_direction;
+    jt_stick_x = fp->input.lstick.X;
+    jt_stick_down = Stick_Down(fp->input.lstick.Y);
+    jt_stick_drop = Stick_Drop(fp->input.lstick.Y);
+
+    float low = 100000.f;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        float y = f->y0 < f->y1 ? f->y0 : f->y1;
+        if (y < low)
+            low = y;
+    }
+    jt_bottom = floor_num > 0 ? low - JT_BOTTOM : -100000.f;
+
+    float x = fp->phys.pos.X, y = fp->phys.pos.Y, v = fp->phys.self_vel_ground.X;
+    int coast = fabs(jt_stick_x) < JT_HOP_STILL; // no stick: friction slows him (ft_80084F3C)
+    gt_steps[0] = (GroundStep){x, y, v};
+    gt_steps_n = 1;
+    for (int d = 1; d < JT_D; d++)
+    {
+        if (coast)
+        {
+            float friction = fp->attr.ground_friction;
+            if (fabs(v) > fp->attr.walk_maximum_velocity)
+                friction *= common_run_friction;
+            v += fabs(friction) > fabs(v) ? -v : v > 0 ? -friction : friction;
+        }
+        x += v;
+        Vec2 spot;
+        float x0, x1;
+        if (!Floor_Under(x, y + 3.f, &spot, &x0, &x1) || fabs(spot.Y - y) > 3.f)
+            break; // off the end of the floor
+        y = spot.Y;
+        gt_steps[d] = (GroundStep){x, y, v};
+        gt_steps_n = d + 1;
+    }
+    jt_cache_n = gt_steps_n;
+    gt_still = coast && fabs(v) < 0.0001f && fabs(gt_steps[0].v) < 0.0001f;
+    if (gt_still)
+        jt_cache_n = 1;
+
+    jt_next = 0;
+    jt_done = 0;
+    jt_found = 0;
+    jt_steps = 0;
+    jt_tries = 0;
+    jt_best_n[0] = 0;
+    jt_best_n[1] = 0;
+    jt_have = 0;
+}
+
+// Standing, walking, dashing or running: the states a jump comes straight
+// out of.
+static int Jump_GroundState(int sid)
+{
+    return sid >= ASID_WAIT && sid <= ASID_RUNBRAKE;
+}
+
+// Is Falcon in a fall the search is for: airborne with the double jump
+// left, in a fall or the first jump, not hit, on a ledge route or in
+// Assist.
+static int Jump_Eligible(FighterData *fp, int ts, int tracked_air)
+{
+    if (!Options_Jump[JOPT_SHOW].val)
+        return 0;
+    if (fp->phys.air_state == 0)
+        return JT_HOP_SETTING != HOP_OFF && Jump_GroundState(fp->state_id) && hang_ledge < 0 &&
+               !route_active && !Options_Ledge[LOPT_ASSIST].val;
+    if (!tracked_air)
+        return 0;
+    if (ts != TS_FALL && ts != TS_JUMPF && ts != TS_JUMPB)
+        return 0;
+    if (fp->jump.jumps_used >= fp->attr.max_jumps)
+        return 0;
+    return !route_active && hang_ledge < 0 && !Options_Ledge[LOPT_ASSIST].val;
+}
+
+// The player did something the anchor's fall didn't assume (Segment_
+// InputChanged's checks, with a little give on the stick's x so a hand at
+// rest doesn't keep starting the search over).
+static int Jump_InputChanged(FighterData *fp, int ts)
+{
+    if (fabs(fp->input.lstick.X - jt_stick_x) > JT_STICK_TOL)
+        return 1;
+    if (Stick_Down(fp->input.lstick.Y) != jt_stick_down)
+        return 1;
+    if (Stick_Drop(fp->input.lstick.Y) != jt_stick_drop)
+        return 1;
+    if ((u8)fp->input.timer_lstick_tilt_y < jt_prev_tilt) // a new flick
+        return 1;
+    if (ts != jt_prev_ts && !Tracked_EndedInto(jt_prev_ts, ts))
+        return 1;
+    return 0;
+}
+
+// Falcon is not where the anchor's fall has him (Segment_CheckDrift's
+// check): wind, a push, a model gap.
+static int Jump_Drifted(FighterData *fp, int e)
+{
+    if (e < 1 || e >= jt_cache_n)
+        return 0;
+    return fabs(fp->phys.pos.X - jt_cache[e].x) > JT_DRIFT_TOL || fabs(fp->phys.pos.Y - jt_cache[e].y) > JT_DRIFT_TOL;
+}
+
+// Too few of the anchor's jump frames are left, but Falcon is still on its
+// fall: anchor again here to search the frames past it, and keep the jumps
+// already found, counted from the new anchor, so the one shown doesn't
+// drop out while the new search runs.
+static void Jump_Log(void);
+static void Jump_Extend(FighterData *fp, int ts, int e)
+{
+    if (!jt_done && cue_log)
+        Jump_Log();
+    static JumpRoute keep[2][JT_BEST];
+    int keep_n[2];
+    for (int k = 0; k < 2; k++)
+    {
+        keep_n[k] = 0;
+        for (int i = 0; i < jt_best_n[k]; i++)
+        {
+            JumpRoute r = jt_best[k][i];
+            if (r.dj <= e)
+                continue;
+            r.d -= e;
+            r.dj -= e;
+            if (r.hop)
+                r.hp -= e;
+            r.land -= e;
+            r.act -= e;
+            if (r.press >= 0)
+                r.press -= e;
+            keep[k][keep_n[k]++] = r;
+        }
+    }
+    if (jt_ground)
+        Jump_AnchorGround(fp, fp->state_id);
+    else
+        Jump_Anchor(fp, ts);
+    for (int k = 0; k < 2; k++)
+    {
+        for (int i = 0; i < keep_n[k]; i++)
+            jt_best[k][i] = keep[k][i];
+        jt_best_n[k] = keep_n[k];
+    }
+}
+
+// A standstill plan with a double jump, carried into the air: on the
+// hop's first frames the search hasn't got to its jump yet, so the plan's
+// jump is tried first, as the air search counts it.
+static void Jump_Seed(FighterData *fp, int ts)
+{
+    if (!gt_plan_ok || (ts != TS_JUMPF && ts != TS_JUMPB))
+        return;
+    gt_plan_ok = 0;
+    if (gt_plan.hop != (gt_squat_short ? GT_SH : GT_FH))
+        return;
+    JumpCand c = {gt_plan.hj - frame_in_state, gt_plan.stick, gt_plan.hold, 0, -1};
+    if (c.d < 0 || c.d >= jt_cache_n)
+        return;
+    JumpRoute found[JT_TRY];
+    int found_n;
+    Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+    for (int i = 0; i < found_n; i++)
+        if (Jump_OnTarget(&found[i]))
+            Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+    if (cue_log)
+        OSReport("LLJUMP seed %d d %d stick %d found %d\n", event_vars->game_timer, c.d, c.stick, found_n);
+}
+
+// Each frame, before the search: is Falcon in a fall to search, and is the
+// anchor still right for it. It is taken again when he comes back to a fall
+// after leaving one, when the stick or his path leaves what it assumed, and
+// when too few of its jump frames are left.
+static void Jump_Update(FighterData *fp, int ts, int tracked_air)
+{
+    int e = event_vars->game_timer - jt_anchor;
+    if (fp->state_id == ASID_KNEEBEND)
+        gt_squat_short = fp->state_var.state_var1 != 0; // let go of the jump: a short hop
+    if (!Jump_Eligible(fp, ts, tracked_air))
+    {
+        // why not, once a second, while it's on and Falcon is in the air
+        if (Options_Jump[JOPT_SHOW].val && fp->phys.air_state == 1 && cue_log && event_vars->game_timer % 60 == 0)
+            OSReport("LLJUMPX %d not searching: tracked %d ts %d jumps %d of %d route %d ledge %d assist %d\n",
+                     event_vars->game_timer, tracked_air, ts, fp->jump.jumps_used, fp->attr.max_jumps, route_active,
+                     hang_ledge, Options_Ledge[LOPT_ASSIST].val);
+        jt_active = 0;
+        jt_have = 0;
+    }
+    else if (fp->phys.air_state == 0)
+    {
+        // from the ground: anchored again when the stick, the state or
+        // the speed leaves what it assumed, or the hop setting changes
+        int sid = fp->state_id;
+        int at = gt_still ? 0 : e;
+        int same = jt_active && jt_ground && e >= 0 && at < gt_steps_n &&
+                   fabs(fp->input.lstick.X - jt_stick_x) <= JT_STICK_TOL &&
+                   (sid == gt_sid || (gt_sid == ASID_DASH && sid == ASID_RUN)) &&
+                   fabs(fp->phys.pos.X - gt_steps[at].x) <= JT_DRIFT_TOL &&
+                   fabs(fp->phys.pos.Y - gt_steps[at].y) <= 1.f && Options_Jump[JOPT_TARGET].val == jt_target &&
+                   JT_HOP_SETTING == jt_hop;
+        if (!same)
+            Jump_AnchorGround(fp, sid);
+        else if (!gt_still && e >= JT_REANCHOR)
+            Jump_Extend(fp, ts, e);
+        jt_hop = JT_HOP_SETTING;
+    }
+    else if (!jt_active || jt_ground || e < 0 || Jump_InputChanged(fp, ts) || Jump_Drifted(fp, e) ||
+             Options_Jump[JOPT_TARGET].val != jt_target)
+    {
+        if (Log_Level() >= LOG_ALL)
+        {
+            const char *why = !jt_active ? "new" : jt_ground ? "takeoff" : e < 0 ? "time" : Jump_InputChanged(fp, ts) ? "input"
+                              : Jump_Drifted(fp, e) ? "drift" : "target";
+            float dx = !jt_ground && e >= 0 && e < jt_cache_n ? fp->phys.pos.X - jt_cache[e].x : 0;
+            float dy = !jt_ground && e >= 0 && e < jt_cache_n ? fp->phys.pos.Y - jt_cache[e].y : 0;
+            OSReport("LLJUMPA %d air %s e %d tried %d dx %.4f dy %.4f ts %d prev %d\n", event_vars->game_timer, why, e,
+                     jt_tries, dx, dy, ts, jt_prev_ts);
+        }
+        int seed = jt_ground || !jt_active;
+        Jump_Anchor(fp, ts);
+        if (seed)
+            Jump_Seed(fp, ts);
+    }
+    else if (e >= JT_REANCHOR)
+        Jump_Extend(fp, ts, e);
+    jt_prev_ts = ts;
+    jt_prev_tilt = (u8)fp->input.timer_lstick_tilt_y;
+}
+
+// The facing Falcon has as he presses the aerial: a jump backwards turns
+// him around.
+static float Jump_Facing(JumpRoute *r)
+{
+    float face = jt_start.facing > 0 ? 1.f : -1.f;
+    if (r->hop && r->hj < 0)
+        return face; // a hop keeps the facing it has on the ground
+    return jt_stick_xy[r->stick][0] * face > -common_jump_back_stick ? face : -face;
+}
+
+// The search's one line in the log: the best jump found for an anchor,
+// frames counted from the anchor.
+static void Jump_Log(void)
+{
+    JumpRoute *b = Jump_Pick();
+    char buf[320];
+    int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d", jt_anchor,
+                    jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
+                    jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found);
+    if (!b)
+        sprintf(buf + n, " best none\n");
+    else if (b->kind == LAND_AI)
+        sprintf(buf + n, " best d %d stick %d hold %d aerial %d press %d-%d land %d on %d kind AI\n", b->d, b->stick, b->hold,
+                b->aerial, b->press, b->press + b->press_w - 1, b->land, b->where);
+    else
+        sprintf(buf + n, " best d %d stick %d aerial none press none land %d on %d kind NIL\n", b->d, b->stick, b->land,
+                b->where);
+    OSReport("%s", buf);
+}
+
+// Search on: the candidates in the order of the jump frame, the soonest
+// first, until the budget of simulated frames or of real time is spent. A
+// jump whose frame has gone by is not tried.
+// The candidates, in the order they're tried. In the air: by the frame of
+// the jump, then its stick and whether its x is kept. On the ground while
+// moving: by the frame of the hop, then short or full, and whether the
+// stick is kept. Standing still, every frame's hop is the same, so the
+// hops alone come first, then each hop with a double jump on each of its
+// frames (the stick of the double jump, and keeping its x or not).
+#define GT_STILL_CANDIDATES (4 + 2 * JT_D * JT_STICKS * 2)
+
+static int Jump_Total(void)
+{
+    return jt_ground && gt_still ? GT_STILL_CANDIDATES : JT_CANDIDATES;
+}
+
+// Candidate i: 1 to try it, 0 to skip it, -1 when none after it can work.
+static int Jump_Cand(int i, JumpCand *c)
+{
+    int want = JT_HOP_SETTING;
+    c->hj = -1;
+    c->stick = JT_UP;
+    if (jt_ground && gt_still)
+    {
+        c->d = 0;
+        if (i < 4)
+        {
+            c->hop = i < 2 ? GT_SH : GT_FH;
+            c->hold = i % 2;
+            if (c->hold && fabs(jt_stick_x) < JT_HOP_STILL)
+                return 0; // no stick to keep holding
+        }
+        else
+        {
+            i -= 4;
+            c->hj = i / (2 * JT_STICKS * 2); // the double jump's frame first, both hops at each
+            i %= 2 * JT_STICKS * 2;
+            c->hop = i < JT_STICKS * 2 ? GT_SH : GT_FH;
+            i %= JT_STICKS * 2;
+            c->stick = i / 2;
+            c->hold = i % 2;
+            if (c->stick == JT_UP && c->hold)
+                return 0;
+        }
+        return !((c->hop == GT_SH && want == HOP_FULL) || (c->hop == GT_FH && want == HOP_SHORT));
+    }
+    c->d = i / (JT_STICKS * 2);
+    c->stick = (i / 2) % JT_STICKS;
+    c->hold = i % 2;
+    if (c->d >= jt_cache_n)
+        return -1; // he lands (or the floor ends) before this frame
+    if (jt_ground)
+    {
+        // the slots of the first two sticks are the hops
+        if (c->stick != JT_UPLEFT && c->stick != JT_UPRIGHT)
+            return 0;
+        c->hop = c->stick == JT_UPLEFT ? GT_SH : GT_FH;
+        c->stick = JT_UP;
+        if ((c->hop == GT_SH && want == HOP_FULL) || (c->hop == GT_FH && want == HOP_SHORT))
+            return 0;
+        if (c->hold && fabs(jt_stick_x) < JT_HOP_STILL)
+            return 0;
+        return 1;
+    }
+    c->hop = 0;
+    return !(c->stick == JT_UP && c->hold); // up has no x to keep
+}
+
+// Search on: the candidates in order, the soonest first, until the budget
+// of simulated frames or of real time is spent. A jump whose frame has
+// gone by is not tried.
+static void Jump_Solve(FighterData *fp)
+{
+    if (!jt_active || jt_done)
+        return;
+    int e = Jump_E();
+    int total = Jump_Total();
+    int start = sim_steps;
+    int t0 = OSGetTick();
+    while (jt_next < total && sim_steps - start < JT_BUDGET)
+    {
+        if (!(jt_ground && gt_still) && jt_next < (e + JT_AHEAD) * JT_STICKS * 2)
+            jt_next = (e + JT_AHEAD) * JT_STICKS * 2;
+        if (jt_next >= total)
+            break;
+        JumpCand c;
+        int ok = Jump_Cand(jt_next++, &c);
+        if (ok < 0)
+        {
+            jt_next = total;
+            break;
+        }
+        if (!ok)
+            continue;
+        JumpRoute found[JT_TRY];
+        int found_n;
+        Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+        for (int i = 0; i < found_n; i++)
+        {
+            jt_found++;
+            if (!Jump_OnTarget(&found[i]))
+                continue;
+            Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+        }
+        if (OSTicksToMicroseconds(OSGetTick() - t0) >= LR_TIME_US)
+            break;
+    }
+    if (jt_next >= total)
+    {
+        jt_done = 1;
+        if (cue_log)
+            Jump_Log();
+    }
+}
+
+// The route's path, when the one shown has changed.
+static void Jump_Path(FighterData *fp)
+{
+    JumpRoute *o = &jt_path_of, *r = &jt_route;
+    if (jt_path_anchor == jt_anchor && jt_path_num > 0 && o->d == r->d && o->stick == r->stick && o->hold == r->hold &&
+        o->hop == r->hop && o->hj == r->hj)
+        return;
+    JumpRoute found[JT_TRY];
+    int found_n;
+    JumpCand c = {r->d, r->stick, r->hold, r->hop, r->hj};
+    Jump_Try(fp, &c, found, &found_n, jt_path, jt_path_bottom, &jt_path_num);
+    if (jt_path_num > r->land + 1 && r->land > 0)
+        jt_path_num = r->land + 1; // up to its own touchdown
+    jt_path_of = *r;
+    jt_path_anchor = jt_anchor;
+}
+
+// "DJ up in 6f, nair f7-9: AI": the frames are counted from now, the same
+// as the row's cells.
+static void Jump_Text(JumpRoute *r, int e)
+{
+    char aerial[8];
+    int until = r->dj - e - 1;
+    char *t = text_next;
+    const char *hop = r->hop == GT_SH ? "SH" : "FH";
+    int hop_in = r->hp - e - 1;
+    if (r->hop && hop_in > 0)
+        t += sprintf(t, "%s in %df", hop, hop_in);
+    else if (r->hop)
+        t += sprintf(t, "%s now", hop);
+    if (r->hop && r->hj >= 0)
+        t += sprintf(t, ", DJ %s f%d", jt_stick_names[r->stick], until);
+    else if (r->hop)
+        ;
+    else if (until > 0)
+        t += sprintf(t, "DJ %s in %df", jt_stick_names[r->stick], until);
+    else
+        t += sprintf(t, "DJ %s now", jt_stick_names[r->stick]);
+    if (r->kind == LAND_AI)
+    {
+        sprintf(aerial, "%s", tracked_state_names[r->aerial]);
+        aerial[0] |= 0x20; // lower case
+        int first = r->press - e - 1;
+        if (r->press_w > 1)
+            t += sprintf(t, ", %s f%d-%d: AI", aerial, first, first + r->press_w - 1);
+        else
+            t += sprintf(t, ", %s f%d: AI", aerial, first);
+    }
+    else
+        sprintf(t, ": NIL");
+    if (r->hop && r->hj < 0)
+        sprintf(text_steps, r->hold ? "keep the stick as it is" : "then let the stick go");
+    else if (r->hold && r->stick != JT_UP)
+        sprintf(text_steps, "then hold %s", r->stick == JT_LEFT || r->stick == JT_UPLEFT ? "left" : "right");
+    else
+        sprintf(text_steps, "then let the stick go");
+    next_kind = r->kind == LAND_AI ? CUE_AI : CUE_NIL;
+}
+
+// After the search of this frame: the best jump still ahead is the one
+// shown, whether the search is done or not.
+static void Jump_Publish(FighterData *fp)
+{
+    if (!jt_active)
+    {
+        jt_have = 0;
+        return;
+    }
+    int e = Jump_E();
+    Jump_Prune(e);
+    JumpRoute *b = Jump_Pick();
+    // The one up stays up while the search goes on: another takes its place
+    // only when it acts JT_SWITCH frames sooner and the jump is still
+    // JT_SETTLE frames off, or when it no longer works. (Stephen, 0.8.3: the
+    // route changed every frame as the search found slightly better ones.)
+    JumpRoute *cur = jt_have ? Jump_Find(&jt_route, jt_route_abs) : 0;
+    if (b && cur && b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= JT_SETTLE))
+        b = cur;
+    jt_have = b != 0;
+    if (jt_ground)
+    {
+        gt_plan_ok = b && gt_still && b->hop && b->hj >= 0;
+        if (gt_plan_ok)
+            gt_plan = *b;
+    }
+    if (!b)
+        return;
+    if (Log_Level() >= LOG_ALL && (!Jump_Same(b, &jt_route) || b->dj != jt_route.dj))
+        OSReport("LLJUMPR %d anchor %d hop %d hj %d dj %d stick %d hold %d aerial %d press %d land %d on %d kind %d\n",
+                 event_vars->game_timer, jt_anchor, b->hop, b->hj, b->dj, b->stick, b->hold, b->aerial, b->press, b->land,
+                 b->where, b->kind);
+    jt_route = *b;
+    jt_route_abs = jt_anchor;
+    Jump_Path(fp);
+    Jump_Text(&jt_route, e);
+}
+
+static void Draw_JumpPath(void)
+{
+    if (!Jump_Showing() || !Options_Paths[POPT_ROUTE].val || jt_path_num < 2)
+        return;
+    int from = Jump_E();
+    if (from < 0)
+        from = 0;
+    if (from >= jt_path_num - 1)
+        return;
+    GXColor c = land_kind_colors[jt_route.kind];
+    // a dark edge under it, so it reads over Falcon and any stage
+    Draw_Path(jt_path, jt_path_bottom, from, jt_path_num - 1, Color_Fill(color_plate, 0.75f), 42);
+    Draw_Path(jt_path, jt_path_bottom, from, jt_path_num - 1, c, 24);
+    if (Options_Paths[POPT_TICKS].val != 2)
+        Draw_Ticks(jt_path, jt_path_bottom, from, jt_path_num - 1, c, 9);
+}
+
+// The route's cells from the next frame on, e frames after the anchor: the
+// frames in the air, the aerial's window, the touchdown, the landing lag
+// and the first frame Falcon can act.
+static void Row_Jump(MeterRow *row, JumpRoute *r, int e)
+{
+    int base = -e - 1;
+    int act = r->kind == LAND_AI ? r->act : r->land + 1;
+    for (int n = e + 1; n < r->land; n++)
+        Route_Cell(row, base, n, CELL_AIR, 0);
+    Route_Cell(row, base, r->land, CELL_LAND, 0);
+    for (int n = r->land + 1; n < act; n++)
+        Route_Cell(row, base, n, CELL_LAG, 0);
+    Route_Cell(row, base, act, CELL_ACT, 0);
+    if (r->kind == LAND_AI)
+    {
+        for (int n = r->press; n < r->press + r->press_w; n++)
+            Route_Cell(row, base, n, CELL_PRESS, n == r->press ? GLYPH_AERIAL : 0);
+        int next = e + 1;
+        if (next >= r->press && next < r->press + r->press_w)
+            row->hot = 2;
+        sprintf(row->info, "%s", tracked_state_names[r->aerial]);
+    }
+}
+
+// Its rows: JUMP counts down to the jump, the one under it is the aerial's
+// window as an AI shows it (or the NIL's touchdown).
+static void Meter_AddJump(void)
+{
+    if (!Jump_Showing())
+        return;
+    JumpRoute *r = &jt_route;
+    int e = Jump_E();
+    MeterRow *row;
+    // from the ground: the hop's row, then (with a double jump) the jump's
+    for (int step = r->hop ? 0 : 1; step < 2; step++)
+    {
+        if (step == 1 && r->hop && r->hj < 0)
+            break;
+        int at = step == 0 ? r->hp : r->dj;
+        int until = at - e - 1; // cells to the press: 0 is the next frame
+        row = Meter_Add(color_in_jump, step == 0 ? (r->hop == GT_SH ? "SH" : "FH") : r->hop ? "DJ" : "JUMP");
+        if (!row)
+            return;
+        for (int n = e + 1; n < at; n++)
+            Route_Cell(row, -e - 1, n, CELL_AIR, 0);
+        Route_Cell(row, -e - 1, at, CELL_PRESS, GLYPH_JUMP);
+        if (until == 0)
+            row->hot = 2;
+        if (until > 0)
+            sprintf(row->info, "%df", until);
+        else
+            sprintf(row->info, "now");
+    }
+    route_rows_active = 1;
+    jump_rows_active = 1;
+
+    row = Meter_Add(land_kind_colors[r->kind], r->kind == LAND_AI ? "AI" : "NIL");
+    if (!row)
+        return;
+    row->fade = Fade_Factor(VG_TIMERS, r->kind == LAND_AI ? CUE_AI : CUE_NIL); // as the AI or NIL timer's own
+    Row_Jump(row, r, e);
+}
+
 static void Draw_RoutePath(void)
 {
-    if (!Routes_On() || !Options_Paths[POPT_PATH].val || route_path_num < 2)
+    if (!Routes_On() || !Options_Paths[POPT_ROUTE].val || route_path_num < 2)
         return;
     int show = (hang_ledge >= 0 && route_show_num > 0) || (route_active && !route_dj_done);
     if (!show)
@@ -10272,12 +17317,12 @@ static void Markers_Draw(void)
         int from = route_active ? route_e + 1 : 0;
         int away = facing > 0 ? GLYPH_LEFT : GLYPH_RIGHT;
         int in = facing > 0 ? GLYPH_RIGHT : GLYPH_LEFT;
-        int down_away = facing > 0 ? GLYPH_DOWN_LEFT : GLYPH_DOWN_RIGHT;
+        int ff_away = facing > 0 ? GLYPH_FF_DOWN_LEFT : GLYPH_FF_DOWN_RIGHT;
         if (from <= 0)
             Route_Marker(0, r->drop == DROP_AWAY ? away : GLYPH_DOWN, color_white,
                          r->fall_away && r->drop != DROP_AWAY ? away : 0, color_white);
         if (r->ff > 0 && Route_FF(r) >= from)
-            Route_Marker(Route_FF(r), r->fall_away ? down_away : GLYPH_DOWN, color_white, 0, color_white);
+            Route_Marker(Route_FF(r), r->fall_away ? ff_away : GLYPH_FF, color_white, 0, color_white);
         if (r->dj >= from)
         {
             int dj_glyph = r->dj_x == LR_DJ_IN     ? in
@@ -10291,6 +17336,45 @@ static void Markers_Draw(void)
         // and dropping off it
         Markers_Flush(facing > 0 ? 1 : -1);
         return;
+    }
+
+    // a jump: the stick and the jump where it is due, then the aerial
+    if (Jump_Showing() && jt_path_num >= 2)
+    {
+        JumpRoute *r = &jt_route;
+        int e = Jump_E();
+        int i;
+        Marker *m;
+        if (r->hop && r->hp > e)
+        {
+            // the hop: the jump alone for a short hop, held (up) for a full one
+            i = r->hp < jt_path_num ? r->hp : jt_path_num - 1;
+            m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
+            Marker_Glyph(m, GLYPH_JUMP, color_in_jump);
+            if (r->hop == GT_FH)
+                Marker_Glyph(m, GLYPH_UP, color_white);
+        }
+        if (!r->hop || r->hj >= 0)
+        {
+            i = r->dj < jt_path_num ? r->dj : jt_path_num - 1;
+            m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
+            Marker_Glyph(m, GLYPH_JUMP, color_in_jump);
+            if (r->stick <= JT_UPRIGHT)
+                Marker_Glyph(m, GLYPH_UP, color_white);
+            if (r->stick == JT_LEFT || r->stick == JT_UPLEFT)
+                Marker_Glyph(m, GLYPH_LEFT, color_white);
+            if (r->stick == JT_RIGHT || r->stick == JT_UPRIGHT)
+                Marker_Glyph(m, GLYPH_RIGHT, color_white);
+        }
+        if (r->kind == LAND_AI && r->press > e)
+        {
+            i = r->press < jt_path_num ? r->press : jt_path_num - 1;
+            m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
+            Marker_Glyph(m, GLYPH_AERIAL, color_in_aerial);
+            Marker_Glyph(m, Aerial_Glyph(r->aerial, Jump_Facing(r) > 0 ? 1 : -1), color_in_aerial);
+        }
+        // on the side the path came from, out of its way
+        Markers_Flush(jt_path[jt_path_num - 1].X >= jt_path[0].X ? -1 : 1);
     }
 
     // the next waveland's airdodge, while its timer runs
@@ -10312,18 +17396,19 @@ static void Markers_Draw(void)
     }
 }
 
-// The panel's lines for a route: its kind and GALINT, like "NIL  11
-// GALINT", and its inputs under it, like "away, wait 1, FF 2, DJ in".
-static void Route_Text(LedgeRoute *r, int galint)
+// A route's kind and GALINT, like "NIL  11 GALINT" or "AI Bair  15 GALINT".
+static void Route_Name(char *t, LedgeRoute *r, int galint)
 {
-    char *t = text_next;
     t += sprintf(t, "%s", r->kind == LAND_AI ? "AI " : "NIL");
     if (r->kind == LAND_AI)
         t += sprintf(t, "%s", tracked_state_names[r->aerial]);
     if (galint > 0)
         sprintf(t, "  %d GALINT", galint);
+}
 
-    t = text_steps;
+// Its inputs, like "away, wait 1, FF 2, DJ in".
+static void Route_Steps(char *t, LedgeRoute *r)
+{
     t += sprintf(t, "%s", r->drop == DROP_AWAY ? "away" : "down");
     if (r->fall_away)
         t += sprintf(t, ", drift away");
@@ -10333,6 +17418,69 @@ static void Route_Text(LedgeRoute *r, int galint)
         t += sprintf(t, ", FF %d", r->ff);
     static const char *dj[LR_DJ_X] = {"DJ in", "DJ down-in", "DJ"};
     sprintf(t, ", %s%s", dj[r->dj_x], r->hold ? ", hold in" : "");
+}
+
+// The panel's lines for a route: which of the routes it is, its kind and
+// GALINT, and its inputs under it.
+static void Route_Text(LedgeRoute *r, int galint, int num, int total)
+{
+    char *t = text_next;
+    if (num > 0)
+        t += sprintf(t, "Route %d of %d: ", num, total);
+    Route_Name(t, r, galint);
+    Route_Steps(text_steps, r);
+}
+
+// The Route option, in the menu: its value ("4 of 23") and the chosen
+// route's GALINT and inputs in the lines of its description. The HUD isn't
+// drawn while the menu is open, so this is where browsing shows what each
+// route is.
+static void Route_MenuText(void)
+{
+    EventOption *o = &Options_Ledge[LOPT_PICK];
+    int n = route_list_num;
+    route_desc[0][0] = route_desc[1][0] = route_desc[2][0] = 0;
+    strcpy(route_pick_fmt, "%d");
+    if (route_list_ledge < 0)
+        sprintf(route_desc[0], "Hang from a ledge to browse its routes.");
+    else if (!ledges[route_list_ledge].have)
+        sprintf(route_desc[0], "%s", Routes_On() ? "Still searching this ledge's routes..." : "Turn on Show Routes to find routes.");
+    else if (n == 0)
+    {
+        strcpy(route_pick_fmt, "none");
+        sprintf(route_desc[0], "No route of this kind keeps GALINT.");
+    }
+    else
+    {
+        int pick = o->val - 1;
+        if (pick >= n)
+            pick = n - 1;
+        if (pick < 0)
+            pick = 0;
+        LedgeRoute *r = &route_list[pick];
+        sprintf(route_pick_fmt, "%%d of %d", n);
+        sprintf(route_desc[0], "Route %d of %d: ", pick + 1, n);
+        Route_Name(route_desc[0] + strlen(route_desc[0]), r, Route_Galint(r, -1, (*stc_ftcommon)->cliff_invuln_time));
+        Route_Steps(route_desc[1], r);
+        if (r->kind == LAND_NIL)
+            sprintf(route_desc[2], "No aerial: it lands with no lag.");
+        else if (r->press_w == 1)
+            sprintf(route_desc[2], "%s on frame %d after the jump.", tracked_state_names[r->aerial], r->press - r->dj);
+        else
+            sprintf(route_desc[2], "%s on frames %d to %d after the jump.", tracked_state_names[r->aerial],
+                    r->press - r->dj, r->press - r->dj + r->press_w - 1);
+    }
+}
+
+void Event_ChangeRoutes(GOBJ *menu, int value)
+{
+    // a new kind or order rebuilds the list and keeps the chosen route; only
+    // a new Route number is a new choice
+    if (!Routes_Update(route_browse))
+        Route_RememberPick();
+    if (hang_ledge >= 0 && ledges[hang_ledge].have)
+        Routes_Show(); // the rows follow the choice as soon as the game goes on
+    Route_MenuText();
 }
 
 // The route was lost, or a step whose timing buzzes went wrong: say which
@@ -10410,6 +17558,133 @@ static void Route_Step(void)
 // Each frame: hanging, letting go, and every step of the route after it.
 // A step is judged a frame after it was due, so one frame late reads as
 // late rather than missed.
+// The ledge drop drill. The game lets go of the ledge only after a frame
+// of the hang with the stick at rest (CliffWait clears the flag as it
+// starts and sets it on a frame the stick is in its deadzone), so holding
+// down through the catch drops nothing: the stick rests on the hang's
+// first frame and goes down or away on the second, the first frame a drop
+// can come out. A drop on that frame or the next is a hit.
+#define DROP_HIST 10
+static int drop_w0 = -1;     // game_timer of the hang's first frame, -1 not hanging
+static int drop_catch_left;  // frames of the catch left
+static int drop_rest;        // the stick rested on the hang's first frame
+static u8 drop_hist[DROP_HIST];
+static int drop_hist_n, drop_hist_pos;
+static int drop_age = 99;    // frames since the last graded drop
+static int drop_last;        // its frame: 1 = the first possible
+
+static int Drop_On(void)
+{
+    return Options_Ledge[LOPT_DROP].val;
+}
+
+static void Drop_Think(FighterData *fp, int sid, int prev_sid)
+{
+    drop_sid = sid;
+    if (prev_sid < 0)
+        drop_w0 = -1; // a test script just put Falcon somewhere
+    if (drop_age < 99)
+        drop_age++;
+    if (sid == ASID_CLIFFCATCH)
+    {
+        Figatree *anim = fp->figatree_curr;
+        float rate = fp->state.rate > 0 ? fp->state.rate : 1.f;
+        drop_catch_left = anim ? (int)((anim->frame_num - fp->state.frame) / rate + 0.999f) : 0;
+        if (drop_w0 != -2 && Drop_On() && cue_log)
+            OSReport("LLDROP catch at %d, %d left\n", event_vars->game_timer, drop_catch_left);
+        drop_w0 = -2; // (-2: logged)
+        return;
+    }
+    if (sid == ASID_CLIFFWAIT)
+    {
+        if (drop_w0 < 0)
+        {
+            drop_w0 = event_vars->game_timer;
+            FtCliffCatch *cliff = (void *)&fp->state_var;
+            drop_rest = cliff->timer != 0;
+            if (Drop_On() && cue_log)
+                OSReport("LLDROP hang at %d rest %d\n", drop_w0, drop_rest);
+        }
+        return;
+    }
+    if (prev_sid == ASID_CLIFFWAIT && drop_w0 >= 0 && sid == ASID_FALL && Drop_On())
+    {
+        int k = event_vars->game_timer - drop_w0;
+        int hit = k >= 1 && k <= 2;
+        drop_hist[drop_hist_pos] = hit;
+        drop_hist_pos = (drop_hist_pos + 1) % DROP_HIST;
+        if (drop_hist_n < DROP_HIST)
+            drop_hist_n++;
+        int n = 0;
+        for (int i = 0; i < drop_hist_n; i++)
+            n += drop_hist[i];
+        drop_last = k;
+        drop_age = 0;
+        if (hit)
+            sprintf(text_last, "Drop frame %d, %d of last %d on 1-2", k, n, drop_hist_n);
+        else if (!drop_rest)
+            sprintf(text_last, "Drop f%d: rest stick as the hang starts", k);
+        else
+            sprintf(text_last, "Drop frame %d, %d late", k, k - 2);
+        last_kind = -1;
+        if (hit && Options_Sounds[SOPT_CHIME].val)
+            SFX_PlayRaw(303, 255, 128, 20, 3);
+        else if (!hit && Options_Sounds[SOPT_WINDOW].val)
+            SFX_PlayCommon(3);
+        char buf[96];
+        sprintf(buf, "LLDROP frame %d rest %d hits %d of %d\n", k, drop_rest, n, drop_hist_n);
+        Log(buf);
+    }
+    drop_w0 = -1;
+}
+
+// Its row in the timers: the hang's first frame (stick at rest) and the two
+// drop frames, counting down through the catch, then the result.
+static void Meter_AddDrop(int sid)
+{
+    if (!Drop_On())
+        return;
+    int hanging = sid == ASID_CLIFFWAIT && drop_w0 >= 0;
+    if (sid != ASID_CLIFFCATCH && !hanging && drop_age > 20)
+        return;
+    MeterRow *r = Meter_Add(color_galint, "DRP");
+    if (!r)
+        return;
+    if (sid == ASID_CLIFFCATCH || hanging)
+    {
+        // index 0 is now; the hang's first frame is drop_catch_left away
+        int rest = sid == ASID_CLIFFCATCH ? drop_catch_left : -(event_vars->game_timer - drop_w0);
+        if (rest >= 0)
+            Row_Set(r, rest, CELL_LAND, TONE_CUE, 1); // hollow: nothing held
+        for (int j = 1; j <= 2; j++)
+            if (rest + j >= 0)
+                Row_Set(r, rest + j, CELL_PRESS, TONE_CUE, 1);
+        if (rest + 1 <= 0 && rest + 2 >= 0)
+        {
+            r->hot = rest + 1 == 0 || rest + 2 == 0 ? 2 : 1;
+            r->spent = -(rest + 1);
+        }
+        if (rest > 0)
+            sprintf(r->info, "%df", rest + 1);
+        else if (rest + 2 >= 0)
+            sprintf(r->info, "now");
+        else
+            sprintf(r->info, "late");
+    }
+    else
+    {
+        int hit = drop_last >= 1 && drop_last <= 2;
+        if (hit)
+            r->burst = drop_age;
+        else
+        {
+            r->implode = drop_age;
+            r->implode_tone = TONE_MISS;
+        }
+        sprintf(r->info, "f%d", drop_last);
+    }
+}
+
 static void Ledge_Think(FighterData *fp, int sid)
 {
     if (!ledges_found)
@@ -10427,6 +17702,8 @@ static void Ledge_Think(FighterData *fp, int sid)
     }
     int intang = fp->hurt.intang_frames.ledge;
     galint_now = hanging ? 0 : intang;
+    if (!hanging)
+        Routes_Update(route_browse); // the Route option's text, before the first ledge too
 
     if (hanging)
     {
@@ -10436,21 +17713,32 @@ static void Ledge_Think(FighterData *fp, int sid)
         attempt_active = 0;
         route_active = 0;
         route_show_num = 0;
-        if (hang_ledge >= 0 && ledges[hang_ledge].done)
+        if (hang_ledge >= 0)
+            route_browse = hang_ledge;
+        Routes_Update(hang_ledge);
+        // a ledge's routes show once its first search is done, and the
+        // ones of the search before keep showing while it's searched again
+        if (hang_ledge >= 0 && ledges[hang_ledge].have)
         {
-            route_show_num = Ledge_Routes(&ledges[hang_ledge], route_show);
-            if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+            Routes_Show();
+            if (Log_Level())
             {
                 LedgeEntry *L = &ledges[hang_ledge];
-                static const char *names[LR_KEEP] = {"1st", "2nd", "3rd"};
-                for (int i = 0; i < route_show_num && !L->logged; i++)
-                    Route_Log(names[i], L, &route_show[i], Route_Galint(&route_show[i], -1, intang));
+                if (!L->logged)
+                {
+                    char buf[96];
+                    sprintf(buf, "LLROUTES ledge %.4f %.4f facing %d found %d nil %d ai %d\n", L->x, L->y, L->facing,
+                            route_list_num, L->list.n[ROUTES_SORT_GALINT][0], L->list.n[ROUTES_SORT_GALINT][1]);
+                    Log(buf);
+                    for (int i = 0; i < LR_KEEP && i < route_list_num; i++)
+                        Route_Log(Ordinal(i + 1), L, &route_list[i], Route_Galint(&route_list[i], -1, intang));
+                }
                 L->logged = 1;
             }
             if (route_show_num > 0 && Routes_On())
             {
                 Route_Path(fp, hang_ledge, &route_show[0]);
-                Route_Text(&route_show[0], Route_Galint(&route_show[0], -1, intang));
+                Route_Text(&route_show[0], Route_Galint(&route_show[0], -1, intang), route_show_rank + 1, route_list_num);
                 next_kind = route_show[0].kind == LAND_AI ? CUE_AI : CUE_NIL;
             }
             else if (Routes_On())
@@ -10479,15 +17767,25 @@ static void Ledge_Think(FighterData *fp, int sid)
         {
             // follow the chosen route, or the best one let go the same way
             int drop = fp->input.lstick.Y <= -Common_Float(0x494) && fabs(fp->input.lstick.X) < -fp->input.lstick.Y ? DROP_DOWN : DROP_AWAY;
-            int pick = -1;
-            for (int i = 0; i < route_show_num && pick < 0; i++)
+            LedgeRoute *pick = 0;
+            route_cur_num = 0;
+            if (route_show[0].drop == drop)
             {
-                if (route_show[i].drop == drop)
-                    pick = i;
+                pick = &route_show[0];
+                route_cur_num = route_show_rank + 1;
             }
-            if (pick >= 0)
+            for (int i = 0; i < route_list_num && !pick; i++)
             {
-                route_cur = route_show[pick];
+                if (route_list[i].drop == drop)
+                {
+                    pick = &route_list[i];
+                    route_cur_num = i + 1;
+                }
+            }
+            if (pick)
+            {
+                route_cur = *pick;
+                route_cur_total = route_list_num;
                 route_ledge = ledge;
                 route_active = 1;
                 route_drop = event_vars->game_timer;
@@ -10501,7 +17799,7 @@ static void Ledge_Think(FighterData *fp, int sid)
                 route_landed = -1;
                 route_galint = -1;
                 route_pred = Route_Galint(&route_cur, 0, intang);
-                if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+                if (Log_Level())
                     Route_Log("follow", &ledges[ledge], &route_cur, route_pred);
                 route_hit = event_vars->game_timer;
                 prev_fastfall = 0;
@@ -10531,7 +17829,7 @@ static void Ledge_Think(FighterData *fp, int sid)
             route_active = 0; // hit, or back on a ledge: no longer the route
             return;
         }
-        Route_Text(r, route_galint >= 0 ? route_galint : Route_Galint(r, e, intang));
+        Route_Text(r, route_galint >= 0 ? route_galint : Route_Galint(r, e, intang), route_cur_num, route_cur_total);
         next_kind = r->kind == LAND_AI ? CUE_AI : CUE_NIL;
 
         if (route_landed < 0)
@@ -10615,6 +17913,10 @@ static void Ledge_Think(FighterData *fp, int sid)
                 }
                 route_landed = e;
                 route_act = sid == ASID_WAIT ? e : e + (int)fp->attr.normal_landing_lag;
+                // the GALINT it will have at the first frame he can act, up
+                // as soon as he touches down
+                sprintf(text_last, "Ledge %s  %d GALINT", route_act == route_landed ? "NIL" : "AI",
+                        intang - (route_act - e));
             }
             else if (fp->phys.pos.Y < ledges[route_ledge].y - 40.f)
             {
@@ -10636,6 +17938,8 @@ static void Ledge_Think(FighterData *fp, int sid)
             if (route_note[0])
                 sprintf(text_last + t, ", %s", route_note);
             last_kind = route_act == route_landed ? CUE_NIL : CUE_AI;
+            if (Options_Sounds[SOPT_ROUTE_CHIME].val)
+                SFX_PlayRaw(303, 255, 128, 20, 3);
             sprintf(buf, "LandingLab route: %s, predicted %d on the drop\n", text_last, route_pred);
             Log(buf);
             Drill_Finish(1);
@@ -10750,6 +18054,8 @@ void Event_ChangeLedgeStart(GOBJ *menu, int value)
 void Event_ChangeCamera(GOBJ *menu, int value)
 {
     MatchCamera *cam = stc_matchcam;
+    if (menu)
+        Options_Camera[CAMOPT_VIEW].val = 0; // a mode picked by hand leaves the view
     if (value == 0)
         Match_SetNormalCamera();
     else if (value == 1)
@@ -11137,6 +18443,9 @@ static void Body_Flash(FighterData *fp, int sid)
     }
     if (flash_age < 100)
         flash_age++;
+    a *= hide_all ? 0 : Kind_K(VG_CUES, flash_age < 4 ? flash_kind : -1);
+    if (a > 0.9f)
+        a = 0.9f;
 
     if (a > 0)
     {
@@ -11223,7 +18532,7 @@ static void Panel_UpdateSide(FighterData *fp)
 
     // where Falcon is on screen: the camera turns as well as moves, so
     // comparing with its eye position isn't enough
-    COBJ *cobj = *stc_matchcam_cobj;
+    COBJ *cobj = View_CObj();
     Vec3 pos = {fp->phys.pos.X, fp->phys.pos.Y + body_offset, 0};
     Vec3 screen;
     HSD_GXProject(cobj, &pos, &screen, 1);
@@ -11250,20 +18559,23 @@ static void Timing_Update(FighterData *fp, Prediction *p, int lead)
     if (ai && ai <= LL_COUNT_FRAMES)
     {
         int k = p->ai_first;
-        int t = k + p->ai_delay[k];
+        int t = k + Ai_FirstDelay(p, k, p->ai_show[k]);
         if (t > p->num)
             t = p->num;
         Cue_Set(CUE_AI, ai, p->ai_width, 0, 0, p->pos[t].X, p->pos[k - 1].Y + p->bottom[k - 1]);
+        Cue_Body(CUE_AI, p, k - 1);
     }
     if (wl && wl <= LL_COUNT_FRAMES && !squat_wd)
     {
         int k = p->wl_first;
         Cue_Set(CUE_WL, wl, p->wl_width, p->wl_dirs, 0, p->pos[k].X, p->pos[k - 1].Y + p->bottom[k - 1]);
+        Cue_Body(CUE_WL, p, k - 1);
     }
     if (nil && nil <= LL_COUNT_FRAMES)
     {
         int k = p->land_frame;
         Cue_Set(CUE_NIL, nil, 1, 0, 0, p->pos[k].X, p->pos[k - 1].Y + p->bottom[k - 1]);
+        Cue_Body(CUE_NIL, p, k);
     }
 }
 
@@ -11305,6 +18617,7 @@ static void Ground_Preview(FighterData *fp)
 
 void Event_Init(GOBJ *gobj)
 {
+    int init_tick = OSGetTick(); // the start-up work, timed for the log
     Cues_Clear();
     common_fastfall_stick = Common_Float(COMMON_FASTFALL_STICK);
     common_fastfall_window = Common_Int(COMMON_FASTFALL_WINDOW);
@@ -11325,6 +18638,10 @@ void Event_Init(GOBJ *gobj)
     common_fall_lean_rate = Common_Float(COMMON_FALL_LEAN_RATE);
     common_air_friction_oob = Common_Float(COMMON_AIR_FRICTION_OOB);
     common_upb_drift_stick = Common_Float(COMMON_UPB_DRIFT_STICK);
+    common_drop_stick = fabs(Common_Float(COMMON_DROP_STICK));
+    common_drop_window = Common_Frames(COMMON_DROP_WINDOW);
+    common_spot_stick = -fabs(Common_Float(COMMON_SPOT_STICK));
+    common_spot_window = Common_Frames(COMMON_SPOT_WINDOW);
 
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     upb_table = calloc(sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
@@ -11342,8 +18659,19 @@ void Event_Init(GOBJ *gobj)
     quads = calloc(sizeof(Quad) * LL_QUADS);
     ledges = calloc(sizeof(LedgeEntry) * LR_LEDGES);
     pred_route = calloc(sizeof(Prediction));
+    route_list = calloc(sizeof(LedgeRoute) * 2 * LR_ROUTES);
+    route_build = calloc(sizeof(RouteList));
     route_path = calloc(sizeof(Vec2) * LR_PATH);
     route_path_bottom = calloc(sizeof(float) * LR_PATH);
+    jt_cache = calloc(sizeof(SimState) * JT_D);
+    gt_steps = calloc(sizeof(GroundStep) * JT_D);
+#ifdef LL_GROUND_GUIDE
+    gd_mem = (u8 *)(((u32)calloc(GD_STRIDE * GD_SLOTS + 32) + 31) & ~31);
+    for (int j = 0; j < GD_SLOTS; j++)
+        gd_slice[j] = -1;
+#endif
+    jt_path = calloc(sizeof(Vec2) * JT_PATH);
+    jt_path_bottom = calloc(sizeof(float) * JT_PATH);
     slide_pos = calloc(sizeof(Vec2) * 2 * SLIDE_MAX);
     slide_bottom = calloc(sizeof(float) * 2 * SLIDE_MAX);
     for (int side = 0; side < 2; side++)
@@ -11363,8 +18691,13 @@ void Event_Init(GOBJ *gobj)
     update->checkPause = Advance_CheckPause;
     update->checkAdvance = Advance_CheckStep;
     Script_Load();
+    Presets_Init();
     GOBJ *script_gobj = GObj_Create(0, 7, 0);
     GObj_AddProc(script_gobj, Script_Think, 3);
+
+    char buf[64];
+    sprintf(buf, "LLPERF init %.2f ms\n", OSTicksToMicroseconds(OSGetTick() - init_tick) / 1000.f);
+    Log(buf);
 }
 
 static void Event_ThinkFrame(GOBJ *event);
@@ -11383,7 +18716,7 @@ void Event_Think(GOBJ *event)
         perf_think = ms;
     if (++perf_frames >= 60)
     {
-        if (Options_Dev[DOPT_LOG].val || script_cur >= 0)
+        if (Log_Level())
         {
             char buf[96];
             sprintf(buf, "LLPERF %d think %.2f ms solve %.2f ms quads %d\n", event_vars->game_timer, perf_think, perf_solve, quad_peak);
@@ -11400,6 +18733,12 @@ static void Event_ThinkFrame(GOBJ *event)
 {
     GOBJ *ft = Fighter_GetGObj(0);
     FighterData *fp = ft->userdata;
+    if (card_probe > 0 && script_cur >= 0)
+    {
+        char buf[48];
+        sprintf(buf, "LLPROBE think %d at %d\n", CARD_PROBE - card_probe, event_vars->game_timer);
+        Log(buf);
+    }
 
     if (!attributes_logged)
     {
@@ -11408,8 +18747,9 @@ static void Event_ThinkFrame(GOBJ *event)
     }
 
     ai_show_all = Options_Cues[COPT_AI_FILTER].val == 1;
-    int logging = Options_Dev[DOPT_LOG].val || script_cur >= 0;
-    cue_log = logging;
+    ai_only = Options_Cues[COPT_AI_AERIAL].val ? AERIAL_BIT(TS_AIRN + Options_Cues[COPT_AI_AERIAL].val - 1) : 0;
+    int logging = Log_Level() >= LOG_FRAMES;
+    cue_log = Log_Level() >= LOG_LANDINGS;
 
     int sid = fp->state_id;
     int ts = Tracked_Index(sid);
@@ -11431,13 +18771,11 @@ static void Event_ThinkFrame(GOBJ *event)
     else if (!fp->flags.hitlag)
         frame_in_state++;
     {
-        const char *name = ts >= 0                     ? tracked_state_names[ts]
-                           : sid == ASID_KNEEBEND      ? "Jumpsquat"
-                           : sid == ASID_CLIFFWAIT     ? "Ledge"
-                           : sid == ASID_LANDING       ? "Landing"
-                           : sid == ASID_WAIT          ? "Standing"
-                                                       : "State";
-        sprintf(text_frame, "%s frame %d", name, frame_in_state + 1);
+        const char *name = ts >= 0 ? tracked_state_names[ts] : State_Name(sid);
+        if (name)
+            sprintf(text_frame, "%s frame %d", name, frame_in_state + 1);
+        else
+            sprintf(text_frame, "State %d frame %d", sid, frame_in_state + 1);
     }
 
     int tracked_air = ts >= 0 && airborne && !disturbed;
@@ -11533,6 +18871,8 @@ static void Event_ThinkFrame(GOBJ *event)
         if (prev_tracked_air)
             Window_Feedback(fp, ts);
         Window_Remember(pred_live);
+        if (!prev_tracked_air || (ts != prev_ts && !Tracked_EndedInto(prev_ts, ts)))
+            press_note = 0; // a new jump or press: the old note is stale
         if (prev_tracked_air && ts != prev_ts)
             Press_CheckMissed(fp, ts);
         if (!prev_tracked_air || Segment_InputChanged(fp, ts))
@@ -11566,11 +18906,24 @@ static void Event_ThinkFrame(GOBJ *event)
     Cues_End();
 
     Ledge_Think(fp, sid);
+    Drop_Think(fp, sid, prev_state_id);
     Assist_Think(fp, sid);
+    // dropping through a platform (Pass) falls as a fall does: Jump Timing
+    // takes it as one, so its jumps show from the drop on
+    if (sid == ASID_PASS && airborne && !disturbed)
+        Jump_Update(fp, TS_FALL, 1);
+    else
+        Jump_Update(fp, ts, tracked_air);
     Body_Flash(fp, sid);
     Slide_Update(fp);
     Pad_Record(PadGetEngine(fp->pad_index));
     int t_solve = OSGetTick();
+    Jump_Solve(fp);
+    Jump_Publish(fp);
+#ifdef LL_GROUND_GUIDE
+    if (!jt_active || jt_done)
+        Guide_Solve(fp); // worked out once, in the frames the jump search leaves
+#endif
     Ledge_Solve(fp, tracked_air ? LR_BUDGET_AIR : LR_BUDGET);
     float solve_ms = OSTicksToMicroseconds(OSGetTick() - t_solve) / 1000.f;
     if (solve_ms > perf_solve)
@@ -11618,6 +18971,661 @@ static void Position_Update(int held, int down)
     }
 }
 
+// The quick toggles' steps: each list goes round, up or right forward.
+typedef struct CueSet
+{
+    u8 ai, nil, wl;
+    const char *name;
+} CueSet;
+static const CueSet cue_sets[] = {
+    {1, 0, 1, "AI and waveland cues"},
+    {1, 0, 0, "AI cues"},
+    {0, 1, 0, "NIL cues"},
+    {0, 0, 1, "Waveland cues"},
+    {1, 1, 1, "All cues"},
+    {0, 0, 0, "Cues off"},
+};
+// the paths in the order the toggle steps through them: body, landing, then
+// both, first with the frame dots only in Frame Advance, then always
+static const char *path_set_names[] = {"Paths off", "Body path", "Landing path", "Body and landing paths",
+                                       "Body path with dots", "Landing path with dots", "Both paths with dots"};
+static const u8 path_sets[][3] = {{0, 0, 0}, {0, 1, 0}, {1, 0, 0}, {1, 1, 0}, {0, 1, 1}, {1, 0, 1}, {1, 1, 1}}; // landing, body, dots
+static const char *pad_set_names[] = {"Controller off", "Ring, small", "Ring, medium", "Ring, large",
+                                      "Crest, small", "Crest, medium", "Crest, large",
+                                      "Classic, small", "Classic, medium", "Classic, large"};
+static int chord_pad_place; // where the controller goes when it comes back on
+
+// Everything the event draws, hidden or back.
+static void Hide_Toggle(void)
+{
+    hide_all ^= 1;
+    Toast(hide_all ? "Landing Lab hidden" : "Landing Lab shown");
+    SFX_PlayCommon(2);
+}
+
+static int Chord_Step(int i, int n, int dir)
+{
+    return i < 0 ? (dir > 0 ? 0 : n - 1) : (i + dir + n) % n;
+}
+
+static void Chord(int lr, int z, int down)
+{
+    int dir = down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_RIGHT) ? 1 : down & (HSD_BUTTON_DPAD_DOWN | HSD_BUTTON_DPAD_LEFT) ? -1 : 0;
+    if (!dir)
+        return;
+    int vert = (down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN)) != 0;
+    char buf[40];
+    if (lr && z && vert)
+    {
+        // everything the event draws, hidden or back
+        hide_all ^= 1;
+        Toast(hide_all ? "Landing Lab hidden" : "Landing Lab shown");
+    }
+    else if (lr && z)
+    {
+        // the next preset that has settings in it
+        int cur = Options_Presets[PROPT_PICK].val;
+        for (int n = 0; n < PS_COUNT; n++)
+        {
+            cur = Chord_Step(cur, PS_COUNT, dir);
+            if (Preset_Slot(cur)->used)
+                break;
+        }
+        Options_Presets[PROPT_PICK].val = cur;
+        Preset_Apply(Preset_Slot(cur));
+        Preset_Describe(cur);
+        sprintf(buf, "Preset: %s", preset_names[cur]);
+        Toast(buf);
+    }
+    else if (lr && vert)
+    {
+        // the cue set
+        int wl = Options_Cues[COPT_WL].val, cur = -1;
+        for (int i = 0; i < (int)countof(cue_sets); i++)
+            if (cue_sets[i].ai == Options_Cues[COPT_AI].val && cue_sets[i].nil == Options_Cues[COPT_NIL].val && cue_sets[i].wl == (wl != 0))
+                cur = i;
+        const CueSet *c = &cue_sets[Chord_Step(cur, countof(cue_sets), dir)];
+        Options_Cues[COPT_AI].val = c->ai;
+        Options_Cues[COPT_NIL].val = c->nil;
+        Options_Cues[COPT_WL].val = c->wl ? (wl ? wl : 2) : 0;
+        Toast(c->name);
+    }
+    else if (lr)
+    {
+        // the landing and body paths, and the frame dots on them
+        int dots = Options_Paths[POPT_TICKS].val == 1, cur = -1;
+        for (int i = 0; i < (int)countof(path_sets); i++)
+            if (path_sets[i][0] == Options_Paths[POPT_PATH].val && path_sets[i][1] == Options_Paths[POPT_BODY].val &&
+                (path_sets[i][2] == dots || i == 0))
+                cur = i;
+        int next = Chord_Step(cur, countof(path_sets), dir);
+        Options_Paths[POPT_PATH].val = path_sets[next][0];
+        Options_Paths[POPT_BODY].val = path_sets[next][1];
+        if (next != 0)
+            Options_Paths[POPT_TICKS].val = path_sets[next][2] ? 1 : 0;
+        Toast(path_set_names[next]);
+    }
+    else if (vert)
+    {
+        // the controller: off, then each look at each size
+        int place = Options_Hud[HOPT_STICK].val;
+        int cur = place == 3 ? 0 : 1 + 3 * Options_Hud[HOPT_LOOK].val + Options_Hud[HOPT_PAD_SIZE].val;
+        if (place != 3)
+            chord_pad_place = place;
+        int next = Chord_Step(cur, countof(pad_set_names), dir);
+        if (next == 0)
+            Options_Hud[HOPT_STICK].val = 3;
+        else
+        {
+            Options_Hud[HOPT_STICK].val = chord_pad_place;
+            Options_Hud[HOPT_LOOK].val = (next - 1) / 3;
+            Options_Hud[HOPT_PAD_SIZE].val = (next - 1) % 3;
+        }
+        Toast(pad_set_names[next]);
+    }
+    else
+    {
+        // how strongly everything shows
+        EventOption *o = &Options_Cues[COPT_INTENSITY];
+        o->val = o->val + dir < 0 ? 0 : o->val + dir >= o->value_num ? o->value_num - 1 : o->val + dir;
+        sprintf(buf, "Intensity %s", intensity_names[o->val]);
+        Toast(buf);
+    }
+    SFX_PlayCommon(2);
+}
+
+///////////////////////
+/// Preset Deck     ///
+///////////////////////
+
+// The quick menu: a full L or R click with D-pad up or down opens it, and
+// the game freezes. Across the top, a card for each preset with settings in
+// it; left and right flip through them, and the stage changes with each.
+// Down opens the chosen card's settings, a list where up and down pick one
+// and left and right change it. A change is live but saved nowhere until A
+// saves it to the chosen preset (a built-in one can't be changed, so it
+// goes to a new one) or X or Y saves it as a new preset in the first free
+// slot, the trigger still held. It closes when the trigger is let go, after
+// a while with no D-pad, or after a moment of other buttons or the stick
+// with no D-pad (Options_Hud). Standing on the ground, a full hop from where
+// Falcon stands is put up as a still example, so the cues show something.
+#define DECK_CARD_W 5.6f
+#define DECK_CARD_H 6.2f
+#define DECK_GAP 0.5f
+#define DECK_TOP (SAFE_H + 0.5f)
+#define DECK_ROW_H 1.75f
+#define DECK_ROW_W 21.f
+#define DECK_VIEW 8 // settings rows on screen at once, so the list stays clear of the percents
+
+typedef struct DeckRow
+{
+    EventOption *o;
+    const char *label;
+} DeckRow;
+
+static DeckRow deck_rows[] = {
+    {&Options_Cues[COPT_AI], "AI cues"},
+    {&Options_Cues[COPT_NIL], "NIL cues"},
+    {&Options_Cues[COPT_WL], "Waveland cues"},
+    {&Options_Timers[TOPT_NEAR], "Timer near Falcon"},
+    {&Options_Timers[TOPT_STRIP], "Fixed strip"},
+    {&Options_Timers[TOPT_SPOT], "Landing spot"},
+    {&Options_Timers[TOPT_WL], "Waveland timer"},
+    {&Options_Paths[POPT_PATH], "Landing path"},
+    {&Options_Paths[POPT_BODY], "Body path"},
+    {&Options_Paths[POPT_TICKS], "Frame dots"},
+    {&Options_Cues[COPT_GLOW], "Platform glow"},
+    {&Options_Jump[JOPT_SHOW], "Jump timing"},
+    {&Options_Hud[HOPT_LOOK], "Controller look"},
+    {&Options_Hud[HOPT_PAD_CUES], "Controller cues"},
+    {&Options_Cues[COPT_INTENSITY], "Intensity"},
+    {&Options_Intensity[IOPT_FADE], "Auto fade"},
+};
+#define DECK_ROWS ((int)countof(deck_rows))
+
+// what a card's marks stand for, and their colors
+typedef struct DeckMark
+{
+    EventOption *o;
+    u8 kind; // LAND_* color
+} DeckMark;
+static const DeckMark deck_marks[] = {
+    {&Options_Cues[COPT_AI], LAND_AI},          {&Options_Cues[COPT_NIL], LAND_NIL},
+    {&Options_Cues[COPT_WL], LAND_PERFECT_WL},  {&Options_Timers[TOPT_NEAR], LAND_AI},
+    {&Options_Timers[TOPT_STRIP], LAND_AI},     {&Options_Paths[POPT_PATH], LAND_AI},
+    {&Options_Timers[TOPT_SPOT], LAND_AI},      {&Options_Jump[JOPT_SHOW], LAND_NORMAL},
+};
+
+static struct
+{
+    int row;       // -1: the cards; else the chosen card's setting
+    int changed;   // a setting was changed here and not saved yet
+    int idle;      // frames with no D-pad or trigger press
+    int play;      // frames since the stick moved it into playing out (0: not)
+    int demo;      // the still example is up
+    int trig_prev; // a trigger was in last frame
+    float alpha;   // its fade as a timer runs out
+    Text *left, *right, *mid;
+} deck;
+#define DECK_TEXTS 24
+
+static Text *Deck_Text(int align)
+{
+    HUDCamData *hud = event_vars->hudcam_gobj->userdata;
+    Text *t = Text_CreateText(2, hud->canvas);
+    t->kerning = 1;
+    t->align = align;
+    t->use_aspect = 0;
+    t->is_depth_compare = 0;
+    t->viewport_scale.X = 0.1f;
+    t->viewport_scale.Y = 0.1f;
+    for (int i = 0; i < DECK_TEXTS; i++)
+        Text_AddSubtext(t, 0, 0, "");
+    return t;
+}
+
+// a line of one of the deck's texts, as Hud_TextAligned places a row 2.5
+// tall whose bottom is y; an empty one hides it
+static void Deck_Line(Text *t, int i, const char *text, float x, float y, float size, GXColor c)
+{
+    if (!t || i >= DECK_TEXTS)
+        return;
+    Text_SetText(t, i, text);
+    Text_SetScale(t, i, size, size);
+    Text_SetPosition(t, i, x * 10.f, y * -10.f - 37.5f);
+    c.a = c.a * deck.alpha; // fading out as its timer runs down
+    Text_SetColor(t, i, &c);
+}
+
+static int Deck_Shown(int i)
+{
+    return Preset_Slot(i)->used;
+}
+
+static int Deck_Count(void)
+{
+    int n = 0;
+    for (int i = 0; i < PS_COUNT; i++)
+        n += Deck_Shown(i);
+    return n;
+}
+
+// The first frame a cue the settings show would count down to in p, or 0.
+static int Deck_DemoFirst(Prediction *p)
+{
+    int first = 0;
+    int k[3] = {Cues_Ai() && p->ai_first < p->uncertain_from ? p->ai_first : 0,
+                Cues_Waveland() && p->wl_first < p->uncertain_from ? p->wl_first : 0,
+                Cues_Nil() && p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame
+                    ? p->land_frame + 1
+                    : 0};
+    for (int i = 0; i < 3; i++)
+        if (k[i] && (!first || k[i] < first))
+            first = k[i];
+    return first;
+}
+
+// The still example: a full hop (or a short one, if only that has a window
+// to show) from where Falcon stands, its path and timers up as if it were
+// happening, held at the moment its first countdown is half run. Done again
+// whenever a setting changes, so it shows the settings as they are.
+#define DECK_DEMO_TO_GO 12
+static void Deck_Demo(FighterData *fp)
+{
+    if (deck.demo)
+    {
+        Cues_Clear();
+        live_visible = 0;
+        deck.demo = 0;
+    }
+    if (fp->phys.air_state != 0 || live_visible)
+        return;
+    SimStart start;
+    Floor_BuildCache();
+    int lead = Sim_GroundJump(fp, 0, &start);
+    Predict(fp, &start, pred_live, BR_ALL);
+    int first = Deck_DemoFirst(pred_live);
+    if (!first)
+    {
+        lead = Sim_GroundJump(fp, 1, &start);
+        Predict(fp, &start, pred_live, BR_ALL);
+        first = Deck_DemoFirst(pred_live);
+    }
+    live_visible = 1;
+    deck.demo = 1;
+    Prediction *p = pred_live;
+    int ref = first ? first : p->land_frame;
+    if (ref)
+    {
+        // the first countdown as if partway there: started full, then run
+        // on to DECK_DEMO_TO_GO
+        Timing_Update(fp, p, LL_COUNT_FRAMES - ref);
+        lead = DECK_DEMO_TO_GO - ref;
+    }
+    Timing_Update(fp, p, lead);
+    // A hop from the ground seldom has a rising AI to show, so with AI cues
+    // on and none here, one is put at the hop's touchdown, to see how it looks.
+    int k = p->land_frame;
+    if (Cues_Ai() && !cue_live[CUE_AI].phase && k > 1)
+    {
+        float x = p->pos[k].X, y = p->pos[k - 1].Y + p->bottom[k - 1];
+        Cue_Set(CUE_AI, LL_COUNT_FRAMES, 3, 0, 0, x, y);
+        Cue_Set(CUE_AI, DECK_DEMO_TO_GO, 3, 0, 0, x, y);
+        Cue_Body(CUE_AI, p, k - 1);
+    }
+    OSReport("LLDECK demo first %d lead %d ai %d wl %d land %d\n", first, lead, pred_live->ai_first,
+             pred_live->wl_first, pred_live->land_frame);
+}
+
+static void Deck_Open(void)
+{
+    FighterData *fp = Fighter_GetGObj(0)->userdata;
+    memset(&deck, 0, sizeof(deck));
+    deck.row = -1;
+    deck.left = Deck_Text(0);
+    deck.right = Deck_Text(2);
+    deck.mid = Deck_Text(1);
+    deck.trig_prev = 1;
+    deck.alpha = 1.f;
+    deck_on = 1;
+    deck_frozen = 1;
+    Deck_Demo(fp);
+    OSReport("LLDECK open %d preset %d\n", event_vars->game_timer, Options_Presets[PROPT_PICK].val);
+    SFX_PlayCommon(1);
+}
+
+static void Deck_Close(const char *why)
+{
+    if (deck.demo)
+    {
+        // the example was never played: the cues start again from nothing
+        Cues_Clear();
+        live_visible = 0;
+    }
+    if (deck.left)
+        Text_Destroy(deck.left);
+    if (deck.right)
+        Text_Destroy(deck.right);
+    if (deck.mid)
+        Text_Destroy(deck.mid);
+    deck.left = deck.right = deck.mid = 0;
+    deck_on = 0;
+    deck_frozen = 0;
+    OSReport("LLDECK close %d %s preset %d changed %d\n", event_vars->game_timer, why, Options_Presets[PROPT_PICK].val,
+             deck.changed);
+}
+
+// the option's value one step on, round
+static void Deck_Step(EventOption *o, int dir)
+{
+    int n = o->kind == OPTKIND_TOGGLE ? 2 : o->value_num;
+    int v = o->val - (o->kind == OPTKIND_TOGGLE ? 0 : o->value_min);
+    v = (v + dir + n) % n;
+    o->val = v + (o->kind == OPTKIND_TOGGLE ? 0 : o->value_min);
+}
+
+// The settings as they are into preset slot which (User Custom or 1 to 4,
+// or a new one when which is -1 or built in), and that preset chosen.
+static void Deck_Save(int which)
+{
+    char buf[48];
+    if (which < 0 || which >= PS_SAVED)
+    {
+        which = 0;
+        for (int i = 1; i < PS_SAVED && !which; i++)
+            if (!Preset_Slot(i)->used)
+                which = i;
+        if (!which)
+        {
+            Toast("No free preset: save over one");
+            SFX_PlayCommon(3);
+            return;
+        }
+    }
+    Preset_Capture(&preset_file->slot[which]);
+    preset_dirty = 1;
+    Options_Presets[PROPT_PICK].val = which;
+    Preset_Describe(which);
+    Labels_Refresh();
+    deck.changed = 0;
+    sprintf(buf, "Saved to %s", preset_names[which]);
+    Toast(buf);
+    OSReport("LLDECK save %d %s\n", which, preset_names[which]);
+    SFX_PlayCommon(1);
+}
+
+// The quick menu stays up with the trigger let go. It closes after a while
+// with no D-pad or trigger press (Quick Menu Idle), fading out over the
+// last 3 seconds; the stick plays out of it: the game goes on at once and
+// it fades out over Quick Menu Play, unless the D-pad or a trigger brings
+// it back. B closes it. Saving wants a trigger in, so A, X and Y can't save
+// by chance.
+#define DECK_FADE 180
+static void Deck_Play(int on)
+{
+    if (on && deck.demo)
+    {
+        Cues_Clear(); // the example goes; the real cues take over
+        live_visible = 0;
+        deck.demo = 0;
+    }
+    deck.play = on;
+    deck_frozen = !on;
+    OSReport("LLDECK %s %d\n", on ? "play" : "back", event_vars->game_timer);
+}
+
+static void Deck_Think(void)
+{
+    HSD_Pad *pad = PadGetMaster(Advance_Port());
+    int down = pad->down, held = pad->held;
+    int dpad = HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN | HSD_BUTTON_DPAD_LEFT | HSD_BUTTON_DPAD_RIGHT;
+    int trig = (held & (HSD_TRIGGER_L | HSD_TRIGGER_R)) || pad->ftriggerLeft > 0.3f || pad->ftriggerRight > 0.3f;
+    int trig_press = trig && !deck.trig_prev;
+    deck.trig_prev = trig;
+    // both triggers all the way with D-pad up or down: everything hidden, as outside
+    if ((held & HSD_TRIGGER_L) && (held & HSD_TRIGGER_R) && (down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN)))
+    {
+        Deck_Close("hide");
+        Hide_Toggle();
+        return;
+    }
+    if (down & HSD_BUTTON_B)
+    {
+        Deck_Close("B");
+        return;
+    }
+    // saving, with a trigger in
+    if (trig && (down & HSD_BUTTON_A))
+    {
+        Deck_Save(Options_Presets[PROPT_PICK].val);
+        deck.idle = 0;
+        if (deck.play)
+            Deck_Play(0);
+        return;
+    }
+    if (trig && (down & (HSD_BUTTON_X | HSD_BUTTON_Y)))
+    {
+        Deck_Save(-1);
+        deck.idle = 0;
+        if (deck.play)
+            Deck_Play(0);
+        return;
+    }
+    int stick = fabs(pad->fstickX) > 0.3f || fabs(pad->fstickY) > 0.3f || fabs(pad->fsubstickX) > 0.3f ||
+                fabs(pad->fsubstickY) > 0.3f;
+    if ((down & dpad) || trig_press)
+    {
+        deck.idle = 0;
+        if (deck.play)
+            Deck_Play(0);
+    }
+    else
+        deck.idle++;
+    if (stick && !deck.play && Options_Hud[HOPT_DECK_PLAY].val != 3)
+        Deck_Play(1);
+    else if (deck.play)
+        deck.play++;
+
+    static const int idle_frames[] = {180, 300, 480, 0}, play_frames[] = {60, 120, 180, 0};
+    int idle_max = idle_frames[Options_Hud[HOPT_DECK_IDLE].val], play_max = play_frames[Options_Hud[HOPT_DECK_PLAY].val];
+    deck.alpha = 1.f;
+    if (idle_max && idle_max - deck.idle < DECK_FADE)
+        deck.alpha = (float)(idle_max - deck.idle) / DECK_FADE;
+    if (deck.play && play_max)
+    {
+        float a = 1.f - (float)deck.play / play_max;
+        if (a < deck.alpha)
+            deck.alpha = a;
+    }
+    if ((idle_max && deck.idle >= idle_max) || (deck.play && play_max && deck.play >= play_max))
+    {
+        Deck_Close(deck.play ? "playing" : "idle");
+        return;
+    }
+    if (deck.play)
+        return;
+    if (!(down & dpad))
+        return;
+
+    int dir = down & HSD_BUTTON_DPAD_RIGHT ? 1 : down & HSD_BUTTON_DPAD_LEFT ? -1 : 0;
+    if (deck.row < 0)
+    {
+        if (down & HSD_BUTTON_DPAD_DOWN)
+            deck.row = 0;
+        else if (dir)
+        {
+            // the next card with settings in it
+            int cur = Options_Presets[PROPT_PICK].val;
+            for (int n = 0; n < PS_COUNT; n++)
+            {
+                cur = Chord_Step(cur, PS_COUNT, dir);
+                if (Deck_Shown(cur))
+                    break;
+            }
+            Options_Presets[PROPT_PICK].val = cur;
+            Preset_Apply(Preset_Slot(cur));
+            Preset_Describe(cur);
+            deck.changed = 0;
+            Deck_Demo(Fighter_GetGObj(0)->userdata);
+            OSReport("LLDECK card %d %s\n", cur, preset_names[cur]);
+        }
+    }
+    else
+    {
+        if (down & HSD_BUTTON_DPAD_UP)
+            deck.row--;
+        else if (down & HSD_BUTTON_DPAD_DOWN)
+            deck.row = deck.row + 1 < DECK_ROWS ? deck.row + 1 : deck.row;
+        else if (dir)
+        {
+            DeckRow *r = &deck_rows[deck.row];
+            Deck_Step(r->o, dir);
+            if (r->o == &Options_Paths[POPT_PATH] || r->o == &Options_Jump[JOPT_SHOW])
+                Event_ChangeRoutes(0, 0);
+            deck.changed = 1;
+            Deck_Demo(Fighter_GetGObj(0)->userdata);
+            OSReport("LLDECK set %s = %d\n", r->label, r->o->val);
+        }
+    }
+    SFX_PlayCommon(2);
+}
+
+static const char *Deck_Value(EventOption *o)
+{
+    if (o->kind == OPTKIND_TOGGLE)
+        return o->val ? "On" : "Off";
+    int v = o->val - o->value_min;
+    return v >= 0 && v < o->value_num && o->values ? o->values[v] : "?";
+}
+
+static void Deck_Draw(void)
+{
+    vis_k = sqrtf(deck.alpha > 0.f ? deck.alpha : 0.f); // Vis takes alpha down by its square
+    GXColor ink = {235, 235, 240, 255}, dim = {160, 166, 186, 255}, lit = land_kind_colors[LAND_AI];
+    int pick = Options_Presets[PROPT_PICK].val;
+    int n = Deck_Count();
+    float total = n * DECK_CARD_W + (n - 1) * DECK_GAP;
+    float x = -total / 2, pick_x = 0;
+    int li = 0, mi = 0, ri = 0;
+
+    // the frozen screen's corners, like a camera's viewfinder: a still, not play
+    for (int c = 0; c < 4; c++)
+    {
+        float cx = c & 1 ? SAFE_W + 1.f : -SAFE_W - 1.f, cy = c & 2 ? -SAFE_H - 1.f : SAFE_H + 1.f;
+        float sx = c & 1 ? -1.f : 1.f, sy = c & 2 ? 1.f : -1.f;
+        Hud_Rect(cx < cx + sx * 2.f ? cx : cx + sx * 2.f, cy - 0.12f, cx < cx + sx * 2.f ? cx + sx * 2.f : cx, cy + 0.12f,
+                 Color_Over(color_white, 0.5f));
+        Hud_Rect(cx - 0.12f, cy < cy + sy * 2.f ? cy : cy + sy * 2.f, cx + 0.12f, cy < cy + sy * 2.f ? cy + sy * 2.f : cy,
+                 Color_Over(color_white, 0.5f));
+    }
+
+    for (int i = 0; i < PS_COUNT; i++)
+    {
+        if (!Deck_Shown(i))
+            continue;
+        int on = i == pick;
+        PresetSlot *slot = Preset_Slot(i);
+        float y1 = DECK_TOP - (on ? 0.f : 0.5f), y0 = y1 - (on ? DECK_CARD_H : DECK_CARD_H - 0.8f);
+        float a = on ? 1.f : 0.7f;
+        Hud_Rect(x, y0, x + DECK_CARD_W, y1, Color_Over(color_plate, 0.9f));
+        Hud_Frame(x, y0, x + DECK_CARD_W, y1, on ? 0.18f : 0.08f, Color_Over(on ? lit : dim, on ? 1.f : 0.5f));
+        char name[20];
+        Name_Copy(name, preset_names[i]);
+        // the name fits its card: smaller when long
+        float ns = 0.3f, nw = Text_Width(name, ns), room = DECK_CARD_W - 0.7f;
+        if (nw > room)
+            ns *= room / nw;
+        Deck_Line(deck.mid, mi++, name, x + DECK_CARD_W / 2, y1 - 2.0f, ns, Color_Over(on ? color_white : ink, a));
+        if (i > 0 && i < PS_SAVED && preset_file->preset_name[i][0])
+            Hud_Disc(x + DECK_CARD_W - 0.45f, y1 - 0.45f, 0.18f, Color_Over(color_in_jump, a)); // one he named
+        if (on && deck.changed)
+            Hud_Rect(x + 0.3f, y0 - 0.75f, x + DECK_CARD_W - 0.3f, y0 - 0.25f, Color_Over(color_in_jump, 1.f)); // not saved yet
+        // what the preset has on: a mark each, lit when on
+        for (int m = 0; m < (int)countof(deck_marks); m++)
+        {
+            EventOption *o = deck_marks[m].o;
+            int v = on ? o->val : Preset_Value(slot, o);
+            int lit_m = v != 0;
+            float mx = x + 0.45f + (m % 4) * 1.2f, my = y1 - 3.3f - (m / 4) * 0.95f;
+            GXColor mc = land_kind_colors[deck_marks[m].kind];
+            if (lit_m)
+                Hud_Rect(mx, my, mx + 0.9f, my + 0.6f, Color_Over(mc, 0.95f * a));
+            else
+                Hud_Frame(mx, my, mx + 0.9f, my + 0.6f, 0.06f, Color_Over(mc, 0.35f * a));
+        }
+        // its intensity, in bars
+        int lv = on ? Options_Cues[COPT_INTENSITY].val : Preset_Value(slot, &Options_Cues[COPT_INTENSITY]);
+        for (int b = 0; b <= lv && b < 5; b++)
+            Hud_Rect(x + 0.45f + b * 0.5f, y0 + 0.35f, x + 0.8f + b * 0.5f, y0 + 0.75f, Color_Over(dim, a));
+        if (on)
+            pick_x = x;
+        x += DECK_CARD_W + DECK_GAP;
+    }
+
+    float hy = DECK_TOP - DECK_CARD_H - 1.0f;
+    // A writes over the chosen preset only when it's on the memory card
+    const char *save_hint = pick < PS_SAVED ? "L/R + A: save to this preset    L/R + X: save as a new one"
+                                            : "Built in:  L/R + A or X saves a new preset";
+    if (deck.row < 0)
+    {
+        char both[112];
+        sprintf(both, "%s    Down: settings", save_hint);
+        const char *hint = deck.changed ? both : "Left/Right: preset    Down: its settings    B: close";
+        float w = Text_Width(hint, 0.32f) / 2 + 0.6f;
+        Hud_Rect(-w, hy - 2.0f, w, hy, Color_Over(color_plate, 0.85f));
+        Deck_Line(deck.mid, mi++, hint, 0, hy - 2.2f, 0.32f, dim);
+    }
+    else
+    {
+        float px = pick_x + DECK_CARD_W / 2 - DECK_ROW_W / 2;
+        if (px < -SAFE_W)
+            px = -SAFE_W;
+        if (px + DECK_ROW_W > SAFE_W)
+            px = SAFE_W - DECK_ROW_W;
+        // a window of the rows that keeps the chosen one in it
+        int top = deck.row - DECK_VIEW / 2;
+        if (top > DECK_ROWS - DECK_VIEW)
+            top = DECK_ROWS - DECK_VIEW;
+        if (top < 0)
+            top = 0;
+        int end = top + DECK_VIEW < DECK_ROWS ? top + DECK_VIEW : DECK_ROWS;
+        float y1 = hy, y0 = y1 - (end - top) * DECK_ROW_H - 1.2f;
+        Hud_Rect(px, y0, px + DECK_ROW_W, y1, Color_Over(color_plate, 0.9f));
+        Hud_Frame(px, y0, px + DECK_ROW_W, y1, 0.08f, Color_Over(dim, 0.5f));
+        // more above or below: a small bar at that edge
+        if (top > 0)
+            Hud_Rect(px + DECK_ROW_W / 2 - 1.f, y1 - 0.4f, px + DECK_ROW_W / 2 + 1.f, y1 - 0.2f, Color_Over(dim, 0.8f));
+        if (end < DECK_ROWS)
+            Hud_Rect(px + DECK_ROW_W / 2 - 1.f, y0 + 0.2f, px + DECK_ROW_W / 2 + 1.f, y0 + 0.4f, Color_Over(dim, 0.8f));
+        for (int r = top; r < end; r++)
+        {
+            float ry = y1 - 0.6f - (r - top + 1) * DECK_ROW_H;
+            int sel = r == deck.row;
+            if (sel)
+                Hud_Rect(px + 0.3f, ry, px + DECK_ROW_W - 0.3f, ry + DECK_ROW_H, Color_Over(lit, 0.25f));
+            Deck_Line(deck.left, li++, deck_rows[r].label, px + 0.8f, ry - 0.45f, 0.34f, sel ? color_white : ink);
+            char val[40];
+            sprintf(val, sel ? "< %s >" : "%s", Deck_Value(deck_rows[r].o));
+            Deck_Line(deck.right, ri++, val, px + DECK_ROW_W - 0.8f, ry - 0.45f, 0.34f, sel ? lit : dim);
+        }
+        if (deck.changed)
+        {
+            const char *hint = save_hint;
+            float w = Text_Width(hint, 0.3f) + 1.2f;
+            Hud_Rect(px, y0 - 2.1f, px + w, y0 - 0.1f, Color_Over(color_plate, 0.85f));
+            Deck_Line(deck.left, li++, hint, px + 0.6f, y0 - 2.3f, 0.3f, dim);
+        }
+    }
+    // the lines not used this frame
+    while (li < DECK_TEXTS)
+        Deck_Line(deck.left, li++, "", 0, 0, 0.1f, ink);
+    while (ri < DECK_TEXTS)
+        Deck_Line(deck.right, ri++, "", 0, 0, 0.1f, ink);
+    while (mi < DECK_TEXTS)
+        Deck_Line(deck.mid, mi++, "", 0, 0, 0.1f, ink);
+    vis_k = 1.f;
+}
+
 void Event_Update(void)
 {
     if (Pause_CheckStatus(1) != 2)
@@ -11629,18 +19637,104 @@ void Event_Update(void)
     // down toggles frame advance, D-pad left plays the chosen script again,
     // or else the D-pad saves and loads position (or puts Falcon back on
     // the ledge, when Reset starts from one)
+    Presets_Update();
+    if (toast_timer > 0)
+        toast_timer--;
+    Rumble_Update(Fighter_GetGObj(0)->userdata,
+                  Pause_CheckStatus(1) == 2 || Options_Game[GOPT_FRAME_ADV].val || assist_frozen || deck_frozen);
+    // while a script runs, a line in the log every 5 seconds, frozen or not:
+    // whoever watches the log tells a hang (no lines) from a shot waiting,
+    // and which shot, should its own line have gone missing
+    static int script_beat;
+    if (script_cur >= 0 && ++script_beat >= 300)
+    {
+        script_beat = 0;
+        char buf[128];
+        if (Options_Game[GOPT_FRAME_ADV].val)
+            sprintf(buf, "LLBEAT %d frozen at shot \"%s\", waiting for D-pad down\n", event_vars->game_timer, shot_label);
+        else
+            sprintf(buf, "LLBEAT %d running\n", event_vars->game_timer);
+        Log(buf);
+    }
+    if (card_probe > 0)
+    {
+        if (script_cur >= 0)
+        {
+            char buf[48];
+            sprintf(buf, "LLPROBE update %d at %d\n", CARD_PROBE - card_probe, event_vars->game_timer);
+            Log(buf);
+        }
+        card_probe--;
+    }
+    if (namer.on)
+    {
+        if (namer.leave_menu)
+        {
+            namer.leave_menu = 0;
+            if (Pause_CheckStatus(1) == 2)
+                event_vars->Menu_Exit(event_vars->menu_gobj);
+            return;
+        }
+        Namer_Think();
+        return;
+    }
+    if (deck_on)
+    {
+        if (Pause_CheckStatus(1) == 2)
+            Deck_Close("pause");
+        else
+        {
+            Deck_Think();
+            if (deck_on)
+                return; // the menu has the buttons, frozen or playing out
+        }
+    }
     if (Pause_CheckStatus(1) == 2)
         return;
     Assist_Update();
     HSD_Pad *pad = PadGetMaster(Advance_Port());
     int down = pad->down;
+    // L or R clicked all the way (a light press doesn't count, so the
+    // D-pad while shielding does nothing) with D-pad up or down opens the
+    // quick menu; both triggers with it hide everything or bring it back.
+    // The D-pad does nothing else meanwhile.
+    int lh = (pad->held & HSD_TRIGGER_L) != 0, rh = (pad->held & HSD_TRIGGER_R) != 0;
+    if (lh || rh)
+    {
+        if (down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN))
+        {
+            if (lh && rh)
+                Hide_Toggle();
+            else if (Options_Hud[HOPT_DECK].val)
+                Deck_Open();
+        }
+        save_hold = 0;
+        return;
+    }
+    // a trigger partway in (shielding, or on its way to the click that
+    // opens the quick menu): the D-pad does nothing, so it can't toggle
+    // Frame Advance or load a position by chance
+    if (pad->ftriggerLeft > 0.3f || pad->ftriggerRight > 0.3f)
+    {
+        save_hold = 0;
+        return;
+    }
     if (down & HSD_BUTTON_DPAD_DOWN)
         Options_Game[GOPT_FRAME_ADV].val ^= 1;
     // a clean frame for mockups, the same frame as the one with cues. Only
     // for the Developer's captures, and never left on past Frame Advance:
     // pressed by chance, everything the event draws would stay hidden.
-    if ((down & HSD_BUTTON_DPAD_UP) && Options_Game[GOPT_FRAME_ADV].val && (Options_Dev[DOPT_LOG].val || script_cur >= 0))
+    if ((down & HSD_BUTTON_DPAD_UP) && Options_Game[GOPT_FRAME_ADV].val && Log_Level())
         capture_clean ^= 1;
+    else if ((down & HSD_BUTTON_DPAD_UP) && hang_ledge >= 0 && route_list_num > 1 && Routes_On())
+    {
+        // hanging: the next route in the list, back to the first after the last
+        EventOption *o = &Options_Ledge[LOPT_PICK];
+        o->val = o->val >= route_list_num ? 1 : o->val + 1;
+        Route_RememberPick();
+        Route_MenuText();
+        SFX_PlayCommon(2);
+    }
     if (!Options_Game[GOPT_FRAME_ADV].val)
         capture_clean = 0;
     if ((down & HSD_BUTTON_DPAD_LEFT) && Options_Dev[DOPT_SCRIPT].val)
@@ -11674,8 +19768,15 @@ void Event_ClearLearned(GOBJ *menu)
     SFX_PlayCommon(1);
 }
 
+static void Presets_KeepUser(void);
+static void Card_Flush(void);
+
 void Event_Exit(GOBJ *menu)
 {
+    // leaving from the menu: it never closes, so keep the settings now
+    Presets_KeepUser();
+    Card_Flush();
+    Rumble_Release();
     stc_match->state = 3;
     Match_EndVS();
 }

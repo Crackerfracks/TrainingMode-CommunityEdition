@@ -76,6 +76,12 @@ mex_build() {
         local opt="-DTM_DEBUG"
     fi
 
+    # a Landing Lab test build (LLSCRIPT set) skips the stage select:
+    # Battlefield, as the test scripts are written for it
+    if [ -n "${LLSCRIPT}" ]; then
+        opt="${opt} -DLL_TEST_STAGE"
+    fi
+
     warn="-Wall -Wextra -Wno-char-subscripts -Wno-builtin-declaration-mismatch -Wno-unused-parameter"
     ${hmex} -q -l "MexTK/melee.link" -f "${warn} ${opt}" -s "${sym}" -t "MexTK/${sym}.txt" -o "${out}" -i ${src} ${dat} || kill_all
     echo built ${out}
@@ -136,7 +142,7 @@ ${gc_fst} fs TM-CE.iso \
     insert TM/sweetspot.dat build/sweetspot.dat \
     insert TM/laserland.dat build/laserland.dat \
     insert TM/landinglab.dat build/landinglab.dat \
-    insert TM/llscript.txt src/landinglab_tests.txt \
+    insert TM/llscript.txt "${LLSCRIPT:-src/landinglab_tests.txt}" \
     insert TM/eggs.dat build/eggs.dat \
     insert TM/techchase.dat build/techchase.dat \
     insert TM/slalom.dat build/slalom.dat \

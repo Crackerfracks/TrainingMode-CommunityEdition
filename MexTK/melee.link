@@ -30,7 +30,7 @@
 800290D4:CameraSubject_Destroy
 80355F34:CARDCheckAsync
 803576AC:CARDClose
-80000000:CARDCreateAsync
+80357838:CARDCreateAsync
 803582F0:CARDDeleteAsync
 803532D4:CARDFreeBlocks
 803585F8:CARDGetStatus
@@ -608,6 +608,8 @@
 80361C60:HSD_StateSetPointSize
 80361E8C:HSD_StateSetZCompLoc
 803786F0:HSD_PadRumbleInterpret
+80378170:HSD_PadRumbleRemove
+80378430:HSD_PadRumbleAdd
 803761C0:HSD_VICopyXFBASync
 80375C34:HSD_VIPostRetraceCallback
 80375E60:HSD_VIGetDrawDoneWaitingFlag

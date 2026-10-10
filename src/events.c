@@ -307,7 +307,11 @@ EventDesc LandingLab = {
     },
     .playerKind = -1,
     .cpuKind = -1,
+#ifdef LL_TEST_STAGE
+    .stage = GRKINDEXT_BATTLE, // test builds skip the stage select
+#else
     .stage = -1,
+#endif
     .disable_hazards = true,
     .force_sopo = false,
     .scoreType = SCORETYPE_KO,
@@ -802,6 +806,9 @@ EventPage *EventPages[] = {
 
 RNGControl rng;
 
+void EventMenu_EnterMenu(GOBJ *gobj); // menu.c
+void EventMenu_ExitMenu(GOBJ *gobj);
+
 EventVars stc_event_vars = {
     .event_desc = 0,
     .menu_assets = 0,
@@ -824,6 +831,8 @@ EventVars stc_event_vars = {
     .HUD_DrawActionLogKey = HUD_DrawActionLogKey,
     .HUD_DrawInfoPanel = HUD_DrawInfoPanel,
     .HUD_DrawInfoPanelAt = HUD_DrawInfoPanelAt,
+    .Menu_Enter = EventMenu_EnterMenu,
+    .Menu_Exit = EventMenu_ExitMenu,
 };
 
 static GOBJ *stc_msgmgr;

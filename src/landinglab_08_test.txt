@@ -1,0 +1,260 @@
+# 0.8 checks with no menuing: build with LLSCRIPT=src/landinglab_08_test.txt
+# and start the event on Battlefield. Each "shot" freezes the game until
+# D-pad down.
+autorun
+
+# Views are per stage and named: view 1 saved and named, the card written
+# and read again, and view 1 still there with its name. Each "view show"
+# logs the camera, the view's menu name and the stage id (Battlefield 31).
+script Views and names
+start 0 0 right
+30
+view save 1
+120
+view name 1 TopPlat
+view show 1
+mark named: expect view 1 "TopPlat" on stage 31 matches
+closemenu
+card flush
+set Camera/Camera Mode = 0
+set Camera/View = 0
+card restart
+10
+view show 1
+mark after the card is read again: expect view 1 "TopPlat" (matches), view 2 "View 2 (empty)" below
+view show 2
+set Camera/Camera Mode = 0
+set Camera/View = 0
+closemenu
+card flush
+
+# Effects follow the Advanced camera: the camera slid 40 right and 15 up,
+# then a nair AI onto the right platform. The path, landing spot and timer
+# marks must sit on the stage as drawn, not where the normal camera would put
+# them.
+script Advanced camera effects
+start 38 0 right
+view shift 1 40 15
+10
+5 X
+22
+shot advanced camera: path and spot marks sit on the right platform as drawn
+ai 0 A
+land 120
+set Camera/Camera Mode = 0
+set Camera/View = 0
+10
+
+# The Advanced camera moved the way a player moves it: Camera Mode set to
+# Advanced (it resumes where it was last left), then C-stick held with A to
+# pan and with Y to zoom, then Falcon put back in view and the jump run.
+# "view show 1" logs where the camera really is.
+script Advanced camera by hand
+set Camera/Camera Mode = 3
+10
+40 A c:1,0
+30 Y c:0,1
+start 38 0 right
+10
+view show 1
+5 X
+22
+shot advanced camera moved by hand: path and spot marks on the right platform as drawn
+ai 0 A
+land 120
+set Camera/Camera Mode = 0
+10
+
+# Intensity by group, on the same jump: Timers 2 fainter, Paths 2 bolder,
+# controller at 5.
+script Intensity groups
+set Intensity/Timers = 0
+set Intensity/Paths = 4
+set Intensity/Controller = 4
+start 38 0 right
+5 X
+22
+shot groups: timers faint, paths bold, controller boldest
+ai 0 A
+land 120
+set Intensity/Timers = 2
+set Intensity/Paths = 2
+set Intensity/Controller = 2
+10
+
+# Auto Fade on the timers: twelve hit AIs raise the AI hit rate (LLFADE
+# lines), so the AI timer is fainter on the last one than on the first. The
+# AI is a rising one: after 14 frames of falling from 40 under the top
+# platform, a double jump comes up to the platform slowly enough for a nair
+# to catch it on the way up (Jump Timing found it: "DJ up now, nair f12").
+# Falling AIs are platform catches, which get no timer. Expect LLFADE lines
+# for each.
+script Auto fade
+preset load Defaults
+fadereset
+set Intensity/Auto Fade = 1
+air 0 40 right 0 0 0
+14
+1 X
+6
+shot fade first try: the AI timer (pink cells in the strip, spot on the top platform) at full strength
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+ai 0 A
+land 120
+air 0 40 right 0 0 0
+14
+1 X
+6
+shot fade after 11 hits: the same AI timer, clearly fainter
+ai 0 A
+land 120
+set Intensity/Auto Fade = 0
+
+# Controller cues: the A button's timing on the Ring for the rising nair AI
+# onto the top platform, as a closing ring a few frames out, then as a
+# gauge.
+script Controller cues
+preset load Defaults
+set HUD/Controller Cues = 1
+air 0 40 right 0 0 0
+14
+1 X
+6
+shot closing ring: a pink ring around A, wider than A, not filled
+ai 0 A
+land 120
+set HUD/Controller Cues = 2
+air 0 40 right 0 0 0
+14
+1 X
+6
+shot gauge: a pink arc partway round A
+ai 0 A
+land 120
+set HUD/Controller Cues = 0
+
+# Ledge drop drill: which frame of the hang a drop comes out on. Expect no
+# LLDROP frame line for the first try (the stick held from the start
+# never rested), then frames 1, 2, 4 for one, two and four frames of rest
+# (or all one higher: then the grading is off by one). The last try catches
+# the ledge for real, to log the catch length against the hang's start.
+script Drop drill
+set Ledge/Drop Drill = 1
+ledge right
+5 s:0,-1
+20
+mark held from the start: expect no LLDROP frame line before this
+ledge right
+1
+5 s:0,-1
+mark one frame of rest
+60
+ledge right
+2
+5 s:0,-1
+mark two frames of rest
+60
+ledge right
+shot drop row: DRP label clear of its cells, a hollow rest cell, two solid cells after it
+4
+5 s:0,-1
+mark four frames of rest
+60
+air 80 20 left 0 0
+45
+mark real catch: compare LLDROP catch and hang lines
+5 s:0,-1
+60
+set Ledge/Drop Drill = 0
+closemenu
+card flush
+mark done
+
+# Jump timing: Falcon full hops, then falls, under Battlefield's top platform with his double
+# jump left. The search takes its anchor on the first airborne frame, and
+# by frame 14 (he reaches the floor at about 24) has a jump to show: a JUMP
+# row counting down to the frame, the AI row under it with the aerial's
+# window (a NIL row if that lands sooner, with Kind on Both), the route's
+# path up to the platform and the panel line. Expect an LLJUMP line in the
+# log when the search is done.
+script Jump timing
+preset load Defaults
+set Jump/Show = 1
+# a full hop from the floor under the top platform: the search anchors as
+# soon as he is airborne, and the double jump can come while he still rises
+start 0 0 right
+5 X
+8
+shot full hop under the top platform: jump timing row and path for a double jump that AIs or NILs somewhere
+# the same hop with Land On set to the top platform: the route goes there
+set Jump/Land On = 1
+start 0 0 right
+5 X
+8
+shot Land On Top: the jump timing path ends on the top platform
+set Jump/Land On = 0
+# then a fall under it
+air 0 40 right 0 0 0
+14
+shot jump timing: JUMP row counting down, pink AI row under it, path up to the top platform, panel "DJ ... in Nf, aerial fN-N: AI"
+set Jump/Show = 0
+
+# The quick menu, by hand: Falcon stands still for a long while (the wait
+# stops while the menu has the game frozen) so the controller can open it:
+# R all the way and D-pad up, left and right to flip presets, down for the
+# settings list, A or X to save, R let go to close; L+R with D-pad up hides
+# everything (a small "Effects hidden" line stays at the top left).
+script Quick menu
+preset load Defaults
+start 0 0 right
+mark quick menu by hand now
+1800

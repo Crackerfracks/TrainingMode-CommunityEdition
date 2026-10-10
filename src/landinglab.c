@@ -146,6 +146,47 @@ static const char *tracked_state_names[TS_COUNT] = {
     "FallSpecial", "UpB", "UpBAir",
 };
 
+// The panel's name for a state the event doesn't track, or 0 for its number.
+typedef struct StateName
+{
+    short sid;
+    const char *name;
+} StateName;
+static const StateName state_names[] = {
+    {ASID_WAIT, "Standing"},       {ASID_WALKSLOW, "Walk"},         {ASID_WALKMIDDLE, "Walk"},
+    {ASID_WALKFAST, "Walk"},       {ASID_TURN, "Turn"},             {ASID_TURNRUN, "Run turn"},
+    {ASID_DASH, "Dash"},           {ASID_RUN, "Run"},               {ASID_RUNDIRECT, "Run"},
+    {ASID_RUNBRAKE, "Run brake"},  {ASID_KNEEBEND, "Jumpsquat"},    {ASID_FALLSPECIAL, "Helpless"},
+    {ASID_FALLSPECIALF, "Helpless"}, {ASID_FALLSPECIALB, "Helpless"}, {ASID_DAMAGEFALL, "Tumble"},
+    {ASID_SQUAT, "Crouch"},        {ASID_SQUATWAIT, "Crouch"},      {ASID_SQUATRV, "Stand up"},
+    {ASID_LANDING, "Landing"},     {ASID_LANDINGFALLSPECIAL, "Special landing"},
+    {ASID_LANDINGAIRN, "Nair lag"}, {ASID_LANDINGAIRF, "Fair lag"}, {ASID_LANDINGAIRB, "Bair lag"},
+    {ASID_LANDINGAIRHI, "Uair lag"}, {ASID_LANDINGAIRLW, "Dair lag"}, {ASID_GUARDON, "Shield on"},
+    {ASID_GUARD, "Shield"},        {ASID_GUARDOFF, "Shield off"},   {ASID_GUARDSETOFF, "Shield stun"},
+    {ASID_GUARDREFLECT, "Powershield"}, {ASID_PASS, "Platform drop"}, {ASID_OTTOTTO, "Teeter"},
+    {ASID_OTTOTTOWAIT, "Teeter"},  {ASID_ESCAPE, "Spotdodge"},     {ASID_ESCAPEF, "Roll"},
+    {ASID_ESCAPEB, "Roll"},        {ASID_ESCAPEAIR, "Airdodge"},    {ASID_CLIFFCATCH, "Ledge grab"},
+    {ASID_CLIFFWAIT, "Ledge"},     {ASID_CLIFFCLIMBQUICK, "Getup"}, {ASID_CLIFFCLIMBSLOW, "Getup"},
+    {ASID_CLIFFATTACKQUICK, "Ledge attack"}, {ASID_CLIFFATTACKSLOW, "Ledge attack"},
+    {ASID_CLIFFESCAPEQUICK, "Ledge roll"}, {ASID_CLIFFESCAPESLOW, "Ledge roll"},
+    {ASID_CLIFFJUMPQUICK1, "Ledge jump"}, {ASID_CLIFFJUMPQUICK2, "Ledge jump"},
+    {ASID_CLIFFJUMPSLOW1, "Ledge jump"}, {ASID_CLIFFJUMPSLOW2, "Ledge jump"},
+    {ASID_ATTACKAIRN, "Nair"},     {ASID_ATTACKAIRF, "Fair"},       {ASID_ATTACKAIRB, "Bair"},
+    {ASID_ATTACKAIRHI, "Uair"},    {ASID_ATTACKAIRLW, "Dair"},      {ASID_ATTACK11, "Jab"},
+    {ASID_ATTACKDASH, "Dash attack"}, {ASID_DOWNWAITU, "Down"},     {ASID_DOWNWAITD, "Down"},
+    {ASID_DOWNBOUNDU, "Missed tech"}, {ASID_DOWNBOUNDD, "Missed tech"}, {ASID_PASSIVE, "Tech"},
+    {ASID_REBIRTHWAIT, "Platform"},
+};
+
+static const char *State_Name(int sid)
+{
+    for (int i = 0; i < (int)countof(state_names); i++)
+        if (state_names[i].sid == sid)
+            return state_names[i].name;
+    return 0;
+}
+
+
 static int Tracked_Index(int state_id)
 {
     if (state_id == ASID_FALLSPECIALF || state_id == ASID_FALLSPECIALB)
@@ -3841,6 +3882,8 @@ static const char *near_names[] = {"Off", "Bubble", "Halo", "Pincers", "ECB Fill
 static const char *strip_names[] = {"Off", "Cells", "Highway", "Dial"};
 static const char *wl_timer_names[] = {"Off", "Ticks", "Rails", "Chevrons"};
 static const char *wd_timer_names[] = {"Off", "Cells", "Pips", "Ring"};
+enum { TRAVEL_FIXED, TRAVEL_CATCH };
+static const char *travel_names[] = {"Fixed Speed", "Catch Up"};
 static const char *stick_names[] = {"By Percent", "Bottom Left", "Bottom Right", "Off"};
 static const char *pad_look_names[] = {"Ring", "Crest", "Classic"};
 static const char *pad_cue_names[] = {"Off", "Closing Ring", "Gauge"};
@@ -4730,6 +4773,7 @@ enum options_timers
     TOPT_SPOT,
     TOPT_WL,
     TOPT_WD,
+    TOPT_TRAVEL,
 
     TOPT_COUNT
 };
@@ -4789,6 +4833,17 @@ static EventOption Options_Timers[TOPT_COUNT] = {
         .desc = {"Out of the jumpsquat: a row in the strips, a pip",
                  "a frame under Falcon's feet, or a ring on the",
                  "floor that closes on the airdodge frame."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Note Travel",
+        .val = TRAVEL_FIXED,
+        .value_num = countof(travel_names),
+        .values = travel_names,
+        .desc = {"Cells and Highway. Fixed Speed: a frame is always",
+                 "the same distance, so a window found late shows up",
+                 "partway along. Catch Up: every window comes in from",
+                 "the far end and settles to that speed halfway in."},
     },
 };
 
@@ -7804,7 +7859,10 @@ static GXColor Vis(GXColor c)
 {
     if (vis_k == 1.f)
         return c;
-    float ka = vis_k, kc = vis_k;
+    // dimmer: only the alpha goes down (by k squared, as bright as scaling
+    // both had looked), so a faded shape fades into what's behind it instead
+    // of leaving a dark shadow of itself
+    float ka = vis_k < 1.f ? vis_k * vis_k : vis_k, kc = vis_k < 1.f ? 1.f : vis_k;
     if (vis_k > 1.f)
     {
         int m = c.r > c.g ? c.r : c.g;
@@ -8545,6 +8603,7 @@ static void Hud_TextAligned(const char *text, float x, float y, float size, GXCo
     HUDCamData *hud = event_vars->hudcam_gobj->userdata;
     int slot = hud->text_cache_used;
     Rect r = {x, y, 0, 2.5f};
+    color = Vis(color); // text fades with what it's part of, like the shapes
     event_vars->HUD_DrawTextEx(text, &r, size, color, (GXColor){0, 0, 0, 0}, 0, 0);
     if (slot < (int)countof(hud->text_cache) && hud->text_cache[slot])
     {
@@ -8666,7 +8725,9 @@ typedef struct MeterRow
     s8 implode;   // frames since a miss or skip folded in, -1 none
     u8 implode_tone;
     s8 flash;     // frames since the gate reached the first frame Falcon can act, -1 none
-    float fade;   // Auto Fade: its cells' opacity scaled by this
+    float fade;   // Auto Fade (and a lane fading out): the whole row's opacity scaled by this
+    u8 gap;       // a lane kept free for a row that went, so the others stay put
+    u8 span;      // cells from the gate its first window was at when it came up (Note Travel)
     char label[8];
     char info[24];
 } MeterRow;
@@ -8697,7 +8758,7 @@ static void Row_Set(MeterRow *r, int k, int kind, int tone, float alpha)
         return;
     r->cell[k] = kind;
     r->tone[k] = tone;
-    r->alpha[k] = 255 * Clamp01(alpha * r->fade);
+    r->alpha[k] = 255 * Clamp01(alpha);
     if (k + 1 > r->len)
         r->len = k + 1;
 }
@@ -8832,16 +8893,19 @@ static void Meter_FromCue(int kind)
 }
 
 static int route_rows_active; // ledge routes fill the meter; the cues' rows give way
+static int jump_rows_active;  // ... or it's a jump's route (Jump Timing), which keeps the controller cues
+static int Jump_PressAhead(void);
 static int drop_sid; // Falcon's state, for the drop drill's row
 static void Meter_AddDrop(int sid);
 static int route_dj_done;     // ... and its double jump happened
 static void Meter_AddRoutes(void);
 static void Meter_AddJump(void);
 
-static void Meter_Build(void)
+static void Meter_Collect(void)
 {
     meter_rows = 0;
     route_rows_active = 0;
+    jump_rows_active = 0;
     Meter_AddRoutes();
     Meter_AddJump();
     Meter_AddDrop(drop_sid);
@@ -8853,6 +8917,164 @@ static void Meter_Build(void)
         Meter_FromCue(CUE_WL);
     if (Cues_Nil())
         Meter_FromCue(CUE_NIL);
+}
+
+// Lanes keep their places: a row keeps the lane it came up in (by its
+// label) while it's up and for MT_LINGER frames after, fading out, so the
+// others never shift or swap. One that went with a window still ahead
+// leaves that window in gray as it fades, rather than just vanishing. A new
+// row takes the first free lane. Each lane also remembers how far out its
+// window was when it came up, for Note Travel.
+#define MT_LINGER 8
+typedef struct Lane
+{
+    char label[8];
+    int seen;    // the frame it was last up
+    int k_prev;  // its first window's cell last frame, -1 none
+    int k0;      // ... and when that window came up
+    u8 used;
+    MeterRow last;
+} Lane;
+static Lane lanes[MT_ROWS];
+
+static int Str_Same(const char *a, const char *b)
+{
+    while (*a && *a == *b)
+        a++, b++;
+    return *a == *b;
+}
+
+// The first cell that is a window to press in, a touchdown or the first
+// frame to act, or -1.
+static int Row_FirstTarget(MeterRow *r)
+{
+    for (int k = 0; k < r->len && k < MT_CELLS; k++)
+        if (r->cell[k] == CELL_PRESS || r->cell[k] == CELL_LAND || r->cell[k] == CELL_ACT)
+            return k;
+    return -1;
+}
+
+static void Meter_Settle(void)
+{
+    static MeterRow built[MT_ROWS];
+    int now = event_vars->game_timer, n = meter_rows;
+    int taken[MT_ROWS], at[MT_ROWS];
+    memcpy(built, meter, n * sizeof(MeterRow));
+    for (int l = 0; l < MT_ROWS; l++)
+    {
+        taken[l] = -1;
+        if (lanes[l].used && (now < lanes[l].seen || now - lanes[l].seen > MT_LINGER))
+            lanes[l].used = 0; // gone long enough, or the clock went back (a save state)
+    }
+    // the lanes the rows already had, then the first free one for the rest
+    for (int i = 0; i < n; i++)
+    {
+        at[i] = -1;
+        for (int l = 0; l < MT_ROWS && at[i] < 0; l++)
+            if (lanes[l].used && taken[l] < 0 && Str_Same(lanes[l].label, built[i].label))
+                at[i] = l;
+        if (at[i] >= 0)
+            taken[at[i]] = i;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (at[i] >= 0)
+            continue;
+        int best = -1;
+        for (int l = 0; l < MT_ROWS && best < 0; l++)
+            if (!lanes[l].used && taken[l] < 0)
+                best = l;
+        // all taken: the one gone longest
+        for (int l = 0; l < MT_ROWS && best < 0; l++)
+            if (taken[l] < 0 && (best < 0 || lanes[l].seen < lanes[best].seen))
+                best = l;
+        if (best < 0)
+            continue;
+        Lane *L = &lanes[best];
+        memset(L, 0, sizeof(*L));
+        strcpy(L->label, built[i].label);
+        L->k_prev = -1;
+        at[i] = best;
+        taken[best] = i;
+    }
+    for (int i = 0; i < n; i++)
+    {
+        if (at[i] < 0)
+            continue;
+        Lane *L = &lanes[at[i]];
+        int t = Row_FirstTarget(&built[i]);
+        if (t >= 0 && (L->k_prev < 0 || t > L->k_prev))
+            L->k0 = t; // a new window (or one further out than the last)
+        L->k_prev = t;
+        built[i].span = t >= 0 && L->k0 < 255 ? L->k0 : 0;
+        L->last = built[i];
+        L->seen = now;
+        L->used = 1;
+    }
+
+    int top = -1;
+    for (int l = 0; l < MT_ROWS; l++)
+        if (lanes[l].used)
+            top = l;
+    meter_rows = top + 1;
+    for (int l = 0; l <= top; l++)
+    {
+        MeterRow *r = &meter[l];
+        Lane *L = &lanes[l];
+        if (taken[l] >= 0)
+        {
+            *r = built[taken[l]];
+            continue;
+        }
+        if (!L->used)
+        {
+            memset(r, 0, sizeof(*r));
+            r->gap = 1;
+            r->fade = 1.f;
+            r->burst = r->implode = r->flash = -1;
+            for (int g = 0; g < 4; g++)
+                r->ghost[g] = -1;
+            continue;
+        }
+        // going: fades out over MT_LINGER frames
+        *r = L->last;
+        r->fade *= 1.f - (float)(now - L->seen) / (MT_LINGER + 1);
+        r->hot = 0;
+        r->flash = r->burst = r->implode = -1;
+        r->info[0] = 0;
+        int t = Row_FirstTarget(r);
+        if (t >= 2)
+        {
+            for (int k = 0; k < r->len; k++)
+                r->tone[k] = TONE_SKIP; // a window it no longer has, in gray
+        }
+        else
+            r->len = 0;
+    }
+}
+
+static void Meter_Build(void)
+{
+    Meter_Collect();
+    Meter_Settle();
+}
+
+// Where cell k of a row is along its track, in frames from the gate, with
+// track frames in all. Catch Up brings a window that came up nearer than the
+// track's end in from the end, settling to the fixed speed halfway to the
+// gate (a smoothstep), so every window travels the whole track.
+static float Note_At(MeterRow *r, float k, int track)
+{
+    int k0 = r->span;
+    if (Options_Timers[TOPT_TRAVEL].val != TRAVEL_CATCH || k0 < 2 || k0 >= track)
+        return k;
+    float m = k0 * 0.5f, extra = track - k0;
+    if (k <= m)
+        return k;
+    if (k >= k0)
+        return k + extra; // past it (a window's later frames): off the far end
+    float t = (k - m) / (k0 - m);
+    return k + extra * t * t * (3.f - 2.f * t);
 }
 
 static GXColor Tone_Color(MeterRow *r, int tone)
@@ -8957,13 +9179,22 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     float glyph_h = glyphs ? 1.1f * scale : 0;
     float x1 = gx + (len - 1) * pitch + cw;
 
-    // the plate, so it reads over any stage
+    // the plate, so it reads over any stage; it fades with the brightest row
+    float base_k = vis_k, plate_k = 0;
+    for (int i = 0; i < rows; i++)
+        if (!meter[i].gap && meter[i].fade > plate_k)
+            plate_k = meter[i].fade;
+    vis_k = base_k * plate_k;
     Hud_Rect(gx - 0.32f * scale, base - 0.22f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
 
+    // rows from the bottom up, each in its own lane (Meter_Settle)
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
-        float y0 = base + (rows - 1 - i) * (ch + gap), y1 = y0 + ch;
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float y0 = base + i * (ch + gap), y1 = y0 + ch;
         float dim = r->dim ? 0.5f : 1.f;
 
         // empty frames
@@ -8980,7 +9211,10 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 continue;
             float a = r->alpha[k] / 255.f * dim;
             GXColor col = Tone_Color(r, r->tone[k]);
-            float cx0 = gx + k * pitch, cx1 = cx0 + cw;
+            float at = Note_At(r, k, len);
+            if (at > len - 0.5f)
+                continue; // still off the far end
+            float cx0 = gx + at * pitch, cx1 = cx0 + cw;
             switch (kind)
             {
             case CELL_PRESS:
@@ -9008,11 +9242,12 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_galint, a));
                 break;
             }
-            if (r->glyph[k] && i == 0)
+            if (r->glyph[k])
                 Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, 0.36f * scale, Color_Fill(color_white, 0.95f * dim));
         }
     }
 
+    vis_k = base_k * plate_k;
     // the gate: two posts, lit while a press is due
     float gy0 = base - 0.3f * scale, gy1 = top + 0.3f * scale;
     float gcx = gx + cw / 2, gcy = (base + top) / 2;
@@ -9056,8 +9291,9 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
-        if (r->dim)
+        if (r->dim || r->gap)
             continue;
+        vis_k = base_k * r->fade;
         for (int g = 0; g < 4; g++)
         {
             if (r->ghost[g] < 0)
@@ -9096,12 +9332,16 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         }
     }
 
+    vis_k = base_k;
     if (!labels)
         return;
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
-        float y0 = base + (rows - 1 - i) * (ch + gap);
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float y0 = base + i * (ch + gap);
         float ty = y0 + ch / 2 - 1.25f;
         GXColor tc = Color_Mix(r->color, color_white, 0.35f);
         if (r->dim)
@@ -9116,6 +9356,7 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
             Hud_Text(r->info, ix, ty, 0.42f, (GXColor){220, 220, 220, 255});
         }
     }
+    vis_k = base_k;
 }
 
 // Near Falcon: the meter is pinned to one spot on the screen when it shows
@@ -9207,14 +9448,21 @@ static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
 
 static int Strip_Glyphs(void)
 {
-    if (meter_rows == 0)
-        return 0;
-    for (int k = 0; k < meter[0].len && k < HW_ROWS; k++)
-    {
-        if (meter[0].glyph[k])
-            return 1;
-    }
+    for (int i = 0; i < meter_rows; i++)
+        for (int k = 0; k < meter[i].len && k < HW_ROWS; k++)
+            if (meter[i].glyph[k])
+                return 1;
     return 0;
+}
+
+// The fade the strip's plate takes: its brightest row's.
+static float Strip_PlateK(void)
+{
+    float k = 0;
+    for (int i = 0; i < meter_rows; i++)
+        if (!meter[i].gap && meter[i].fade > k)
+            k = meter[i].fade;
+    return k;
 }
 
 // Where the highway or the dial is: its left, bottom, width and height.
@@ -9398,16 +9646,22 @@ static void Meter_Above(FighterData *fp)
     Meter_Draw(pin_x, pin_y, 1.f, len, 0);
 }
 
-// A row's label centered at cx, its line's middle at y.
-static void Strip_Label(MeterRow *r, float cx, float y)
+// A row's label centered at cx, its line's middle at y, made smaller to fit
+// in room (so a long one can't run into its neighbor's).
+static void Strip_Label(MeterRow *r, float cx, float y, float room)
 {
     GXColor tc = Color_Mix(r->color, color_white, 0.35f);
     if (r->dim)
         tc = Color_Fill(tc, 0.6f);
     tc.a = 255;
-    float w = Text_Width(r->label, 0.42f);
+    float size = 0.42f, w = Text_Width(r->label, size);
+    if (w > room)
+    {
+        size *= room / w;
+        w = room;
+    }
     Text_Plate(cx - w / 2 - 0.2f, cx + w / 2 + 0.2f, y - 1.25f);
-    Hud_Text(r->label, cx - w / 2, y - 1.25f, 0.42f, tc);
+    Hud_Text(r->label, cx - w / 2, y - 1.25f + (0.42f - size) * 2.f, size, tc);
 }
 
 // The dial's wedge, ring and hand are measured in degrees clockwise from
@@ -9522,9 +9776,9 @@ static void Strip_Ending(MeterRow *r, float cx, float cy, float hw, float hh, fl
 
 // One lane of the highway: its cells as notes, a cell a frame up from the
 // hit line.
-static void Hw_Lane(MeterRow *r, int i, float lx, float line_y)
+static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
 {
-    float rx = lx + HW_LANE, in = 0.15f;
+    float rx = lx + HW_LANE, in = 0.15f, top = line_y + HW_ROWS * HW_PITCH;
     float dim = r->dim ? 0.5f : 1.f;
     int len = r->len < HW_ROWS ? r->len : HW_ROWS;
 
@@ -9543,7 +9797,15 @@ static void Hw_Lane(MeterRow *r, int i, float lx, float line_y)
         }
         float a = al / 255.f * dim;
         GXColor col = Tone_Color(r, tone);
-        float y0 = line_y + k * HW_PITCH + 0.04f, y1 = line_y + (j + 1) * HW_PITCH - 0.04f;
+        float y0 = line_y + Note_At(r, k, HW_ROWS) * HW_PITCH + 0.04f;
+        float y1 = line_y + (Note_At(r, j, HW_ROWS) + 1.f) * HW_PITCH - 0.04f;
+        if (y0 >= top - 0.1f)
+        {
+            k = j;
+            continue; // still off the far end
+        }
+        if (y1 > top)
+            y1 = top;
         float yc = (y0 + y1) / 2, mid = (lx + rx) / 2;
         switch (kind)
         {
@@ -9571,12 +9833,11 @@ static void Hw_Lane(MeterRow *r, int i, float lx, float line_y)
         }
         k = j;
     }
-    if (i != 0)
-        return;
     for (int k = 0; k < len; k++)
     {
-        if (r->glyph[k])
-            Glyph_Draw(r->glyph[k], lx - 0.8f, line_y + (k + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim));
+        float at = Note_At(r, k, HW_ROWS);
+        if (r->glyph[k] && at < HW_ROWS - 0.5f)
+            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim));
     }
 }
 
@@ -9589,24 +9850,34 @@ static void Highway_Draw(FighterData *fp)
     int rows = meter_rows;
     float x0, y0, w, h;
     Strip_Place(fp, STRIP_HIGHWAY, &x0, &y0, &w, &h);
-    float lane0 = x0 + STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0);
+    // lanes count from the screen's edge (the glyphs' column by it), so a
+    // lane added on the far side moves none of the others
+    int right = x0 > 0;
+    float glyph = Strip_Glyphs() ? HW_GLYPH : 0;
+    float glyph_x = right ? x0 + w - STRIP_PAD - glyph / 2 : x0 + STRIP_PAD + glyph / 2;
+    float lanes_l = x0 + STRIP_PAD + (right ? 0 : glyph), lanes_r = x0 + w - STRIP_PAD - (right ? glyph : 0);
     float line_y = y0 + HW_LABEL;
-    float lanes_r = lane0 + rows * HW_LANE + (rows - 1) * HW_LANE_GAP;
+    float base_k = vis_k;
 
+    vis_k = base_k * Strip_PlateK();
     Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Fill(color_plate, 0.72f));
     for (int k = 1; k <= HW_ROWS; k++)
     {
         int five = k % 5 == 0;
         float y = line_y + k * HW_PITCH, e = five ? 0.1f : 0.05f;
-        Hud_Rect(lane0 - 0.1f, y - e, lanes_r + 0.1f, y + e, Color_Over(color_white, five ? 0.3f : 0.12f));
+        Hud_Rect(lanes_l - 0.1f, y - e, lanes_r + 0.1f, y + e, Color_Over(color_white, five ? 0.3f : 0.12f));
     }
 
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
-        float lx = lane0 + i * (HW_LANE + HW_LANE_GAP), rx = lx + HW_LANE;
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float lx = right ? lanes_r - (i + 1) * HW_LANE - i * HW_LANE_GAP : lanes_l + i * (HW_LANE + HW_LANE_GAP);
+        float rx = lx + HW_LANE;
         Hud_Rect(lx, line_y, rx, line_y + HW_ROWS * HW_PITCH, Color_Over(color_white, 0.05f));
-        Hw_Lane(r, i, lx, line_y);
+        Hw_Lane(r, glyph_x, lx, line_y);
 
         int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
         if (hot > 0)
@@ -9622,8 +9893,9 @@ static void Highway_Draw(FighterData *fp)
 
         if (!r->dim)
             Strip_Ending(r, (lx + rx) / 2, line_y + HW_PITCH / 2, HW_LANE / 2, HW_PITCH / 2, 1.f, 0);
-        Strip_Label(r, (lx + rx) / 2, y0 + 0.75f);
+        Strip_Label(r, (lx + rx) / 2, y0 + 0.75f, HW_LANE + HW_LANE_GAP - 0.5f);
     }
+    vis_k = base_k;
 }
 
 static int Dial_Target(int kind)
@@ -9708,13 +9980,20 @@ static void Dial_Draw(FighterData *fp)
 {
     float x0, y0, w, h;
     Strip_Place(fp, STRIP_DIAL, &x0, &y0, &w, &h);
+    int right = x0 > 0; // counted from the screen's edge, like the highway's lanes
+    float base_k = vis_k;
     for (int i = 0; i < meter_rows; i++)
     {
         MeterRow *r = &meter[i];
-        float cx = x0 + STRIP_PAD + DL_R + 0.35f + i * DL_CELL, cy = y0 + DL_LABEL + DL_R + 0.45f;
+        if (r->gap)
+            continue;
+        vis_k = base_k * r->fade;
+        float off = STRIP_PAD + DL_R + 0.35f + i * DL_CELL;
+        float cx = right ? x0 + w - off : x0 + off, cy = y0 + DL_LABEL + DL_R + 0.45f;
         Dial_One(r, cx, cy);
-        Strip_Label(r, cx, y0 + 0.75f);
+        Strip_Label(r, cx, y0 + 0.75f, DL_CELL - 0.5f);
     }
+    vis_k = base_k;
 }
 
 // The fixed strip: bottom left, or bottom right when the controller display
@@ -12307,6 +12586,7 @@ static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
 // the window opens. Either is only an outline in the cue's color, never a
 // fill, so it can't be taken for a press.
 #define PADCUE_LEAD 20 // frames ahead it shows
+static void Pad_CueAt(int in, GXColor col, int ahead, int open);
 static void Pad_CueOne(int in, int kind)
 {
     Cue *c = &cue_live[kind];
@@ -12315,17 +12595,22 @@ static void Pad_CueOne(int in, int kind)
                  kind, pin_spot[in].r, c->phase, c->dim, c->held, c->left);
     if (!pin_spot[in].r || !c->phase || c->dim || c->held)
         return;
-    float x = pin_spot[in].x, y = pin_spot[in].y, r = pin_spot[in].r;
     int open = c->phase == PH_WINDOW;
-    int ahead = open ? 0 : c->left - 1;
-    if (ahead > PADCUE_LEAD)
+    vis_k = Kind_K(VG_TIMERS, kind);
+    Pad_CueAt(in, Cue_Color(kind), open ? 0 : c->left - 1, open);
+}
+
+// The cue itself, on input in, ahead frames before its window (0 and open
+// while it's open).
+static void Pad_CueAt(int in, GXColor col, int ahead, int open)
+{
+    if (!pin_spot[in].r || ahead > PADCUE_LEAD || ahead < 0)
         return;
+    float x = pin_spot[in].x, y = pin_spot[in].y, r = pin_spot[in].r;
     float t = open ? 0 : (float)ahead / PADCUE_LEAD; // 1 far, 0 at the window
     if (cue_log)
-        OSReport("LLPADCUE %d pin %d kind %d ahead %d open %d at %.2f %.2f r %.2f\n", event_vars->game_timer, in, kind, ahead,
-                 open, x, y, r);
-    GXColor col = Cue_Color(kind);
-    vis_k = Kind_K(VG_TIMERS, kind);
+        OSReport("LLPADCUE %d pin %d ahead %d open %d at %.2f %.2f r %.2f\n", event_vars->game_timer, in, ahead, open, x, y,
+                 r);
     float w = open ? 0.16f : 0.09f;
     if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_RING)
     {
@@ -12350,9 +12635,18 @@ static void Pad_CueOne(int in, int kind)
 
 static void Pad_Cues(void)
 {
-    if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_OFF || route_rows_active)
+    // a ledge route has its own steps; a jump's route (Jump Timing) cues
+    // the jump buttons as well as the AI and waveland ones
+    if (Options_Hud[HOPT_PAD_CUES].val == PADCUE_OFF || (route_rows_active && !jump_rows_active))
         return;
     float k = vis_k;
+    int jump = Jump_PressAhead();
+    if (jump >= 0)
+    {
+        vis_k = Group_K(VG_TIMERS);
+        Pad_CueAt(PIN_X, color_in_jump, jump, jump == 0);
+        Pad_CueAt(PIN_Y, color_in_jump, jump, jump == 0);
+    }
     if (Cues_Ai())
         Pad_CueOne(PIN_A, CUE_AI);
     if (Cues_Waveland())
@@ -15236,6 +15530,21 @@ static int Jump_Showing(void)
     return jt_active && jt_have && Options_Jump[JOPT_SHOW].val && !route_active && hang_ledge < 0;
 }
 
+// Frames to the shown route's next jump press (0: this frame), or -1.
+static int Jump_PressAhead(void)
+{
+    if (!Jump_Showing())
+        return -1;
+    JumpRoute *r = &jt_route;
+    int e = Jump_E();
+    if (r->hop && r->hp - e - 1 >= 0)
+        return r->hp - e - 1;
+    if (r->hop && r->hj < 0)
+        return -1;
+    int u = r->dj - e - 1;
+    return u >= 0 ? u : -1;
+}
+
 // Stick changes a jump asks for: to the jump's stick, and from it to rest
 // (or to its x alone, which is no change for a stick that has no y).
 static int Jump_Changes(int stick, int hold)
@@ -16160,10 +16469,12 @@ static void Meter_AddJump(void)
             sprintf(row->info, "now");
     }
     route_rows_active = 1;
+    jump_rows_active = 1;
 
     row = Meter_Add(land_kind_colors[r->kind], r->kind == LAND_AI ? "AI" : "NIL");
     if (!row)
         return;
+    row->fade = Fade_Factor(VG_TIMERS, r->kind == LAND_AI ? CUE_AI : CUE_NIL); // as the AI or NIL timer's own
     Row_Jump(row, r, e);
 }
 
@@ -16975,6 +17286,10 @@ static void Ledge_Think(FighterData *fp, int sid)
                 }
                 route_landed = e;
                 route_act = sid == ASID_WAIT ? e : e + (int)fp->attr.normal_landing_lag;
+                // the GALINT it will have at the first frame he can act, up
+                // as soon as he touches down
+                sprintf(text_last, "Ledge %s  %d GALINT", route_act == route_landed ? "NIL" : "AI",
+                        intang - (route_act - e));
             }
             else if (fp->phys.pos.Y < ledges[route_ledge].y - 40.f)
             {
@@ -17824,13 +18139,11 @@ static void Event_ThinkFrame(GOBJ *event)
     else if (!fp->flags.hitlag)
         frame_in_state++;
     {
-        const char *name = ts >= 0                     ? tracked_state_names[ts]
-                           : sid == ASID_KNEEBEND      ? "Jumpsquat"
-                           : sid == ASID_CLIFFWAIT     ? "Ledge"
-                           : sid == ASID_LANDING       ? "Landing"
-                           : sid == ASID_WAIT          ? "Standing"
-                                                       : "State";
-        sprintf(text_frame, "%s frame %d", name, frame_in_state + 1);
+        const char *name = ts >= 0 ? tracked_state_names[ts] : State_Name(sid);
+        if (name)
+            sprintf(text_frame, "%s frame %d", name, frame_in_state + 1);
+        else
+            sprintf(text_frame, "State %d frame %d", sid, frame_in_state + 1);
     }
 
     int tracked_air = ts >= 0 && airborne && !disturbed;

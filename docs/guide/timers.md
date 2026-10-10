@@ -17,7 +17,7 @@ The Timers menu, in menu order.
 | Wide Cells | Off, On | On | Makes each frame cell of the cell timers a little wider. |
 | Landing Spot | Off, On | On | Brackets close in on the landing spot of an AI or NIL and meet it on the frame to press. |
 | Waveland | Off, Ticks, Rails, Chevrons | Ticks | Drawn at the slide. Ticks run in from its ends and spike where they meet, rails fill in, or chevrons hop in a notch a frame. They meet on the frame to airdodge. |
-| Wavedash | Off, Cells, Pips, Ring | Cells | Drawn out of the jumpsquat. A row in the strips, a pip a frame under Falcon's feet, or a ring on the floor that closes on the airdodge frame. |
+| Wavedash | Off, Cells, Pips, Ring | Cells | Drawn out of the jumpsquat. A row in the strips, a pip a frame under Falcon's feet, or a ring on the floor that closes on the airdodge frame. Works with Waveland Cues off. |
 | Note Travel | Fixed Speed, Catch Up | Fixed Speed | Applies to Cells and Highway. Fixed Speed: a frame is always the same distance, so a window found late shows up partway along. Catch Up: every window comes in from the far end and settles to that speed halfway in. |
 
 ## How to read it

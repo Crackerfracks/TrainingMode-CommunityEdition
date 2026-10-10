@@ -4702,6 +4702,7 @@ enum options_paths
     POPT_BODY,
     POPT_ROUTE,
     POPT_INPUTS,
+    POPT_WINDOWS,
     POPT_MARK_SIZE,
     POPT_TICKS,
     POPT_SLIDEOFF,
@@ -4741,6 +4742,15 @@ static EventOption Options_Paths[POPT_COUNT] = {
                  "due, and which aerials interrupt. White: stick.",
                  "Yellow: jump. Pink: aerial (C-stick directions",
                  "that work light up). Cyan: airdodge."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Window Bands",
+        .val = 1,
+        .desc = {"Shade the stretch of the path where a press works:",
+                 "cyan for a perfect waveland's airdodge, pink for",
+                 "an AI's aerial. Your feet are in it on those",
+                 "frames."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -4855,7 +4865,8 @@ static EventOption Options_Timers[TOPT_COUNT] = {
         .values = wd_timer_names,
         .desc = {"Out of the jumpsquat: a row in the strips, a pip",
                  "a frame under Falcon's feet, or a ring on the",
-                 "floor that closes on the airdodge frame."},
+                 "floor that closes on the airdodge frame. Works",
+                 "with the waveland cues off."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -6987,6 +6998,24 @@ static int Cues_Waveland(void)
     return Options_Cues[COPT_WL].val != 0;
 }
 
+// The waveland cue also counts down to a wavedash out of the jumpsquat,
+// which has its own switch, Timers > Wavedash, so it can be on with the
+// waveland cues off (Stephen, 0.8.4).
+static int Cues_Wd(void)
+{
+    return Options_Timers[TOPT_WD].val != WDT_OFF;
+}
+
+// Whether cue c, of this kind, is drawn at all.
+static int Cue_KindOn(int kind, Cue *c)
+{
+    if (kind == CUE_AI)
+        return Cues_Ai();
+    if (kind == CUE_NIL)
+        return Cues_Nil();
+    return c->wd ? Cues_Wd() : Cues_Waveland();
+}
+
 static int Cues_WavelandGround(void)
 {
     return Options_Cues[COPT_WL].val == 2;
@@ -7601,7 +7630,8 @@ static void Cue_Landed(FighterData *fp, int kind, int landing_air)
         hit = CUE_NIL;
     else if (kind == LAND_AI && !landing_air && Cues_Ai())
         hit = CUE_AI;
-    else if ((kind == LAND_PERFECT_WL || (kind == LAND_WAVELAND && wl->phase)) && Cues_Waveland())
+    else if ((kind == LAND_PERFECT_WL || (kind == LAND_WAVELAND && wl->phase)) &&
+             (Cues_Waveland() || (wl->phase && wl->wd && Cues_Wd())))
         hit = CUE_WL;
 
     for (int i = 0; i < CUE_NUM; i++)
@@ -8256,7 +8286,8 @@ static void Draw_Windows(Prediction *p)
             GXColor color = k >= p->uncertain_from ? color_learning : land_kind_colors[LAND_PERFECT_WL];
             if (index++ > 0)
                 color = Color_Dim(color);
-            Draw_Bar(p, k, e, color, 1.8f);
+            if (Options_Paths[POPT_WINDOWS].val)
+                Draw_Bar(p, k, e, color, 1.8f);
             k = e;
         }
     }
@@ -8276,7 +8307,8 @@ static void Draw_Windows(Prediction *p)
             GXColor color = k >= p->uncertain_from ? color_learning : land_kind_colors[LAND_AI];
             if (index++ > 0)
                 color = Color_Dim(color);
-            Draw_Bar(p, k, e, color, 1.f);
+            if (Options_Paths[POPT_WINDOWS].val)
+                Draw_Bar(p, k, e, color, 1.f);
             if (Options_Paths[POPT_INPUTS].val)
                 Compass_Queue(p->pos[k].X, p->pos[k].Y + p->bottom[k], mask, p->facing, color);
             k = e;
@@ -8892,6 +8924,8 @@ static void Meter_FromCue(int kind)
     int wd = kind == CUE_WL && (live ? c->wd : e->wd);
     if (wd && Options_Timers[TOPT_WD].val != WDT_CELLS)
         return; // drawn by Falcon's feet, or not at all
+    if (kind == CUE_WL && !wd && !Cues_Waveland())
+        return;
     MeterRow *r = Meter_Add(Cue_Color(kind), wd ? "WD" : cue_labels[kind]);
     if (!r)
         return;
@@ -8982,7 +9016,7 @@ static void Meter_Collect(void)
         return; // a ledge route has the meter to itself
     if (Cues_Ai())
         Meter_FromCue(CUE_AI);
-    if (Cues_Waveland())
+    if (Cues_Waveland() || Cues_Wd())
         Meter_FromCue(CUE_WL);
     if (Cues_Nil())
         Meter_FromCue(CUE_NIL);
@@ -10767,9 +10801,9 @@ typedef struct NearCue
     GXColor col;  // what its shapes are in: base, or slate or gray once a miss or skip is decided
 } NearCue;
 
-static int Near_Shown(int kind)
+static int Near_Shown(int kind, Cue *c)
 {
-    return kind == CUE_AI ? Cues_Ai() : kind == CUE_WL ? Cues_Waveland() : Cues_Nil();
+    return Cue_KindOn(kind, c);
 }
 
 static float Near_Clamp(float v, float lo, float hi)
@@ -11381,7 +11415,7 @@ static void Near_Draw(FighterData *fp, int look)
             for (int i = 0; i < CUE_NUM; i++)
             {
                 vis_k = base * Fade_Factor(VG_TIMERS, i);
-                if (Near_Shown(i))
+                if (Near_Shown(i, pass ? &cue_live[i] : &cue_end[i]))
                     Near_Bubble(i, pass ? &cue_live[i] : &cue_end[i]);
             }
         }
@@ -11397,7 +11431,7 @@ static void Near_Draw(FighterData *fp, int look)
     for (int i = 0; i < CUE_NUM; i++)
     {
         Cue *c = &cue_live[order[i]];
-        if (Near_Shown(order[i]) && Near_Cue(order[i], c, &n) && (kind < 0 || c->left < left))
+        if (Near_Shown(order[i], c) && Near_Cue(order[i], c, &n) && (kind < 0 || c->left < left))
         {
             kind = order[i];
             left = c->left;
@@ -11409,7 +11443,7 @@ static void Near_Draw(FighterData *fp, int look)
         for (int i = 0; i < CUE_NUM; i++)
         {
             Cue *e = &cue_end[order[i]];
-            if (Near_Shown(order[i]) && Near_Cue(order[i], e, &n) && (kind < 0 || e->age < age))
+            if (Near_Shown(order[i], e) && Near_Cue(order[i], e, &n) && (kind < 0 || e->age < age))
             {
                 kind = order[i];
                 age = e->age;
@@ -11448,7 +11482,7 @@ static void Near_Draw(FighterData *fp, int look)
 static void Wd_Draw(FighterData *fp)
 {
     int look = Options_Timers[TOPT_WD].val;
-    if ((look != WDT_PIPS && look != WDT_RING) || !Cues_Waveland())
+    if (look != WDT_PIPS && look != WDT_RING)
         return;
     float base = vis_k;
     vis_k = base * Fade_Factor(VG_TIMERS, CUE_WL);
@@ -11476,7 +11510,7 @@ static void Spot_Draw(FighterData *fp)
             Cue *c = pass ? &cue_live[i] : &cue_end[i];
             if (!c->phase)
                 continue;
-            if (i == CUE_AI ? !Cues_Ai() : i == CUE_WL ? !Cues_Waveland() : !Cues_Nil())
+            if (!Cue_KindOn(i, c))
                 continue;
             vis_k = base * Fade_Factor(VG_TIMERS, i);
             if (i == CUE_WL)
@@ -12724,7 +12758,7 @@ static void Pad_Cues(void)
     }
     if (Cues_Ai())
         Pad_CueOne(PIN_A, CUE_AI);
-    if (Cues_Waveland())
+    if (Cue_KindOn(CUE_WL, &cue_live[CUE_WL]))
     {
         Pad_CueOne(PIN_L, CUE_WL);
         Pad_CueOne(PIN_R, CUE_WL);
@@ -18900,7 +18934,7 @@ static void Event_ThinkFrame(GOBJ *event)
     // window is the frame before, as for any press; on the takeoff frame a
     // jump with no airdodge yet is a frame late
     squat_wd = 0;
-    if (Cues_Waveland() && !disturbed)
+    if (Cues_Wd() && !disturbed)
     {
         if (sid == ASID_KNEEBEND)
         {

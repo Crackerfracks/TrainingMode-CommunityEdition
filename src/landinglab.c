@@ -8955,7 +8955,11 @@ static void Meter_Settle(void)
     {
         taken[l] = -1;
         if (lanes[l].used && (now < lanes[l].seen || now - lanes[l].seen > MT_LINGER))
+        {
             lanes[l].used = 0; // gone long enough, or the clock went back (a save state)
+            if (cue_log)
+                OSReport("LLLANE %d %s lane %d gone\n", now, lanes[l].label, l);
+        }
     }
     // the lanes the rows already had, then the first free one for the rest
     for (int i = 0; i < n; i++)
@@ -8985,6 +8989,8 @@ static void Meter_Settle(void)
         memset(L, 0, sizeof(*L));
         strcpy(L->label, built[i].label);
         L->k_prev = -1;
+        if (cue_log)
+            OSReport("LLLANE %d %s lane %d new\n", now, L->label, best);
         at[i] = best;
         taken[best] = i;
     }

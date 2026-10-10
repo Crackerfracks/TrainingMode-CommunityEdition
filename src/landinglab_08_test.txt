@@ -248,28 +248,6 @@ air 0 40 right 0 0 0
 shot jump timing: JUMP row counting down, pink AI row under it, path up to the top platform, panel "DJ ... in Nf, aerial fN-N: AI"
 set Jump/Show = 0
 
-# Hop timing from the ground. Standing under the top platform, the search
-# tries short and full hops with a double jump on each of their frames:
-# expect an LLJUMP ground still line, an FH or SH row, a DJ row and an AI or
-# NIL row, and a path from Falcon. Then the full hop is done: the plan's
-# double jump carries into the air (an LLJUMP seed line). Then running
-# right: single hops only, which rarely land a rising AI on Battlefield.
-script Hop timing
-preset load Defaults
-set Jump/Show = 1
-start 0 0 right
-120
-shot standing under the top platform: FH or SH row, DJ row, AI or NIL row, path from Falcon to a platform
-5 X
-6
-shot after the hop: the JUMP row counting down to the same double jump, path from Falcon
-land 120
-start -60 0 right
-24 s:1,0
-shot running right: a hop spot ahead, or nothing
-16 s:1,0
-set Jump/Show = 0
-
 # The quick menu, by hand: Falcon stands still for a long while (the wait
 # stops while the menu has the game frozen) so the controller can open it:
 # R all the way and D-pad up, left and right to flip presets, down for the

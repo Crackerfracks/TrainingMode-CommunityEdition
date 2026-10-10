@@ -1,0 +1,84 @@
+# 0.8.4 checks with no menuing: build with LLSCRIPT=src/landinglab_084_test.txt
+# and start the event on Battlefield. Each "shot" freezes the game until
+# D-pad down.
+
+# Lanes keep their places. The highway with AI and NIL cues on, through the
+# rising nair AI onto the top platform (a double jump after 14 frames of
+# falling from 40 under it). LLLANE lines log each lane as it comes up and
+# goes: a lane's number never changes while it's up, and a row that goes
+# fades out over 8 frames before its lane is free.
+script Lanes
+preset load Defaults
+set Cues/NIL Cues = 1
+set Timers/Fixed Strip = 2
+set Jump/Show = 0
+air 0 40 right 0 0 0
+14
+1 X
+4
+shot highway: AI lane and NIL lane side by side, labels not touching
+2
+shot two frames on: the same lanes in the same places
+ai 0 A
+land 120
+set Cues/NIL Cues = 0
+set Timers/Fixed Strip = 1
+
+# Catch Up: the same jump with Note Travel on Catch Up. The AI note comes
+# up at the top of its lane on the first frame it shows, not partway down.
+script Catch up
+preset load Defaults
+set Timers/Fixed Strip = 2
+set Timers/Note Travel = 1
+set Jump/Show = 0
+air 0 40 right 0 0 0
+14
+1 X
+1
+shot catch up, first frame: the AI note at the top of its lane
+3
+shot catch up, three frames on: the note well down the lane
+ai 0 A
+land 120
+set Timers/Note Travel = 0
+set Timers/Fixed Strip = 1
+
+# Controller cues with Jump Timing on: a fall under the top platform shows a
+# jump route; the X and Y buttons get the jump's cue (gold) and A the AI's
+# once the double jump is done. Expect LLPADCUE lines for pins of X/Y.
+script Controller cues with jumps
+preset load Defaults
+set Jump/Show = 1
+set HUD/Controller Cues = 1
+air 0 40 right 0 0 0
+12
+shot fall with a jump route: a gold ring on X and Y
+land 120
+set HUD/Controller Cues = 0
+set Jump/Show = 0
+
+# A platform drop: standing on the left platform, the stick down at once
+# drops him through it (Pass). Jump Timing takes the drop as a fall: expect
+# LLJUMPA and LLJUMP lines while he's in the drop and after, and a JUMP row.
+script Platform drop
+preset load Defaults
+set Jump/Show = 1
+start -38 27.2 right
+20
+3 s:0,-1
+4
+shot platform drop: a jump route (JUMP row) while he drops
+land 120
+set Jump/Show = 0
+
+# The quick menu, by hand: Falcon stands a long while (the wait stops while
+# the menu has the game frozen). R all the way and D-pad up opens it; let go
+# of R and it stays; D-pad moves; it fades over its last 3 seconds of no
+# D-pad or trigger press; the stick plays out of it (the game goes on and it
+# fades over 2 seconds); a trigger press brings it back; R + A saves; B
+# closes; L+R with D-pad up hides everything.
+script Quick menu
+preset load Defaults
+start 0 0 right
+mark quick menu by hand now
+1800

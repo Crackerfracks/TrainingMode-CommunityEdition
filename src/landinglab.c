@@ -4955,9 +4955,9 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .val = 1,
         .value_num = countof(deck_idle_names),
         .values = deck_idle_names,
-        .desc = {"The quick menu closes after this long with no",
-                 "D-pad press, as well as when the trigger is let",
-                 "go."},
+        .desc = {"The quick menu stays up with the trigger let go,",
+                 "and fades out and closes after this long with no",
+                 "D-pad or trigger press. B closes it at once."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -4965,8 +4965,9 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .val = 1,
         .value_num = countof(deck_play_names),
         .values = deck_play_names,
-        .desc = {"The quick menu closes after this long of other",
-                 "buttons or the stick with no D-pad press."},
+        .desc = {"Moving the stick plays out of the quick menu:",
+                 "the game goes on and the menu fades out over this",
+                 "long. The D-pad or a trigger brings it back."},
     },
 };
 
@@ -13088,6 +13089,7 @@ static void Namer_Key(int r, int c, float *x0, float *y0, float *x1, float *y1)
 // The quick menu, Preset Deck (Deck_* below): up while L or R is held with
 // the game frozen.
 static u8 deck_on;
+static u8 deck_frozen; // ... and the game frozen under it (not while it plays out)
 static void Deck_Draw(void);
 static void Deck_Open(void);
 
@@ -13232,7 +13234,7 @@ static int Advance_CheckPause(void)
 {
     HSD_Update *update = stc_hsd_update;
     int paused = update->pause_kind & 1;
-    return paused != (Options_Game[GOPT_FRAME_ADV].val || assist_frozen || namer.on || deck_on);
+    return paused != (Options_Game[GOPT_FRAME_ADV].val || assist_frozen || namer.on || deck_frozen);
 }
 
 static int Advance_CheckStep(void)
@@ -13243,7 +13245,7 @@ static int Advance_CheckStep(void)
     HSD_Pad *engine = PadGetEngine(port);
     int button = adv_button_masks[Options_Game[GOPT_ADV_BUTTON].val];
 
-    if (namer.on || deck_on)
+    if (namer.on || deck_frozen)
         return 0; // the name grid or the quick menu has the buttons
     if (assist_advance)
     {
@@ -18519,9 +18521,11 @@ static struct
 {
     int row;       // -1: the cards; else the chosen card's setting
     int changed;   // a setting was changed here and not saved yet
-    int idle;      // frames with no D-pad
-    int play;      // ... of them with other buttons or the stick
+    int idle;      // frames with no D-pad or trigger press
+    int play;      // frames since the stick moved it into playing out (0: not)
     int demo;      // the still example is up
+    int trig_prev; // a trigger was in last frame
+    float alpha;   // its fade as a timer runs out
     Text *left, *right, *mid;
 } deck;
 #define DECK_TEXTS 24
@@ -18550,6 +18554,7 @@ static void Deck_Line(Text *t, int i, const char *text, float x, float y, float 
     Text_SetText(t, i, text);
     Text_SetScale(t, i, size, size);
     Text_SetPosition(t, i, x * 10.f, y * -10.f - 37.5f);
+    c.a = c.a * deck.alpha; // fading out as its timer runs down
     Text_SetColor(t, i, &c);
 }
 
@@ -18641,7 +18646,10 @@ static void Deck_Open(void)
     deck.left = Deck_Text(0);
     deck.right = Deck_Text(2);
     deck.mid = Deck_Text(1);
+    deck.trig_prev = 1;
+    deck.alpha = 1.f;
     deck_on = 1;
+    deck_frozen = 1;
     Deck_Demo(fp);
     OSReport("LLDECK open %d preset %d\n", event_vars->game_timer, Options_Presets[PROPT_PICK].val);
     SFX_PlayCommon(1);
@@ -18663,6 +18671,7 @@ static void Deck_Close(const char *why)
         Text_Destroy(deck.mid);
     deck.left = deck.right = deck.mid = 0;
     deck_on = 0;
+    deck_frozen = 0;
     OSReport("LLDECK close %d %s preset %d changed %d\n", event_vars->game_timer, why, Options_Presets[PROPT_PICK].val,
              deck.changed);
 }
@@ -18706,54 +18715,96 @@ static void Deck_Save(int which)
     SFX_PlayCommon(1);
 }
 
+// The quick menu stays up with the trigger let go. It closes after a while
+// with no D-pad or trigger press (Quick Menu Idle), fading out over the
+// last 3 seconds; the stick plays out of it: the game goes on at once and
+// it fades out over Quick Menu Play, unless the D-pad or a trigger brings
+// it back. B closes it. Saving wants a trigger in, so A, X and Y can't save
+// by chance.
+#define DECK_FADE 180
+static void Deck_Play(int on)
+{
+    if (on && deck.demo)
+    {
+        Cues_Clear(); // the example goes; the real cues take over
+        live_visible = 0;
+        deck.demo = 0;
+    }
+    deck.play = on;
+    deck_frozen = !on;
+    OSReport("LLDECK %s %d\n", on ? "play" : "back", event_vars->game_timer);
+}
+
 static void Deck_Think(void)
 {
     HSD_Pad *pad = PadGetMaster(Advance_Port());
     int down = pad->down, held = pad->held;
-    if (!(held & (HSD_TRIGGER_L | HSD_TRIGGER_R)))
-    {
-        Deck_Close("trigger let go");
-        return;
-    }
     int dpad = HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN | HSD_BUTTON_DPAD_LEFT | HSD_BUTTON_DPAD_RIGHT;
-    // both triggers with D-pad up or down: everything hidden, as outside
+    int trig = (held & (HSD_TRIGGER_L | HSD_TRIGGER_R)) || pad->ftriggerLeft > 0.3f || pad->ftriggerRight > 0.3f;
+    int trig_press = trig && !deck.trig_prev;
+    deck.trig_prev = trig;
+    // both triggers all the way with D-pad up or down: everything hidden, as outside
     if ((held & HSD_TRIGGER_L) && (held & HSD_TRIGGER_R) && (down & (HSD_BUTTON_DPAD_UP | HSD_BUTTON_DPAD_DOWN)))
     {
         Deck_Close("hide");
         Hide_Toggle();
         return;
     }
-    // saving, with the trigger that keeps the deck up
-    if (down & HSD_BUTTON_A)
+    if (down & HSD_BUTTON_B)
+    {
+        Deck_Close("B");
+        return;
+    }
+    // saving, with a trigger in
+    if (trig && (down & HSD_BUTTON_A))
     {
         Deck_Save(Options_Presets[PROPT_PICK].val);
-        deck.idle = deck.play = 0;
+        deck.idle = 0;
+        if (deck.play)
+            Deck_Play(0);
         return;
     }
-    if (down & (HSD_BUTTON_X | HSD_BUTTON_Y))
+    if (trig && (down & (HSD_BUTTON_X | HSD_BUTTON_Y)))
     {
         Deck_Save(-1);
-        deck.idle = deck.play = 0;
+        deck.idle = 0;
+        if (deck.play)
+            Deck_Play(0);
         return;
     }
-    int cmd = HSD_BUTTON_A | HSD_BUTTON_X | HSD_BUTTON_Y;
-    int other = (held & ~(dpad | cmd | HSD_TRIGGER_L | HSD_TRIGGER_R)) || fabs(pad->fstickX) > 0.3f ||
-                fabs(pad->fstickY) > 0.3f || fabs(pad->fsubstickX) > 0.3f || fabs(pad->fsubstickY) > 0.3f;
-    if (down & dpad)
-        deck.idle = deck.play = 0;
-    else
+    int stick = fabs(pad->fstickX) > 0.3f || fabs(pad->fstickY) > 0.3f || fabs(pad->fsubstickX) > 0.3f ||
+                fabs(pad->fsubstickY) > 0.3f;
+    if ((down & dpad) || trig_press)
     {
-        deck.idle++;
-        if (other)
-            deck.play++;
+        deck.idle = 0;
+        if (deck.play)
+            Deck_Play(0);
     }
+    else
+        deck.idle++;
+    if (stick && !deck.play && Options_Hud[HOPT_DECK_PLAY].val != 3)
+        Deck_Play(1);
+    else if (deck.play)
+        deck.play++;
+
     static const int idle_frames[] = {180, 300, 480, 0}, play_frames[] = {60, 120, 180, 0};
     int idle_max = idle_frames[Options_Hud[HOPT_DECK_IDLE].val], play_max = play_frames[Options_Hud[HOPT_DECK_PLAY].val];
-    if ((idle_max && deck.idle >= idle_max) || (play_max && deck.play >= play_max))
+    deck.alpha = 1.f;
+    if (idle_max && idle_max - deck.idle < DECK_FADE)
+        deck.alpha = (float)(idle_max - deck.idle) / DECK_FADE;
+    if (deck.play && play_max)
     {
-        Deck_Close(deck.play >= play_max && play_max ? "playing" : "idle");
+        float a = 1.f - (float)deck.play / play_max;
+        if (a < deck.alpha)
+            deck.alpha = a;
+    }
+    if ((idle_max && deck.idle >= idle_max) || (deck.play && play_max && deck.play >= play_max))
+    {
+        Deck_Close(deck.play ? "playing" : "idle");
         return;
     }
+    if (deck.play)
+        return;
     if (!(down & dpad))
         return;
 
@@ -18810,6 +18861,7 @@ static const char *Deck_Value(EventOption *o)
 
 static void Deck_Draw(void)
 {
+    vis_k = sqrtf(deck.alpha > 0.f ? deck.alpha : 0.f); // Vis takes alpha down by its square
     GXColor ink = {235, 235, 240, 255}, dim = {160, 166, 186, 255}, lit = land_kind_colors[LAND_AI];
     int pick = Options_Presets[PROPT_PICK].val;
     int n = Deck_Count();
@@ -18873,13 +18925,13 @@ static void Deck_Draw(void)
 
     float hy = DECK_TOP - DECK_CARD_H - 1.0f;
     // A writes over the chosen preset only when it's on the memory card
-    const char *save_hint = pick < PS_SAVED ? "A: save to this preset    X: save as a new one"
-                                            : "Built in:  A or X saves a new preset";
+    const char *save_hint = pick < PS_SAVED ? "L/R + A: save to this preset    L/R + X: save as a new one"
+                                            : "Built in:  L/R + A or X saves a new preset";
     if (deck.row < 0)
     {
-        char both[96];
+        char both[112];
         sprintf(both, "%s    Down: settings", save_hint);
-        const char *hint = deck.changed ? both : "Left/Right: preset    Down: change its settings";
+        const char *hint = deck.changed ? both : "Left/Right: preset    Down: its settings    B: close";
         float w = Text_Width(hint, 0.32f) / 2 + 0.6f;
         Hud_Rect(-w, hy - 2.0f, w, hy, Color_Over(color_plate, 0.85f));
         Deck_Line(deck.mid, mi++, hint, 0, hy - 2.2f, 0.32f, dim);
@@ -18932,6 +18984,7 @@ static void Deck_Draw(void)
         Deck_Line(deck.right, ri++, "", 0, 0, 0.1f, ink);
     while (mi < DECK_TEXTS)
         Deck_Line(deck.mid, mi++, "", 0, 0, 0.1f, ink);
+    vis_k = 1.f;
 }
 
 void Event_Update(void)
@@ -18949,7 +19002,7 @@ void Event_Update(void)
     if (toast_timer > 0)
         toast_timer--;
     Rumble_Update(Fighter_GetGObj(0)->userdata,
-                  Pause_CheckStatus(1) == 2 || Options_Game[GOPT_FRAME_ADV].val || assist_frozen || deck_on);
+                  Pause_CheckStatus(1) == 2 || Options_Game[GOPT_FRAME_ADV].val || assist_frozen || deck_frozen);
     // while a script runs, a line in the log every 5 seconds, frozen or not:
     // whoever watches the log tells a hang (no lines) from a shot waiting,
     // and which shot, should its own line have gone missing
@@ -18993,7 +19046,8 @@ void Event_Update(void)
         else
         {
             Deck_Think();
-            return;
+            if (deck_on)
+                return; // the menu has the buttons, frozen or playing out
         }
     }
     if (Pause_CheckStatus(1) == 2)

@@ -62,7 +62,7 @@ The ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596
 3. A pink strip of frame cells appears in the corner. When a solid cell reaches the gate, press A.
 4. Falcon lands on the top platform on the frame he pressed. That's an aerial interrupt.
 
-Miss it and nothing happens except the strip turning blue. Do it again. That's the whole event; everything else is about doing it in more places.
+Miss it and nothing happens except the strip turning slate blue. Do it again. That's the whole event; everything else is about doing it in more places.
 
 <!-- GIF to shoot: Yoshi's Story, short hop up to a side platform with an AI, at defaults -->
 

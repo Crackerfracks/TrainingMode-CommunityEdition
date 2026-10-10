@@ -6,6 +6,10 @@ Most of Melee's vocabulary is players naming things the developers never meant t
 
 <!-- GIF: Falcon double jumps toward a platform and lands on it by pressing nair while still rising, at default settings (an aerial interrupt) -->
 
+## Aerial
+
+An attack done in the air: neutral, forward, back, up or down air (nair, fair, bair, uair, dair).
+
 ## ECB
 
 The Environment Collision Box: the diamond Melee uses for a character's body when it checks for floors, walls and ceilings. Its shape changes with the animation, so its bottom is not where the feet are drawn. Landing Lab simulates it to predict landings.

@@ -4149,6 +4149,7 @@ enum options_jump
     JOPT_SHOW,
     JOPT_KIND,
     JOPT_TARGET,
+    JOPT_LEAD,
 #ifdef LL_GROUND_GUIDE
     JOPT_BANDS,
     JOPT_MARKS,
@@ -4176,6 +4177,13 @@ enum { HOP_OFF, HOP_SHORT, HOP_FULL, HOP_BOTH };
 
 static const char *jump_target_names[] = {"Any", "Top Platform", "Left Platform", "Right Platform", "Any Platform",
                                           "Main Floor"};
+
+// How far ahead a jump must be to be shown. Seeing a cue and reacting to it
+// takes about 12 to 15 frames on its own, so a jump found 3 frames before
+// it's due (as the search used to find most of them) can't be timed, only
+// chased (Stephen, 0.8.4). The search looks this far ahead instead.
+static const char *jump_lead_names[] = {"12 Frames", "16 Frames", "20 Frames", "24 Frames", "30 Frames"};
+static const u8 jump_leads[] = {12, 16, 20, 24, 30};
 
 static EventOption Options_Jump[JOPT_COUNT] = {
     {
@@ -4205,6 +4213,16 @@ static EventOption Options_Jump[JOPT_COUNT] = {
                  "that lets Falcon act soonest, wherever it is.",
                  "Top is the highest platform; left and right",
                  "are either side of the stage's middle."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Warning",
+        .val = 2,
+        .value_num = countof(jump_lead_names),
+        .values = jump_lead_names,
+        .desc = {"Only show a jump at least this far ahead, so",
+                 "there's time to see it coming. Jumps due sooner",
+                 "are left out: there's no time to react to them."},
     },
 #ifdef LL_GROUND_GUIDE
     {
@@ -8157,21 +8175,66 @@ static GXColor Color_Dim(GXColor c)
 
 // A thick stretch of the path over frames k to e, from half a frame before
 // the window to half a frame after it.
-static void Draw_Bar(Prediction *p, int k, int e, GXColor color, u8 size)
+// A window's stretch of the path as a ribbon half wide on each side, square
+// to the path everywhere. (A wide GX line only widens along x or y, picking
+// one by its slope, so a drifting path's window used to come out as an odd
+// slab that changed shape with the drift. Stephen, 0.8.4.)
+#define BAR_PTS 32
+static void Draw_Bar(Prediction *p, int k, int e, GXColor color, float half)
 {
+    float x[BAR_PTS], y[BAR_PTS], nx[BAR_PTS], ny[BAR_PTS];
+    if (e - k + 3 > BAR_PTS)
+        e = k + BAR_PTS - 3;
     int before = k - 1;
     int after = e < p->num ? e + 1 : e;
-    World_Start(e - k + 3, GX_LINESTRIP, size);
-    World_Vtx((p->pos[before].X + p->pos[k].X) / 2,
-               (p->pos[before].Y + p->bottom[before] + p->pos[k].Y + p->bottom[k]) / 2, 0, color);
+    int n = 0;
+    x[n] = (p->pos[before].X + p->pos[k].X) / 2;
+    y[n++] = (p->pos[before].Y + p->bottom[before] + p->pos[k].Y + p->bottom[k]) / 2;
     for (int i = k; i <= e; i++)
-        World_Vtx(p->pos[i].X, p->pos[i].Y + p->bottom[i], 0, color);
-    World_Vtx((p->pos[e].X + p->pos[after].X) / 2,
-               (p->pos[e].Y + p->bottom[e] + p->pos[after].Y + p->bottom[after]) / 2, 0, color);
+    {
+        x[n] = p->pos[i].X;
+        y[n++] = p->pos[i].Y + p->bottom[i];
+    }
+    x[n] = (p->pos[e].X + p->pos[after].X) / 2;
+    y[n++] = (p->pos[e].Y + p->bottom[e] + p->pos[after].Y + p->bottom[after]) / 2;
+
+    for (int i = 0; i < n; i++)
+    {
+        int a = i > 0 ? i - 1 : i, b = i < n - 1 ? i + 1 : i;
+        float tx = x[b] - x[a], ty = y[b] - y[a];
+        float len = sqrtf(tx * tx + ty * ty);
+        if (len < 0.05f)
+        {
+            // standing still (the top of a straight jump): across, as the
+            // last one was
+            nx[i] = i > 0 ? nx[i - 1] : half;
+            ny[i] = i > 0 ? ny[i - 1] : 0;
+            continue;
+        }
+        nx[i] = -ty / len * half;
+        ny[i] = tx / len * half;
+        // the same side as the last one, so the ribbon never twists where
+        // the path turns back (up, then down the same line)
+        if (i > 0 && nx[i] * nx[i - 1] + ny[i] * ny[i - 1] < 0)
+        {
+            nx[i] = -nx[i];
+            ny[i] = -ny[i];
+        }
+    }
+
+    World_Start((n - 1) * 4, GX_QUADS, 6);
+    for (int i = 0; i + 1 < n; i++)
+    {
+        World_Vtx(x[i] - nx[i], y[i] - ny[i], 0, color);
+        World_Vtx(x[i] + nx[i], y[i] + ny[i], 0, color);
+        World_Vtx(x[i + 1] + nx[i + 1], y[i + 1] + ny[i + 1], 0, color);
+        World_Vtx(x[i + 1] - nx[i + 1], y[i + 1] - ny[i + 1], 0, color);
+    }
 }
 
-// The windows on the path. A perfect waveland window is a wide ice-white
-// bar; an aerial interrupt window is a narrower pink bar drawn over it, with
+// The windows on the path, where the bottom of Falcon's ECB (about his
+// feet) is on the frames that work. A perfect waveland window is a wide cyan
+// ribbon; an aerial interrupt window is a narrower pink bar drawn over it, with
 // the aerials that work at its start. Where both work, the pink sits inside
 // the white. The next window of each kind is bright, later ones are dim.
 static void Draw_Windows(Prediction *p)
@@ -8193,7 +8256,7 @@ static void Draw_Windows(Prediction *p)
             GXColor color = k >= p->uncertain_from ? color_learning : land_kind_colors[LAND_PERFECT_WL];
             if (index++ > 0)
                 color = Color_Dim(color);
-            Draw_Bar(p, k, e, color, 108);
+            Draw_Bar(p, k, e, color, 1.8f);
             k = e;
         }
     }
@@ -8213,7 +8276,7 @@ static void Draw_Windows(Prediction *p)
             GXColor color = k >= p->uncertain_from ? color_learning : land_kind_colors[LAND_AI];
             if (index++ > 0)
                 color = Color_Dim(color);
-            Draw_Bar(p, k, e, color, 60);
+            Draw_Bar(p, k, e, color, 1.f);
             if (Options_Paths[POPT_INPUTS].val)
                 Compass_Queue(p->pos[k].X, p->pos[k].Y + p->bottom[k], mask, p->facing, color);
             k = e;
@@ -15395,18 +15458,19 @@ static void Meter_AddRoutes(void)
 // same game frames the simulation steps through: the jump after d frames of
 // fall is frame d + 1.
 
-#define JT_D 31             // frames to jump on: d = 0 to 30 frames of fall first
+#define JT_D 46             // frames to jump on: d = 0 to 45 frames of fall first
 #define JT_STICKS 5
 #define JT_CANDIDATES (JT_D * JT_STICKS * 2) // frame, stick, and then holding its x or not
 #define JT_SIM 80           // frames simulated after the jump
 #define JT_BEST 8           // routes kept per kind
 #define JT_BOTTOM 30.f      // how far under the lowest floor a fall is given up on
-#define JT_REANCHOR (JT_D - 5) // frames after which the anchor has too few jump frames left
+#define JT_REANCHOR (JT_D - 5) // from the ground: frames after which the anchor has too few jump frames left
 #define JT_STICK_TOL 0.05f  // how far the stick may move before the anchor's fall is wrong
 #define JT_DRIFT_TOL 0.05f  // ... and how far Falcon may be from the simulated fall
 #define JT_HOP_STILL 0.1f   // from the ground, a stick this near the middle is at rest
-#define JT_AHEAD 3          // the search starts this many frames ahead: it does about one frame's jumps per
-                            // frame, so starting at the next frame it would only ever find jumps due now
+// The search starts Jump_Lead() frames ahead (Warning): it does about one
+// frame's jumps per frame, so starting at the next frame it would only ever
+// find jumps due now.
 #define JT_BUDGET LR_BUDGET // simulated frames per game frame (the time limit LR_TIME_US holds it too)
 #define JT_TRY (1 + 5 * LR_WINDOWS)
 #define JT_PATH (JT_D + 1 + JT_SIM + 10) // + a jumpsquat from the ground
@@ -15492,6 +15556,18 @@ static u8 gt_still;           // ... standing still: every frame's hop is the sa
 
 // Frames since the anchor, as the routes count them: standing still, the
 // anchor is always now.
+static int Jump_Lead(void)
+{
+    return jump_leads[Options_Jump[JOPT_LEAD].val];
+}
+
+// In the air, the anchor is taken again once the search's horizon (Warning
+// frames ahead) nears its last jump frame.
+static int Jump_Reanchor(void)
+{
+    return JT_D - 2 - Jump_Lead();
+}
+
 static int Jump_E(void)
 {
     return jt_ground && gt_still ? 0 : event_vars->game_timer - jt_anchor;
@@ -16458,7 +16534,7 @@ static void Jump_Prune(int e)
 // The route r (its frames counted from anchor) among the ones found now
 // that are shown, or 0.
 #define JT_SWITCH 3
-#define JT_SETTLE 6
+#define JT_SETTLE 4 // ... in the first frames after it comes up (Warning frames ahead)
 static int jt_route_abs; // the anchor the shown route's frames count from
 static JumpRoute *Jump_Find(JumpRoute *r, int anchor)
 {
@@ -16777,7 +16853,7 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
         if (seed)
             Jump_Seed(fp, ts);
     }
-    else if (e >= JT_REANCHOR)
+    else if (e >= Jump_Reanchor())
         Jump_Extend(fp, ts, e);
     jt_prev_ts = ts;
     jt_prev_tilt = (u8)fp->input.timer_lstick_tilt_y;
@@ -16894,8 +16970,8 @@ static void Jump_Solve(FighterData *fp)
     int t0 = OSGetTick();
     while (jt_next < total && sim_steps - start < JT_BUDGET)
     {
-        if (!(jt_ground && gt_still) && jt_next < (e + JT_AHEAD) * JT_STICKS * 2)
-            jt_next = (e + JT_AHEAD) * JT_STICKS * 2;
+        if (!(jt_ground && gt_still) && jt_next < (e + Jump_Lead()) * JT_STICKS * 2)
+            jt_next = (e + Jump_Lead()) * JT_STICKS * 2;
         if (jt_next >= total)
             break;
         JumpCand c;
@@ -17000,11 +17076,11 @@ static void Jump_Publish(FighterData *fp)
     Jump_Prune(e);
     JumpRoute *b = Jump_Pick();
     // The one up stays up while the search goes on: another takes its place
-    // only when it acts JT_SWITCH frames sooner and the jump is still
-    // JT_SETTLE frames off, or when it no longer works. (Stephen, 0.8.3: the
+    // only when it acts JT_SWITCH frames sooner and came up no more than
+    // JT_SETTLE frames ago, or when it no longer works. (Stephen, 0.8.3: the
     // route changed every frame as the search found slightly better ones.)
     JumpRoute *cur = jt_have ? Jump_Find(&jt_route, jt_route_abs) : 0;
-    if (b && cur && b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= JT_SETTLE))
+    if (b && cur && b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))
         b = cur;
     jt_have = b != 0;
     if (jt_ground)
@@ -17025,6 +17101,32 @@ static void Jump_Publish(FighterData *fp)
     Jump_Text(&jt_route, e);
 }
 
+// A gate across a path on frame i: a short bar square to it, which the
+// bottom of Falcon's ECB (about his feet) passes through on that frame.
+// Falcon is the moving note and the gate the line: press as he crosses it.
+#define GATE_HALF 4.f
+static void Draw_Gate(Vec2 *pos, float *bottom, int num, int i, GXColor c)
+{
+    int a = i > 0 ? i - 1 : i, b = i < num - 1 ? i + 1 : i;
+    float tx = pos[b].X - pos[a].X, ty = pos[b].Y + bottom[b] - pos[a].Y - bottom[a];
+    float len = sqrtf(tx * tx + ty * ty);
+    if (len < 0.05f)
+    {
+        tx = 0;
+        ty = 1;
+        len = 1;
+    }
+    float gx = -ty / len * GATE_HALF, gy = tx / len * GATE_HALF;
+    float x = pos[i].X, y = pos[i].Y + bottom[i];
+    GXColor edge = Color_Fill(color_plate, 0.75f);
+    World_Start(2, GX_LINES, 54);
+    World_Vtx(x - gx * 1.08f, y - gy * 1.08f, 0, edge);
+    World_Vtx(x + gx * 1.08f, y + gy * 1.08f, 0, edge);
+    World_Start(2, GX_LINES, 30);
+    World_Vtx(x - gx, y - gy, 0, c);
+    World_Vtx(x + gx, y + gy, 0, c);
+}
+
 static void Draw_JumpPath(void)
 {
     if (!Jump_Showing() || !Options_Paths[POPT_ROUTE].val || jt_path_num < 2)
@@ -17040,6 +17142,13 @@ static void Draw_JumpPath(void)
     Draw_Path(jt_path, jt_path_bottom, from, jt_path_num - 1, c, 24);
     if (Options_Paths[POPT_TICKS].val != 2)
         Draw_Ticks(jt_path, jt_path_bottom, from, jt_path_num - 1, c, 9);
+
+    // a gate where Falcon is on the jump's frame, and one on the aerial's
+    JumpRoute *r = &jt_route;
+    if ((!r->hop || r->hj >= 0) && r->dj > from && r->dj < jt_path_num)
+        Draw_Gate(jt_path, jt_path_bottom, jt_path_num, r->dj, color_in_jump);
+    if (r->kind == LAND_AI && r->press > from && r->press < jt_path_num)
+        Draw_Gate(jt_path, jt_path_bottom, jt_path_num, r->press, color_in_aerial);
 }
 
 // The route's cells from the next frame on, e frames after the anchor: the

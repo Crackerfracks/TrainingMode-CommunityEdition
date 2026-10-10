@@ -59,7 +59,7 @@ The ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596
 
 1. Event Mode → **Character-specific Tech** → **Landing Lab** (the last event). Pick Captain Falcon and Battlefield.
 2. Run off the left platform and double jump toward the top one.
-3. A pink strip appears at the bottom of the screen. When its cell reaches the gate, press A.
+3. A pink strip of frame cells appears in the corner. When a solid cell reaches the gate, press A.
 4. Falcon lands on the top platform on the frame he pressed. That's an aerial interrupt.
 
 Miss it and nothing happens except the strip turning blue. Do it again. That's the whole event; everything else is about doing it in more places.
@@ -75,10 +75,10 @@ Landing Lab simulates where Falcon's ECB is headed and marks what's possible on 
 | [AI cues](docs/guide/cues.md) | A pink timer counting down to the frame an aerial lands you early | Yes |
 | [Waveland cues](docs/guide/cues.md) | A cyan timer for a perfect waveland onto the platform below | Yes |
 | [NIL cues](docs/guide/cues.md) | A green timer for a landing with no lag | No |
-| [Timers](docs/guide/timers.md) | A fixed strip at the screen's bottom; also a highway, a dial, or one next to Falcon | Strip |
+| [Timers](docs/guide/timers.md) | A strip of frame cells in a corner; also a highway, a dial, or one riding with Falcon | Cells |
 | [Spot timers](docs/guide/cues.md) | Brackets closing in on the landing spot itself | Yes |
 | [Paths](docs/guide/paths.md) | Where Falcon's ECB and body will go, with dots per frame and input markers | Markers and dots only |
-| [Controller](docs/guide/hud.md) | Your real stick and buttons, with a ring closing on the button to press | Yes |
+| [Controller](docs/guide/hud.md) | Your real stick and buttons beside your percent, optionally with a ring closing on the button to press | Yes, cues off |
 | [Jump Timing](docs/guide/jump-timing.md) | During a fall, when to double jump to set up an AI or NIL | No |
 | [Ledge routes](docs/guide/ledge.md) | From the ledge, every route back to stage that keeps GALINT | Yes |
 
@@ -116,10 +116,10 @@ Hold L or R all the way down and press D-pad up or down: the quick menu opens ov
 
 | Preset | For |
 | --- | --- |
-| Defaults | AIs and wavelands, a fixed timer strip, the controller. Where everyone should start. |
-| Minimal | Just the timer. For when you mostly have it and want the screen back. |
+| Defaults | AI and waveland cues, the timer strip, landing-spot brackets, the controller. Where everyone should start. |
+| Minimal | The AI cue and its strip, nothing else. For when you mostly have it and want the screen back. |
 | Everything | Every effect on. For screenshots and regret. |
-| Ledge Drill | Ledge routes and Assist, the rest out of the way. |
+| Ledge Drill | Ledge routes of both kinds, back to the same ledge after every try. |
 | Preset 1 to 4, User Custom | Yours, saved to the memory card. |
 
 <!-- GIF to shoot: quick menu open, change a card, play out with the stick -->
@@ -169,7 +169,7 @@ See [Jump Timing](docs/guide/jump-timing.md) for targets and limits.
 | D-pad right (hold) | Save Falcon's position |
 | D-pad left | Load it |
 | D-pad down | Frame Advance on/off |
-| Advance button (L by default) | One frame forward during Frame Advance; hold to step slowly |
+| Advance button (Z by default, set in Speed) | One frame forward during Frame Advance; hold to step slowly |
 | D-pad up, on a ledge | Next ledge route |
 
 The D-pad does nothing while a trigger is partway in, so shielding can't freeze the game by accident.
@@ -178,16 +178,16 @@ The D-pad does nothing while a trigger is partway in, so shielding can't freeze 
 
 | Menu | What's in it |
 | --- | --- |
-| [Presets](docs/guide/presets.md) | Pick, load and save presets |
-| [Cues](docs/guide/cues.md) | Which landings get cues, AI filter and aerial, glows, spot timers, rumble |
-| [Paths](docs/guide/paths.md) | Landing and body paths, markers, frame dots, slide-off, jump preview |
-| [Timers](docs/guide/timers.md) | Strip, highway, dial or near Falcon; Note Travel; the wavedash timer |
-| [HUD](docs/guide/hud.md) | Controller look and size, controller cues, info panel |
-| [Visibility](docs/guide/visibility.md) | Intensity, Intensity by Group, Auto Fade |
+| [Presets](docs/guide/presets.md) | Pick, load, save and name presets, and the one to start with |
+| [Cues](docs/guide/cues.md) | Which landings get cues, AI Filter and AI Aerial, body flash, platform glow, [Intensity and Auto Fade](docs/guide/visibility.md), rumble |
+| [Timers](docs/guide/timers.md) | Near Falcon, the fixed strip (Cells, Highway, Dial), landing spot, waveland and wavedash timers, Note Travel |
+| [Paths](docs/guide/paths.md) | Landing and body paths, ledge route, input markers, frame dots, slide-off, jump preview |
+| [HUD](docs/guide/hud.md) | Controller position, look, size and cues, shield drop zone, info panel, quick menu |
+| Sounds | The hit chime and which slips buzz |
 | [Ledge Practice](docs/guide/ledge.md) | Routes, Assist, Drop Drill, resets |
 | [Jump Timing](docs/guide/jump-timing.md) | When it shows and where it aims |
 | [Camera](docs/guide/camera.md) | Camera modes and named views per stage |
-| Sounds, Speed, Developer | Hit and miss sounds, game speed and Frame Advance, debug options |
+| Speed, Developer, Controls | Game speed and Frame Advance, debug options, a list of every button |
 
 ## FAQ
 
@@ -198,7 +198,7 @@ Only if you can get the pink path to show up in bracket. If you can, open an iss
 Crackerfracks plays Falcon. That was the whole meeting. Other characters are a data job for after 1.0.
 
 **Do falling AIs count?**
-Technically. A falling AI saves you about a frame, in situations so specific they'd need their own ruleset. Landing Lab hides any AI that doesn't save at least 4 frames, which is nearly every falling one.
+Technically. A falling AI saves you about a frame, in situations so specific they'd need their own ruleset. Landing Lab only shows AIs that land while Falcon is still rising and save 4 frames or more. Set the AI Filter to All if you collect useless things.
 
 **Does it work on console?**
 It's only been tested in Dolphin. If you try it on a console, tell us what happened.

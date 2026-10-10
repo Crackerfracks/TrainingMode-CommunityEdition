@@ -71,6 +71,27 @@ shot platform drop: a jump route (JUMP row) while he drops
 land 120
 set Jump/Show = 0
 
+# Ground guide (Takeoff Bands and Reach Marks): worked out once at the
+# start; expect "LLGUIDE heights 2: 27.2 54.4" and a "LLGUIDE done" line
+# within a few seconds. Standing under the right platform: pink strips under
+# the floor where a hop reaches an AI on a platform, and pink marks on the
+# platforms in reach. Then with NIL and Waveland cues too, then running.
+script Ground guide
+preset load Defaults
+set Jump/Takeoff Bands = 1
+set Jump/Reach Marks = 1
+start 34 0 right
+600
+shot ground guide, AI only: pink strips under the floor, pink marks on the platforms in reach
+set Cues/NIL Cues = 1
+4
+shot with NIL cues: teal strips and marks too
+set Cues/NIL Cues = 0
+start -60 0 right
+20 s:1,0
+shot running right: the strips have moved for the run speed
+16 s:1,0
+
 # The quick menu, by hand: Falcon stands a long while (the wait stops while
 # the menu has the game frozen). R all the way and D-pad up opens it; let go
 # of R and it stays; D-pad moves; it fades over its last 3 seconds of no

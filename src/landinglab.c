@@ -4149,6 +4149,8 @@ enum options_jump
     JOPT_SHOW,
     JOPT_KIND,
     JOPT_TARGET,
+    JOPT_BANDS,
+    JOPT_MARKS,
 
     JOPT_COUNT
 };
@@ -4201,6 +4203,23 @@ static EventOption Options_Jump[JOPT_COUNT] = {
                  "that lets Falcon act soonest, wherever it is.",
                  "Top is the highest platform; left and right",
                  "are either side of the stage's middle."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Takeoff Bands",
+        .val = 1,
+        .desc = {"On the ground: strips under the floor where a",
+                 "hop (and a double jump) can start and still land",
+                 "an AI, NIL or waveland on the platform above.",
+                 "Nearer strip short hop, farther full hop."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Reach Marks",
+        .val = 1,
+        .desc = {"On the ground: each platform lights the stretch a",
+                 "hop from here can land on, brighter where more",
+                 "timings work. Short hop nearer the surface."},
     },
 };
 
@@ -12893,6 +12912,7 @@ static void Draw_JumpPath(void);
 static int Jump_Showing(void);
 static void Markers_Draw(void);
 static void Compass_Draw(void);
+static void Guide_Draw(FighterData *fp);
 
 // Platform Glow: the floor a waveland or wavedash slides along lights up
 // in the stage, at Falcon's depth. A faint glow marks the slide while the
@@ -13058,6 +13078,8 @@ static void World_GX(GOBJ *gobj, int pass)
     Plat_Glow(fp);
     world_add = 0;
     world_on_top = 1;
+    Guide_Draw(fp); // sets each kind's own level
+    vis_k = Group_K(VG_LEDGE);
     vis_k = Group_K(VG_LEDGE);
     Draw_RoutePath();
     Draw_JumpPath();
@@ -15842,6 +15864,389 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
     *n_out = nr;
 }
 
+
+///////////////////////
+/// Ground guide    ///
+///////////////////////
+
+// Jump timing from the ground, worked out ahead of time (Stephen, 0.8.3
+// notes: takeoff bands plus reach marks). For each height a platform is over
+// a floor on this stage, each hop, and five run speeds, every way on (the
+// hop alone, or a double jump on each of its frames with each stick, its x
+// kept or let go) is simulated once, from a takeoff press at x 0 in a world
+// of just a floor and a platform at that height spanning everything. Where
+// on the platform each one's NIL, rising AIs (their window's frames) and
+// waveland windows (the hop alone) touch down is counted, by distance from
+// the press. A spot on the floor then counts the timings that land on a
+// platform's own stretch (Takeoff Bands), and a spot on the platform the
+// ones that land there from where Falcon is (Reach Marks). Nothing waits on
+// a search, and nothing picks one route: brightness is how many work.
+#define GD_HEIGHTS 4
+#define GD_SPEEDS 5 // facing right: run back, walk back, still, walk, run; mirrored facing left
+#define GD_HJ 24    // double jumps 1 to 24 frames after the takeoff
+#define GD_DX 80    // distances -80 to 80
+#define GD_BINS (2 * GD_DX + 1)
+#define GD_COMBOS 9 // the double jump's stick and hold: up; the other four let go or held
+#define GD_WAYS (2 + GD_HJ * GD_COMBOS) // the hop alone (stick kept or let go), then the double jumps
+#define GD_PER_HEIGHT (2 * GD_SPEEDS * GD_WAYS)
+#define GD_BUDGET 1500
+#define GD_TIME_US 1500
+typedef struct GuideTable
+{
+    u8 n[2][GD_SPEEDS][CUE_NUM][GD_BINS]; // [short 0 / full 1][speed][CUE_AI, CUE_WL, CUE_NIL][distance]
+} GuideTable;
+static GuideTable *gd_table; // [GD_HEIGHTS]
+static float gd_height[GD_HEIGHTS];
+static int gd_heights = -1; // -1: not looked at the stage yet
+static int gd_next, gd_done;
+
+static void Guide_Add(int h, int hop, int sp, int kind, float x, int count)
+{
+    int b = (int)(x + (x < 0 ? -0.5f : 0.5f)) + GD_DX;
+    if (b < 0 || b >= GD_BINS)
+        return;
+    u8 *c = &gd_table[h].n[hop][sp][kind][b];
+    *c = *c + count > 255 ? 255 : *c + count;
+}
+
+// The heights platforms stand over the floors under them.
+static void Guide_Heights(void)
+{
+    gd_heights = 0;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *p = &floor_cache[i];
+        if (!p->is_platform)
+            continue;
+        float py = (p->y0 + p->y1) * 0.5f;
+        for (int j = 0; j < floor_num; j++)
+        {
+            FloorLine *f = &floor_cache[j];
+            if (f->x1 < p->x0 - 40.f || f->x0 > p->x1 + 40.f)
+                continue;
+            float h = py - (f->y0 + f->y1) * 0.5f;
+            if (h < 8.f || h > 90.f)
+                continue;
+            int have = 0;
+            for (int k = 0; k < gd_heights; k++)
+                if (fabs(gd_height[k] - h) < 1.f)
+                    have = 1;
+            if (!have && gd_heights < GD_HEIGHTS)
+                gd_height[gd_heights++] = h;
+        }
+    }
+    OSReport("LLGUIDE heights %d: %.1f %.1f %.1f %.1f\n", gd_heights, gd_heights > 0 ? gd_height[0] : 0,
+             gd_heights > 1 ? gd_height[1] : 0, gd_heights > 2 ? gd_height[2] : 0, gd_heights > 3 ? gd_height[3] : 0);
+}
+
+static float Guide_Speed(FighterData *fp, int sp, float *stick)
+{
+    static const float stick_of[GD_SPEEDS] = {-1.f, -0.8f, 0.f, 0.8f, 1.f};
+    float run = fp->attr.dashrun_terminal_velocity, walk = fp->attr.walk_maximum_velocity;
+    float v[GD_SPEEDS] = {-run, -walk, 0, walk, run};
+    *stick = stick_of[sp];
+    return v[sp];
+}
+
+// One way on: index i of a height's GD_PER_HEIGHT.
+static void Guide_Try(FighterData *fp, int h, int i)
+{
+    int hop = i / (GD_SPEEDS * GD_WAYS);
+    int sp = (i / GD_WAYS) % GD_SPEEDS;
+    int way = i % GD_WAYS;
+    float H = gd_height[h], stick_x;
+    float v = Guide_Speed(fp, sp, &stick_x);
+
+    // the world: a floor at 0 and a platform at H, both all the way across
+    floor_num = 2;
+    floor_cache[0] = (FloorLine){-1000.f, 0, 1000.f, 0, 9000, 0};
+    floor_cache[1] = (FloorLine){-1000.f, H, 1000.f, H, 9001, 1};
+    ceil_num = 0;
+    wall_num[0] = wall_num[1] = 0;
+
+    float facing = fp->facing_direction;
+    fp->facing_direction = 1.f;
+    SimStart ps;
+    float slide[12];
+    Sim_GroundJumpAt(fp, hop == 0, 0, 0, v, stick_x, 1, &ps, slide);
+    int alone = way < 2;
+    if (alone)
+        ps.stick_x = way ? stick_x : 0;
+    else
+    {
+        int hj = 1 + (way - 2) / GD_COMBOS, combo = (way - 2) % GD_COMBOS;
+        int stick = combo == 0 ? JT_UP : 1 + (combo - 1) / 2, hold = combo > 0 && (combo - 1) % 2;
+        SimStart st = ps;
+        SimState s;
+        SimStep step;
+        st.stick_x = stick_x;
+        Sim_Init(&st, &s);
+        for (int k = 0; k < hj; k++)
+        {
+            Sim_Step(fp, &st, &s, -1, 0, &step);
+            if (step.landed || step.ceiling)
+            {
+                fp->facing_direction = facing;
+                return;
+            }
+        }
+        st.skip_line = -1;
+        st.stick_x = jt_stick_xy[stick][0];
+        st.stick_y = jt_stick_xy[stick][1];
+        Sim_DoubleJump(fp, &st, &s, &step);
+        if (step.landed || step.ceiling)
+        {
+            fp->facing_direction = facing;
+            return;
+        }
+        st.stick_x = hold ? jt_stick_xy[stick][0] : 0;
+        st.stick_y = 0;
+        Sim_ToStart(&s, &st, &ps);
+    }
+
+    // a double jump only for its rising AIs and NIL; the hop alone for the
+    // wavelands too, which need the falling frames
+    sim_limit = JT_SIM;
+    sim_bottom_y = -30.f;
+    sim_rising_only = !alone;
+    if (sim_rising_only)
+        sim_stop_vy = Fighter_GetSoftLandVelocity(fp) - 0.001f;
+    Predict(fp, &ps, pred_route, alone ? BR_ALL : BR_AI);
+    sim_rising_only = 0;
+    sim_stop_vy = -100000.f;
+    sim_limit = LL_SIM_FRAMES;
+    sim_bottom_y = -100000.f;
+    fp->facing_direction = facing;
+
+    Prediction *p = pred_route;
+    float half = H * 0.5f;
+    if (p->land_frame && p->land_kind == LAND_NIL && p->pos[p->land_frame].Y > half)
+        Guide_Add(h, hop, sp, CUE_NIL, p->pos[p->land_frame].X, 1);
+    if (alone && p->wl_first && p->wl_first <= p->num && p->pos[p->wl_first].Y > half)
+        Guide_Add(h, hop, sp, CUE_WL, p->pos[p->wl_first].X, p->wl_width);
+
+    int normal_lag = (int)fp->attr.normal_landing_lag;
+    int hold_done = p->land_frame ? p->land_frame + p->lag : 2 * LL_SIM_FRAMES;
+    int last = p->land_frame ? p->land_frame - 1 : p->num;
+    for (int a = 0; a < 5; a++)
+    {
+        u8 bit = AERIAL_BIT(Aerial_Order(a));
+        if (ai_only && !(ai_only & bit))
+            continue;
+        for (int k = 1; k <= last && k < p->uncertain_from; k++)
+        {
+            if (!(p->ai_mask[k] & ~p->ai_lag_mask[k] & bit))
+                continue;
+            int touch = k + Ai_Delay(p, k, Aerial_Order(a));
+            int w = 1;
+            while (k + w <= last && (p->ai_mask[k + w] & ~p->ai_lag_mask[k + w] & bit) &&
+                   k + w + Ai_Delay(p, k + w, Aerial_Order(a)) == touch)
+                w++;
+            int at = touch <= p->num ? touch : p->num;
+            int rising = !(touch <= p->num && p->pos[touch].Y <= p->pos[touch - 1].Y);
+            if (rising && hold_done - (touch + normal_lag) >= LL_AI_MIN_GAIN && p->pos[at].Y > half)
+                Guide_Add(h, hop, sp, CUE_AI, p->pos[at].X, w);
+            k += w - 1;
+        }
+    }
+}
+
+static void Guide_Solve(FighterData *fp)
+{
+    if (gd_done || !gd_table || !(Options_Jump[JOPT_BANDS].val || Options_Jump[JOPT_MARKS].val))
+        return;
+    Floor_BuildCache();
+    if (gd_heights < 0)
+        Guide_Heights();
+    int total = gd_heights * GD_PER_HEIGHT, start = sim_steps, t0 = OSGetTick();
+    while (gd_next < total && sim_steps - start < GD_BUDGET && OSTicksToMicroseconds(OSGetTick() - t0) < GD_TIME_US)
+    {
+        Guide_Try(fp, gd_next / GD_PER_HEIGHT, gd_next % GD_PER_HEIGHT);
+        gd_next++;
+    }
+    Floor_BuildCache(); // the stage's own again
+    if (gd_next >= total)
+    {
+        gd_done = 1;
+        OSReport("LLGUIDE done %d at %d\n", total, event_vars->game_timer);
+    }
+}
+
+// The count for a distance, facing either way (the table faces right).
+static int Guide_N(int h, int hop, int sp, int kind, int face, int dx)
+{
+    if (face < 0)
+    {
+        sp = GD_SPEEDS - 1 - sp;
+        dx = -dx;
+    }
+    dx += GD_DX;
+    return dx >= 0 && dx < GD_BINS ? gd_table[h].n[hop][sp][kind][dx] : 0;
+}
+
+// Falcon's speed bucket, as the table counts it facing his way.
+static int Guide_Bucket(FighterData *fp)
+{
+    float v = fp->phys.self_vel_ground.X * (fp->facing_direction < 0 ? -1.f : 1.f), stick;
+    int best = 2;
+    float bd = 100.f;
+    for (int sp = 0; sp < GD_SPEEDS; sp++)
+    {
+        float d = fabs(Guide_Speed(fp, sp, &stick) - v);
+        if (d < bd)
+        {
+            bd = d;
+            best = sp;
+        }
+    }
+    return best;
+}
+
+// A strip of cells along y from x0, one a unit wide, each cell's color's
+// alpha scaled by a[i] (0 skips it).
+static void Guide_Strip(float x0, int n, const float *a, float y0, float y1, GXColor c)
+{
+    int cells = 0;
+    for (int i = 0; i < n; i++)
+        cells += a[i] > 0.01f;
+    if (!cells)
+        return;
+    World_Start(cells * 4, GX_QUADS, 0);
+    for (int i = 0; i < n; i++)
+    {
+        if (a[i] <= 0.01f)
+            continue;
+        GXColor k = Color_Fill(c, a[i]);
+        float xa = x0 + i, xb = xa + 1.f;
+        World_Vtx(xa, y0, GLOW_Z, k);
+        World_Vtx(xb, y0, GLOW_Z, k);
+        World_Vtx(xb, y1, GLOW_Z, k);
+        World_Vtx(xa, y1, GLOW_Z, k);
+    }
+}
+
+static int Guide_Floor(float x)
+{
+    int i = (int)x;
+    return x < i ? i - 1 : i;
+}
+
+#define GD_CELLS 200
+static void Guide_Draw(FighterData *fp)
+{
+    int bands = Options_Jump[JOPT_BANDS].val, marks = Options_Jump[JOPT_MARKS].val;
+    if (!gd_table || gd_heights <= 0 || (!bands && !marks) ||
+        fp->phys.air_state != 0 || fp->state_id < ASID_WAIT || fp->state_id > ASID_RUNBRAKE || hang_ledge >= 0 || route_active)
+        return;
+    // the floor under him
+    FloorLine *S = 0;
+    for (int i = 0; i < floor_num; i++)
+        if (floor_cache[i].id == fp->coll_data.ground_index)
+            S = &floor_cache[i];
+    if (!S)
+        return;
+    float fx = fp->phys.pos.X, fy = fp->phys.pos.Y;
+    int face = fp->facing_direction < 0 ? -1 : 1, sp = Guide_Bucket(fp);
+    static const int kinds[CUE_NUM] = {CUE_AI, CUE_NIL, CUE_WL};
+    static float band[2][GD_CELLS];
+    int s0 = Guide_Floor(S->x0), sn = (int)(S->x1 - S->x0);
+    if (sn > GD_CELLS)
+        sn = GD_CELLS;
+    float k_was = vis_k;
+    int row = 0;
+    for (int ki = 0; ki < CUE_NUM; ki++)
+    {
+        int kind = kinds[ki];
+        if ((kind == CUE_AI && !Cues_Ai()) || (kind == CUE_NIL && !Cues_Nil()) || (kind == CUE_WL && !Cues_Waveland()))
+            continue;
+        memset(band, 0, sizeof(band));
+        float most = 0;
+        for (int pi = 0; pi < floor_num; pi++)
+        {
+            FloorLine *P = &floor_cache[pi];
+            if (!P->is_platform || P == S)
+                continue;
+            float H = (P->y0 + P->y1) * 0.5f - fy;
+            int h = -1;
+            for (int j = 0; j < gd_heights; j++)
+                if (fabs(gd_height[j] - H) < 3.f)
+                    h = j;
+            if (h < 0)
+                continue;
+            int p0 = Guide_Floor(P->x0) + 1, p1 = Guide_Floor(P->x1);
+            // A: a spot on the floor, the timings landing anywhere on the
+            // platform (a running sum over the distances, so each spot is
+            // one subtraction)
+            for (int hop = 0; hop < 2 && bands; hop++)
+            {
+                static int cum[GD_BINS + 1];
+                cum[0] = 0;
+                for (int b = 0; b < GD_BINS; b++)
+                    cum[b + 1] = cum[b] + Guide_N(h, hop, sp, kind, face, b - GD_DX);
+                for (int t = 0; t < sn; t++)
+                {
+                    int T = s0 + t;
+                    int lo = p0 - T + GD_DX, hi = p1 - T + GD_DX; // bins lo..hi
+                    if (lo < 0)
+                        lo = 0;
+                    if (hi > GD_BINS - 1)
+                        hi = GD_BINS - 1;
+                    if (hi < lo)
+                        continue;
+                    band[hop][t] += cum[hi + 1] - cum[lo];
+                    if (band[hop][t] > most)
+                        most = band[hop][t];
+                }
+            }
+            // C: a spot on the platform, the timings landing there from here
+            if (marks)
+            {
+                float m[2][GD_CELLS], mm = 0;
+                int n = p1 - p0 + 1;
+                if (n > GD_CELLS)
+                    n = GD_CELLS;
+                for (int hop = 0; hop < 2; hop++)
+                    for (int x = 0; x < n; x++)
+                    {
+                        m[hop][x] = Guide_N(h, hop, sp, kind, face, Guide_Floor(p0 + x - fx + 0.5f));
+                        if (m[hop][x] > mm)
+                            mm = m[hop][x];
+                    }
+                if (mm > 0)
+                {
+                    vis_k = Kind_K(VG_CUES, kind);
+                    GXColor c = Cue_Color(kind);
+                    float norm = mm < 6.f ? 6.f : mm;
+                    for (int hop = 0; hop < 2; hop++)
+                    {
+                        for (int x = 0; x < n; x++)
+                            m[hop][x] = m[hop][x] > 0 ? 0.3f + 0.7f * sqrtf(m[hop][x] / norm) : 0;
+                        // short hop nearer the surface, full hop above it,
+                        // each kind its own pair
+                        float y = (P->y0 + P->y1) * 0.5f + 0.15f + row * 1.6f + hop * 0.75f;
+                        Guide_Strip((float)p0, n, m[hop], y, y + 0.6f, c);
+                    }
+                }
+            }
+        }
+        if (bands && most > 0)
+        {
+            vis_k = Kind_K(VG_CUES, kind);
+            GXColor c = Cue_Color(kind);
+            float norm = most < 6.f ? 6.f : most;
+            for (int hop = 0; hop < 2; hop++)
+            {
+                for (int t = 0; t < sn; t++)
+                    band[hop][t] = band[hop][t] > 0 ? 0.25f + 0.75f * sqrtf(band[hop][t] / norm) : 0;
+                float y = fy - 0.4f - row * 1.8f - hop * 0.85f;
+                Guide_Strip((float)s0, sn, band[hop], y - 0.7f, y, c);
+            }
+        }
+        row++;
+    }
+    vis_k = k_was;
+}
+
 // The jumps still ahead, and the best of them of the kind Kind asks for.
 static void Jump_Prune(int e)
 {
@@ -18067,6 +18472,7 @@ void Event_Init(GOBJ *gobj)
     route_path_bottom = calloc(sizeof(float) * LR_PATH);
     jt_cache = calloc(sizeof(SimState) * JT_D);
     gt_steps = calloc(sizeof(GroundStep) * JT_D);
+    gd_table = calloc(sizeof(GuideTable) * GD_HEIGHTS);
     jt_path = calloc(sizeof(Vec2) * JT_PATH);
     jt_path_bottom = calloc(sizeof(float) * JT_PATH);
     slide_pos = calloc(sizeof(Vec2) * 2 * SLIDE_MAX);
@@ -18317,6 +18723,8 @@ static void Event_ThinkFrame(GOBJ *event)
     int t_solve = OSGetTick();
     Jump_Solve(fp);
     Jump_Publish(fp);
+    if (!jt_active || jt_done)
+        Guide_Solve(fp); // worked out once, in the frames the jump search leaves
     Ledge_Solve(fp, tracked_air ? LR_BUDGET_AIR : LR_BUDGET);
     float solve_ms = OSTicksToMicroseconds(OSGetTick() - t_solve) / 1000.f;
     if (solve_ms > perf_solve)

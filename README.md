@@ -5,7 +5,7 @@
 Jump at a platform, start a nair while you're still rising, and on the right frame Melee decides Captain Falcon has already landed. He skips the rest of his own jump and stands there, ready to act. **Landing Lab** shows you that frame before you get there. The game has worked this way since 2001 and has never mentioned it to anyone.
 
 <!-- GIF to reshoot at 0.8.4 defaults: Battlefield, run off the left platform, double jump, rising nair AI onto the top platform -->
-<p align="center"><img src="docs/media/hero-ai.gif" width="480" alt="Falcon double jumps toward Battlefield's top platform; a timer counts down to the nair and he lands on the frame it says"></p>
+<p align="center"><i>GIF coming soon.</i></p>
 
 This is an unofficial build of [Training Mode - Community Edition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition) (TM-CE) v1.4 with one new event. Everything else is TM-CE as it ships; its [README](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition#readme) covers the rest.
 
@@ -15,7 +15,7 @@ This is an unofficial build of [Training Mode - Community Edition](https://githu
 
 Welcome. Melee is a 25-year-old party game that a community refused to put down, so now it's a sport. Turn on one thing, go play, and skip every word below you don't recognize. You'll learn them the way everyone does: by getting hit with them.
 
-The two you'll see most: an **aerial interrupt (AI)** is starting an aerial right as you reach a platform, so the game counts you as landed and you skip the rest of the jump. A **NIL** (no-impact landing) is touching down with no landing lag at all.
+The two you'll see most: an **aerial interrupt (AI)** is starting an aerial (an attack in the air: nair, fair, bair, uair or dair) right as you reach a platform, so the game counts you as landed and you skip the rest of the jump. A **NIL** (no-impact landing) is touching down with no landing lag at all.
 
 <details>
 <summary>Ten more words, in one line each</summary>
@@ -62,7 +62,7 @@ The ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596
 3. A pink strip of frame cells appears in the corner. When a solid cell reaches the gate, press A.
 4. Falcon lands on the top platform on the frame he pressed. That's an aerial interrupt.
 
-Miss it and nothing happens except the strip turning slate blue. Do it again. That's the whole event; everything else is about doing it in more places.
+Miss it and the strip turns slate blue, the color of quiet disappointment. Do it again. That's the whole event; everything else is about doing it in more places.
 
 <!-- GIF to shoot: Yoshi's Story, short hop up to a side platform with an AI, at defaults -->
 
@@ -84,15 +84,15 @@ Landing Lab simulates where Falcon's ECB is headed and marks what's possible on 
 
 The landing path is where Falcon's ECB will touch down: the invisible diamond Melee uses instead of feet. It has never once been where you thought it was, and it has no plans to start.
 
-<!-- one GIF per effect at defaults, then collapsed comparisons; placeholders below use the 0.6.5 clips -->
+<!-- one GIF per effect at defaults, then collapsed comparisons; GIFs coming soon -->
 <table>
 <tr>
-<td width="50%" valign="top"><img src="docs/media/nil.gif" alt="A green path and closing brackets mark a NIL onto a platform"><br><b>NIL</b></td>
-<td width="50%" valign="top"><img src="docs/media/waveland.gif" alt="A cyan cue and converging ticks for a perfect waveland"><br><b>Perfect waveland</b></td>
+<td width="50%" valign="top"><i>GIF coming soon</i><br><b>NIL</b></td>
+<td width="50%" valign="top"><i>GIF coming soon</i><br><b>Perfect waveland</b></td>
 </tr>
 <tr>
-<td valign="top"><img src="docs/media/wavedash.gif" alt="The wavedash timer counting down to the airdodge out of jumpsquat"><br><b>Wavedash timer</b></td>
-<td valign="top"><img src="docs/media/controller.gif" alt="The controller display with stick trail and buttons"><br><b>Controller</b></td>
+<td valign="top"><i>GIF coming soon</i><br><b>Wavedash timer</b></td>
+<td valign="top"><i>GIF coming soon</i><br><b>Controller</b></td>
 </tr>
 </table>
 
@@ -107,7 +107,7 @@ Coming with the 0.8.4 captures. Each style is explained in [Timers](docs/guide/t
 <summary>Everything on at once</summary>
 
 <!-- Everything preset GIF -->
-For the record. Version 0.6.5 started like this, and a friend took one look at the GIFs and said "busy."
+Version 0.6.5 shipped like this by default. A friend looked at the GIFs and said "busy," which was generous.
 </details>
 
 ## Presets and the quick menu
@@ -140,8 +140,8 @@ Hang on a ledge and Landing Lab lists every route back to stage that keeps GALIN
 
 <table>
 <tr>
-<td width="50%" valign="top"><img src="docs/media/ledge-route.gif" alt="Falcon on the Battlefield ledge with a route line and input chips, then the route into a nair AI"><br><b>A route into a nair AI</b></td>
-<td width="50%" valign="top"><img src="docs/media/assist.gif" alt="Assist freezing the game on a route input until it's pressed"><br><b>Assist waiting on you</b></td>
+<td width="50%" valign="top"><i>GIF coming soon</i><br><b>A route into a nair AI</b></td>
+<td width="50%" valign="top"><i>GIF coming soon</i><br><b>Assist waiting on you</b></td>
 </tr>
 </table>
 
@@ -195,7 +195,7 @@ The D-pad does nothing while a trigger is partway in, so shielding can't freeze 
 Only if you can get the pink path to show up in bracket. If you can, open an issue. That's a much bigger bug than anything in here.
 
 **Why only Captain Falcon?**
-Crackerfracks plays Falcon. That was the whole meeting. Other characters are a data job for after 1.0.
+Crackerfracks plays Falcon and needed this more than anyone. That was the whole meeting. Other characters are a data job for after 1.0.
 
 **Do falling AIs count?**
 Technically. A falling AI saves you about a frame, in situations so specific they'd need their own ruleset. Landing Lab only shows AIs that land while Falcon is still rising and save 4 frames or more. Set the AI Filter to All if you collect useless things.
@@ -204,7 +204,7 @@ Technically. A falling AI saves you about a frame, in situations so specific the
 It's only been tested in Dolphin. If you try it on a console, tell us what happened.
 
 **The cue said I'd land an AI and I didn't.**
-Then one of us is wrong. Frame Advance will tell you which. Open an issue either way.
+Then one of us is wrong. Frame Advance will tell you which, and so far it has not always been you. Open an issue either way.
 
 ## Confessions
 
@@ -220,12 +220,12 @@ Things that went wrong on the way here, all true.
 - While testing 0.8.4, the AI pressed D-pad down every five seconds, which toggles Frame Advance. It froze its own game, then filed the freeze as a bug.
 - The jump arc preview is one of the oldest features in Landing Lab. Crackerfracks has turned it on zero times.
 - Designed by Crackerfracks, a Falcon **main**, who asked us not to use his replays as reference footage. Request granted.
-- Crackerfracks's playtest notes for 0.6.5 ran 3,206 words. This README is shorter, on purpose.
+- Crackerfracks's playtest notes for 0.6.5 ran 3,206 words. This README is shorter. Barely.
 </details>
 
 ## Known limits
 
-- Captain Falcon only. He isn't happy about sharing, but the others are coming.
+- Captain Falcon only, until after 1.0.
 - Tested in Dolphin, not on console.
 - Paths drawn gray rely on ECB frames the event hasn't seen yet; it learns them as you play.
 - Full list in [Troubleshooting and limits](docs/guide/troubleshooting.md).

@@ -16833,6 +16833,59 @@ static void Jump_Seed(FighterData *fp, int ts)
         OSReport("LLJUMP seed %d d %d stick %d found %d\n", event_vars->game_timer, c.d, c.stick, found_n);
 }
 
+// The stick moved or Falcon left the anchor's fall: anchor again here, but
+// first try the jumps already found once more from the new fall, so one that
+// still works stays up instead of vanishing for Warning frames while the
+// search catches up (Stephen, 0.8.5). Drift moves Falcon sideways; how high
+// he is on each frame doesn't change, so the jump usually still works.
+#define JT_CARRY 2 // jumps of each kind tried again, best first
+static int jt_carry_steps; // what that cost this frame, taken off the search's budget
+static void Jump_Carry(FighterData *fp, int ts, int e)
+{
+    int steps0 = sim_steps;
+    JumpCand keep[2 * JT_CARRY + 1];
+    int n = 0, now = event_vars->game_timer;
+    for (int k = -1; k < 2; k++)
+    {
+        for (int i = 0; i < (k < 0 ? 1 : jt_best_n[k]) && i < JT_CARRY; i++)
+        {
+            JumpRoute *r = k < 0 ? &jt_route : &jt_best[k][i];
+            if (k < 0 && !jt_have)
+                break;
+            if (r->hop)
+                continue;
+            // its frames count from its own anchor: the shown one's may be older
+            int d = r->d + (k < 0 ? jt_route_abs : jt_anchor) - now;
+            if (d < 0)
+                continue;
+            int dup = 0;
+            for (int j = 0; j < n; j++)
+                dup |= keep[j].d == d && keep[j].stick == r->stick && keep[j].hold == r->hold;
+            if (!dup)
+                keep[n++] = (JumpCand){d, r->stick, r->hold, 0, -1};
+        }
+    }
+    Jump_Anchor(fp, ts);
+    int found_n = 0, total = 0;
+    for (int j = 0; j < n; j++)
+    {
+        if (keep[j].d >= jt_cache_n)
+            continue;
+        JumpRoute found[JT_TRY];
+        Jump_Try(fp, &keep[j], found, &found_n, 0, 0, 0);
+        for (int i = 0; i < found_n; i++)
+        {
+            if (!Jump_OnTarget(&found[i]))
+                continue;
+            Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+            total++;
+        }
+    }
+    jt_carry_steps = sim_steps - steps0;
+    if (cue_log)
+        OSReport("LLJUMP carry %d e %d tried %d kept %d steps %d\n", now, e, n, total, jt_carry_steps);
+}
+
 // Each frame, before the search: is Falcon in a fall to search, and is the
 // anchor still right for it. It is taken again when he comes back to a fall
 // after leaving one, when the stick or his path leaves what it assumed, and
@@ -16883,7 +16936,10 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
                      jt_tries, dx, dy, ts, jt_prev_ts);
         }
         int seed = jt_ground || !jt_active;
-        Jump_Anchor(fp, ts);
+        if (!seed && e >= 0)
+            Jump_Carry(fp, ts, e);
+        else
+            Jump_Anchor(fp, ts);
         if (seed)
             Jump_Seed(fp, ts);
     }
@@ -17000,7 +17056,8 @@ static void Jump_Solve(FighterData *fp)
         return;
     int e = Jump_E();
     int total = Jump_Total();
-    int start = sim_steps;
+    int start = sim_steps - jt_carry_steps;
+    jt_carry_steps = 0;
     int t0 = OSGetTick();
     while (jt_next < total && sim_steps - start < JT_BUDGET)
     {

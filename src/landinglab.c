@@ -12743,6 +12743,8 @@ static void Pad_Draw(FighterData *fp)
 
 static void Panel_Line(float x, float y, int right, const char *text, int kind)
 {
+    if (!text[0] || (text[0] == '-' && !text[1]))
+        return; // nothing to say ("-"): no plate or square either
     float size = 0.45f;
     float w = 1.7f + Text_Width(text, size);
     float x0 = right ? x - w : x;

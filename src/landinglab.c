@@ -13591,6 +13591,7 @@ enum script_op_kind
     SOP_WL,
     SOP_AI,
     SOP_LAND,
+    SOP_FOLLOW, // count frames of doing what Jump Timing shows, on its frames
     SOP_SHOT,
     SOP_MARK,
     SOP_CMD, // count: which (SCMD_*), label: the rest of the line
@@ -13916,6 +13917,16 @@ static void Script_Parse(void)
             ok = n != 0;
             if (ok)
                 op->count = (int)Script_Number(&n);
+            inputs = 1;
+        }
+        else if (Script_Is(w, "follow"))
+        {
+            char *n = Script_Word(&rest);
+            op->kind = SOP_FOLLOW;
+            ok = n != 0;
+            if (ok)
+                op->count = (int)Script_Number(&n);
+            ok = ok && op->count > 0;
             inputs = 1;
         }
         else if (w[0] >= '0' && w[0] <= '9')
@@ -14717,6 +14728,8 @@ static int Script_WindowStart(ScriptOp *op, FighterData *fp, int *width)
     return -1;
 }
 
+static void Jump_Follow(ScriptInput *in);
+
 // Runs before the fighters read their controllers (the lab's Record_Think
 // slot), so the inputs count on this very frame.
 static void Script_Think(GOBJ *gobj)
@@ -14761,6 +14774,11 @@ static void Script_Think(GOBJ *gobj)
     {
     case SOP_INPUT:
         in = op->in;
+        done = --script_left <= 0;
+        break;
+    case SOP_FOLLOW:
+        in = op->in;
+        Jump_Follow(&in);
         done = --script_left <= 0;
         break;
     case SOP_LAND:
@@ -17571,6 +17589,64 @@ static float Jump_Facing(JumpRoute *r)
     if (r->hop && r->hj < 0)
         return face; // a hop keeps the facing it has on the ground
     return jt_stick_xy[r->stick][0] * face > -common_jump_back_stick ? face : -face;
+}
+
+// The test scripts' "follow": press what the shown route asks on its frames
+// (the hop, the double jump with its stick, the aerial), on top of the
+// step's own inputs, so LLJUMPEND and the landing show whether the route
+// works as shown. A route's frame k is game frame anchor + k.
+static int follow_fh_until = -1; // a full hop holds jump through the squat
+static int follow_hold_x = -1000; // after the hop or double jump: the stick's x kept (-1000: the step's own)
+static int follow_set_t;
+static void Jump_Follow(ScriptInput *in)
+{
+    int t = event_vars->game_timer;
+    FighterData *fp = Fighter_GetGObj(0)->userdata;
+    if (follow_fh_until >= t)
+        in->buttons |= HSD_BUTTON_X;
+    // back on the ground after it: the step's own stick again
+    if (follow_hold_x != -1000 && fp->phys.air_state == 0 && fp->state_id != ASID_KNEEBEND && t > follow_set_t + 1)
+        follow_hold_x = -1000;
+    if (follow_hold_x != -1000)
+        in->lx = follow_hold_x;
+    if (!Jump_Showing())
+        return;
+    JumpRoute *r = &jt_route;
+    int abs = jt_route_abs;
+    if ((r->hop == GT_SH || r->hop == GT_FH) && t == abs + r->hp)
+    {
+        in->buttons |= HSD_BUTTON_X;
+        follow_fh_until = r->hop == GT_FH ? t + 6 : -1;
+        if (!r->hold && r->hj < 0)
+            follow_hold_x = 0;
+        follow_set_t = t;
+        OSReport("LLFOLLOW %d hop %s\n", t, r->hop == GT_SH ? "SH" : "FH");
+    }
+    if ((!r->hop || r->hj >= 0) && t == abs + r->dj)
+    {
+        in->buttons |= HSD_BUTTON_X;
+        in->lx = (s8)(jt_stick_xy[r->stick][0] * 80.f);
+        in->ly = (s8)(jt_stick_xy[r->stick][1] * 80.f);
+        follow_hold_x = r->hold ? in->lx : 0;
+        follow_set_t = t;
+        OSReport("LLFOLLOW %d dj %s\n", t, jt_stick_names[r->stick]);
+    }
+    if (r->kind == LAND_AI && t == abs + r->press)
+    {
+        float face = Jump_Facing(r);
+        if (r->aerial == TS_AIRN)
+        {
+            in->buttons |= HSD_BUTTON_A;
+            in->lx = 0; // a neutral A
+            in->ly = 0;
+        }
+        else
+        {
+            in->cx = r->aerial == TS_AIRF ? (s8)(80 * face) : r->aerial == TS_AIRB ? (s8)(-80 * face) : 0;
+            in->cy = r->aerial == TS_AIRHI ? 80 : r->aerial == TS_AIRLW ? -80 : 0;
+        }
+        OSReport("LLFOLLOW %d aerial %s\n", t, tracked_state_names[r->aerial]);
+    }
 }
 
 // The search's one line in the log: the best jump found for an anchor,

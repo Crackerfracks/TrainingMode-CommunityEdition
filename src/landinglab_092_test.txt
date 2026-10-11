@@ -47,3 +47,37 @@ shot running left toward the inner edge: a note in the JUMP lane
 20 s:-1,0
 land 150
 set Jump/Show = 0
+
+# Following the routes: "follow" presses the hop, the double jump and the
+# aerial on the frames the shown route gives. Each should log LLFOLLOW
+# lines, LLJUMPEND JUMP hit 0 (not early or late), and a landing that is
+# the route's kind (AI or NIL).
+script Follow standing
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+120
+follow 80
+land 150
+set Jump/Show = 0
+
+script Follow running
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+120
+follow 55 s:1,0
+land 150
+set Jump/Show = 0
+
+script Follow run off inward
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start 50 27.2 left
+200
+follow 55 s:-1,0
+land 150
+set Jump/Show = 0

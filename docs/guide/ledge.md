@@ -23,6 +23,8 @@ The Ledge Practice menu, in menu order.
 | Reset Delay | Slow, Normal, Fast, Instant | Normal | How long the result stays on screen before starting over. |
 | Keep Ledge Invincibility | Off, On | Off | Keeps the full intangibility while hanging, so the routes do not shrink while you get ready. |
 | Drop Drill | Off, On | Off | Times letting go of the ledge. A DRP row counts down to the first frame you can. The stick has to rest on the hang's first frame, then go down or away. It is graded, with how many of your last 10 hit. |
+| 15 GALINT Demo | Press A | n/a | Falcon on Battlefield only. Plays a bair AI from a natural regrab on the right ledge that leaves 15 frames of ledge intangibility at the first dash. D-pad left plays it again. |
+| Practice 15 GALINT | Press A | n/a | Sets up the same regrab and freezes on its first hang. Z (or your Advance Button) steps a frame, D-pad down plays on, D-pad left sets it up again. |
 
 ## How routes are found and ordered
 
@@ -57,6 +59,19 @@ Assist freezes the game on each input of the route and waits for you. When you p
 ## Drop Drill
 
 Drop Drill drills the first possible ledge drop. A DRP row counts down to the first frame you can let go. Rest the stick on the first frame of the hang, then press down or away. Each try is graded, with how many of your last 10 hit.
+
+## The 15 GALINT reference
+
+Crackerfracks found this one by hand and has been insufferable about it since. From the frozen hang in Practice 15 GALINT, stepping a frame at a time:
+
+1. Hold right (away from the stage) for one frame.
+2. Hold left, press jump, one frame. Let go of jump.
+3. Keep holding left for three frames.
+4. Still holding left, C-stick right for the bair, one frame.
+5. Both sticks neutral for eight frames.
+6. Hold left for one frame. The dash comes out with 15 frames of intangibility left.
+
+While either one runs, Show Routes, Assist, auto Reset, Keep Ledge Invincibility and Drop Drill are switched off, and they come back after. Your cues stay as they are. Load presets after you've taken over and left the ledge, or the helpers can come back the way they were before.
 
 ## Resets
 

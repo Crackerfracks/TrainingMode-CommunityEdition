@@ -44,3 +44,6 @@ TM-CE/
 .direnv/
 .nix-bin/
 bin/*.orig
+
+# Local agent mailbox and advisory scope leases
+.agent-state/

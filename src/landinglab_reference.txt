@@ -1,0 +1,24 @@
+# Falcon / Battlefield, right ledge. No autorun on a playable disc.
+# Verified natural-regrab AI Bair family; Dash accepts with 15 intangibility.
+# Menu callbacks temporarily disable helpers and preserve the player's cues.
+script 15 GALINT Demo
+ledge right
+3
+1 s:0,-1
+1 X
+44
+1 s:1,0
+1 X s:-1,0
+3 s:-1,0
+1 s:-1,0 c:1,0
+8
+1 s:-1,0
+40
+
+script Practice 15 GALINT
+ledge right
+3
+1 s:0,-1
+1 X
+44
+shot First natural hang - take over

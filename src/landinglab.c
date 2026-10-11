@@ -3855,6 +3855,9 @@ void Event_Exit(GOBJ *menu);
 void Event_ClearLearned(GOBJ *menu);
 void Event_ChangeCollDisplay(GOBJ *menu, int value);
 void Event_ChangeScript(GOBJ *menu, int value);
+void Event_ReferenceDemo(GOBJ *menu);
+void Event_ReferencePractice(GOBJ *menu);
+static void Assist_Clear(void);
 void Event_ChangeCamera(GOBJ *menu, int value);
 void Event_ChangeView(GOBJ *menu, int value);
 void Event_SaveView(GOBJ *menu);
@@ -4027,6 +4030,8 @@ enum options_ledge
     LOPT_DELAY,
     LOPT_INV,
     LOPT_DROP,
+    LOPT_REFERENCE_DEMO,
+    LOPT_REFERENCE_PRACTICE,
 
     LOPT_COUNT
 };
@@ -4132,6 +4137,24 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
                  "down to the first frame you can. The stick has to",
                  "rest on the hang's first frame, then go down or",
                  "away. Graded, with how many of your last 10 hit."},
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "15 GALINT Demo",
+        .desc = {"Falcon on Battlefield: play the verified AI Bair",
+                 "route from a natural regrab, then dash with 15",
+                 "intangibility left. D-pad left plays it again.",
+                 "Your cues stay on; helpers return afterward."},
+        .OnSelect = Event_ReferenceDemo,
+    },
+    {
+        .kind = OPTKIND_FUNC,
+        .name = "Practice 15 GALINT",
+        .desc = {"Falcon on Battlefield: prepare a natural regrab",
+                 "and freeze on its first hang. Take over with",
+                 "D-pad down; Z steps (or your Advance Button).",
+                 "D-pad left prepares it again, even frozen."},
+        .OnSelect = Event_ReferencePractice,
     },
 };
 
@@ -5147,6 +5170,26 @@ static EventOption Options_Game[GOPT_COUNT] = {
     },
 };
 
+// Reference playback temporarily changes only these helpers. Preset capture
+// reads their saved values so closing the menu cannot save the overrides.
+static EventOption *reference_options[] = {
+    &Options_Ledge[LOPT_ASSIST], &Options_Ledge[LOPT_RESET],
+    &Options_Ledge[LOPT_INV], &Options_Ledge[LOPT_DROP],
+    &Options_Ledge[LOPT_ROUTES], &Options_Game[GOPT_FRAME_ADV],
+};
+static int reference_saved[countof(reference_options)];
+static int reference_mode; // 0 = none, 1 = demo, 2 = practice
+static const char *reference_names[] = {"15 GALINT Demo", "Practice 15 GALINT"};
+
+static int Reference_Preference(EventOption *o)
+{
+    if (reference_mode)
+        for (int i = 0; i < (int)countof(reference_options); i++)
+            if (o == reference_options[i])
+                return reference_saved[i];
+    return o->val;
+}
+
 static EventMenu Menu_Game = {
     .name = "Speed",
     .option_num = countof(Options_Game),
@@ -5517,7 +5560,7 @@ static void Preset_Capture(PresetSlot *s)
                 continue;
             PresetOpt *p = &s->opt[s->num++];
             p->key = Preset_Key(preset_menus[m].tag, o);
-            p->val = o->val;
+            p->val = Reference_Preference(o);
             p->pad = 0;
         }
     s->used = 1;
@@ -12974,8 +13017,9 @@ static void Panel_Draw(void)
 // exact mapping), and what the timers and the prediction hold. Logged from
 // the draw so the camera is the one this frame is rendered with.
 static int script_cur; // defined with the scripts below
-// test scripts log everything
-static int Log_Level(void) { return script_cur >= 0 ? LOG_ALL : Options_Dev[DOPT_LOG].val; }
+static int script_trace; // defined with the scripts below
+// Legacy scripts log everything; state traces respect the requested log level.
+static int Log_Level(void) { return script_cur >= 0 && !script_trace && !reference_mode ? LOG_ALL : Options_Dev[DOPT_LOG].val; }
 static int capture_clean; // hide everything the event draws (D-pad up in Frame Advance, with the Debug Log on)
 
 static void Log_Camera(FighterData *fp)
@@ -13498,6 +13542,7 @@ static int Advance_CheckStep(void)
 //   land <max> [inputs]        hold the inputs until Falcon is on the ground
 //   shot [label]               freeze the game after the frame before; D-pad
 //                              down goes on, the advance button steps
+//   trace on|off               opt-in LLST1 engine-state records (all states)
 //   mark [label]               only write a line to the log
 //   autorun                    (anywhere) play All, or the only script, as
 //                              soon as the event starts
@@ -13551,6 +13596,7 @@ enum script_cmd
     SCMD_GET,
     SCMD_VIEW,
     SCMD_BAKE,
+    SCMD_TRACE,
 };
 
 typedef struct ScriptInput
@@ -13586,6 +13632,10 @@ static int script_num;
 static int script_shown; // the first ones are listed in the menu
 static int script_autorun;
 
+static int script_trace_last = -1;
+static int script_trace_end_pending;
+static char script_trace_id[65]; // whitespace-safe, bounded trace identity
+
 static int script_cur = -1; // running script, -1 = none
 static char shot_label[48];  // the last shot's label, for the heartbeat
 static int script_pc;       // its current step
@@ -13597,6 +13647,23 @@ static int script_width;    // how many frames the prediction gave it
 static int script_pending;  // start the chosen script on the next frame
 static ScriptInput script_last; // the last frame's inputs
 static int live_timer;      // the frame pred_live was made on
+
+static void Reference_Restore(int keep_advance)
+{
+    if (!reference_mode)
+        return;
+    int mode = reference_mode;
+    int advance = Options_Game[GOPT_FRAME_ADV].val;
+    for (int i = 0; i < (int)countof(reference_options); i++)
+        reference_options[i]->val = reference_saved[i];
+    // Taking over a practice shot must not undo the player's pause choice.
+    if (keep_advance)
+        Options_Game[GOPT_FRAME_ADV].val = advance;
+    reference_mode = 0;
+    OSReport("LLREF restore mode=%d assist=%d reset=%d inv=%d drop=%d routes=%d advance=%d\n",
+             mode, reference_saved[0], reference_saved[1], reference_saved[2],
+             reference_saved[3], reference_saved[4], Options_Game[GOPT_FRAME_ADV].val);
+}
 
 static int Script_Is(const char *a, const char *b)
 {
@@ -13825,10 +13892,10 @@ static void Script_Parse(void)
         }
         else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
                  Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset") ||
-                 Script_Is(w, "bake"))
+                 Script_Is(w, "bake") || Script_Is(w, "trace"))
         {
             op->kind = SOP_CMD;
-            op->count = w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
+            op->count = w[0] == 't' ? SCMD_TRACE : w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
@@ -14127,9 +14194,54 @@ static int Script_PlaceLedge(GOBJ *ft, ScriptOp *op)
 
 static void Script_Next(void);
 
+static void Script_End(void);
+
+// Post-collision snapshot at event priority 15, before event overrides. Three
+// bounded physical records form one logical FRAME. Never indexes tracked data.
+static void Script_TraceFrame(FighterData *fp)
+{
+    int timer = event_vars->game_timer;
+    if (!script_trace || script_cur < 0 || script_trace_last == timer)
+        return;
+    script_trace_last = timer;
+    CollData *cd = &fp->coll_data;
+    HSD_Pad *pad = PadGetEngine(fp->pad_index);
+    int sid = fp->state_id;
+    // At most 64 ID bytes; %.9g bounds each finite or nonfinite float. Each
+    // format below plus worst-case 32-bit integers fits this 768-byte buffer.
+    char buf[768];
+    sprintf(buf, "LLST1 FRAME id=%s timer=%d part=0 state_id=%d animation_frame=%.9g posx=%.9g posy=%.9g velocityx=%.9g velocityy=%.9g ground_velocityx=%.9g air_state=%d facing=%.9g fastfall=%d jumps_used=%d intang=%d wait=%d normal_landing=%d aerial=%d cliff_catch=%d cliff_wait=%d keep_inv=%d\n",
+            script_trace_id, timer, sid, fp->state.frame,
+            fp->phys.pos.X, fp->phys.pos.Y, fp->phys.self_vel.X, fp->phys.self_vel.Y,
+            fp->phys.self_vel_ground.X, fp->phys.air_state, fp->facing_direction,
+            fp->flags.is_fastfall, fp->jump.jumps_used, fp->hurt.intang_frames.ledge,
+            sid == ASID_WAIT, sid == ASID_LANDING,
+            sid >= ASID_ATTACKAIRN && sid <= ASID_ATTACKAIRLW,
+            sid == ASID_CLIFFCATCH, sid == ASID_CLIFFWAIT, Options_Ledge[LOPT_INV].val);
+    Log(buf);
+    sprintf(buf, "LLST1 FRAME id=%s timer=%d part=1 ecb_lock=%d bottom_desired=%.9g bottom_corrected=%.9g ecb_top=%.9g ecb_left=%.9g ecb_right=%.9g ecb_side_y=%.9g floor_line=%d ignore_line=%d\n",
+            script_trace_id, timer, cd->u.ecb_bot_lock_frames,
+            cd->ecbCurr_bot.Y, cd->ecbCurrCorrect_bot.Y, cd->ecbCurr_top.Y,
+            cd->ecbCurr_left.X, cd->ecbCurr_right.X, cd->ecbCurr_right.Y,
+            cd->ground_index, cd->ignore_line);
+    Log(buf);
+    sprintf(buf, "LLST1 FRAME id=%s timer=%d part=2 stickx=%.9g sticky=%.9g cstickx=%.9g csticky=%.9g held=%u trigger=%.9g trigger_left=%.9g trigger_right=%.9g tilt_y=%u smash_y=%u any_y=%u trigger_analog_timer=%u trigger_digital_timer=%u trigger_any_timer=%u trigger_nohitlag_timer=%u\n",
+            script_trace_id, timer, fp->input.lstick.X, fp->input.lstick.Y,
+            fp->input.cstick.X, fp->input.cstick.Y, (unsigned int)fp->input.held,
+            fp->input.trigger, pad->ftriggerLeft, pad->ftriggerRight,
+            (u8)fp->input.timer_lstick_tilt_y, (u8)fp->input.timer_lstick_smash_y,
+            (u8)fp->input.timer_lstick_any_y, (u8)fp->input.timer_trigger_analog,
+            (u8)fp->input.timer_trigger_digital, (u8)fp->input.timer_trigger_any,
+            (u8)fp->input.timer_trigger_any_ignore_hitlag);
+    Log(buf);
+}
+
 static void Script_Begin(int index)
 {
     char buf[120];
+    script_trace = 0;
+    script_trace_last = -1;
+    script_trace_end_pending = 0;
     script_cur = index;
     script_pc = -1;
     Script_Next();
@@ -14143,10 +14255,29 @@ static void Script_Begin(int index)
 
 static void Script_End(void)
 {
-    char buf[120];
+    if (script_trace && script_trace_last != event_vars->game_timer)
+    {
+        script_trace_end_pending = 1;
+        return;
+    }
+    char buf[192];
+    if (script_trace)
+    {
+        sprintf(buf, "LLST1 END id=%s frame=%d\n", script_trace_id, event_vars->game_timer);
+        Log(buf);
+    }
+    script_trace = 0;
+    script_trace_end_pending = 0;
     Script *sc = &scripts[script_cur];
     sprintf(buf, "LLSCRIPT end %s at %d, last landing: %s\n", sc->name, event_vars->game_timer, text_last);
     Log(buf);
+
+    if (reference_mode)
+    {
+        OSReport("LLREF end mode=%d frame=%d\n", reference_mode, event_vars->game_timer);
+        if (reference_mode == 1)
+            Reference_Restore(0);
+    }
 
     // All plays every script in turn
     int all = script_num > 1 && Options_Dev[DOPT_SCRIPT].val == script_shown + 1;
@@ -14232,6 +14363,31 @@ static void Script_Cmd(ScriptOp *op)
     int ok = 1;
     switch (op->count)
     {
+    case SCMD_TRACE:
+    {
+        ok = Script_Is(line, "on") || Script_Is(line, "off");
+        if (!ok)
+            break;
+        script_trace = Script_Is(line, "on");
+        if (script_trace)
+        {
+            int i = 0;
+            const char *name = scripts[script_cur].name;
+            for (; name[i] && i < (int)sizeof(script_trace_id) - 1; i++)
+            {
+                char c = name[i];
+                script_trace_id[i] = ((c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                                      (c >= '0' && c <= '9') || c == '_' || c == '-') ? c : '_';
+            }
+            script_trace_id[i] = 0;
+            script_trace_last = -1;
+            FighterData *fp = Fighter_GetGObj(0)->userdata;
+            sprintf(buf, "LLST1 BEGIN id=%s character=%d stage=%d\n", script_trace_id,
+                    fp->kind, Stage_GetExternalID());
+            Log(buf);
+        }
+        break;
+    }
     case SCMD_SET:
     {
         char *eq = line;
@@ -14564,7 +14720,7 @@ static void Script_Think(GOBJ *gobj)
         if (sel > 0 && script_num > 0)
             Script_Begin(sel <= script_shown ? sel - 1 : 0);
     }
-    if (script_cur < 0)
+    if (script_cur < 0 || script_trace_end_pending)
         return;
 
     GOBJ *ft = Fighter_GetGObj(0);
@@ -14640,9 +14796,12 @@ static void Script_Think(GOBJ *gobj)
 
     Script_Apply(fp, &in);
     script_last = in;
-    sprintf(buf, "LLIN %d s %d %d c %d %d lt %d btn %x\n", event_vars->game_timer,
-            in.lx, in.ly, in.cx, in.cy, in.trigger, in.buttons);
-    Log(buf);
+    if (!reference_mode || Log_Level() >= LOG_FRAMES)
+    {
+        sprintf(buf, "LLIN %d s %d %d c %d %d lt %d btn %x\n", event_vars->game_timer,
+                in.lx, in.ly, in.cx, in.cy, in.trigger, in.buttons);
+        Log(buf);
+    }
 
     if (done)
     {
@@ -14653,8 +14812,78 @@ static void Script_Think(GOBJ *gobj)
 
 void Event_ChangeScript(GOBJ *menu, int value)
 {
+    int mode = 0;
+    if (value > 0 && value <= script_shown)
+        for (int i = 0; i < (int)countof(reference_names); i++)
+            if (Script_Is(scripts[value - 1].name, reference_names[i]))
+                mode = i + 1;
+    Reference_Restore(0);
+    if (mode)
+    {
+        FighterData *fp = Fighter_GetGObj(0)->userdata;
+        if (fp->kind != FTKIND_FALCON || Stage_GetExternalID() != GRKINDEXT_BATTLE)
+        {
+            // nothing runs: the menu's Script goes back to Off, so D-pad
+            // left resets as usual instead of trying it again
+            Toast("Requires Falcon on Battlefield");
+            Options_Dev[DOPT_SCRIPT].val = 0;
+            script_cur = -1;
+            script_pending = 0;
+            return;
+        }
+        for (int i = 0; i < (int)countof(reference_options); i++)
+        {
+            reference_saved[i] = reference_options[i]->val;
+            reference_options[i]->val = 0;
+        }
+        reference_mode = mode;
+        Assist_Clear();
+        OSReport("LLREF start mode=%d frame=%d assist=%d reset=%d inv=%d drop=%d routes=%d advance=%d\n",
+                 mode, event_vars->game_timer, reference_saved[0], reference_saved[1], reference_saved[2],
+                 reference_saved[3], reference_saved[4], reference_saved[5]);
+    }
+    script_trace = 0;
+    script_trace_end_pending = 0;
     script_cur = -1;
     script_pending = value != 0;
+}
+
+static void Reference_Play(GOBJ *menu, int mode)
+{
+    FighterData *fp = Fighter_GetGObj(0)->userdata;
+    if (fp->kind != FTKIND_FALCON || Stage_GetExternalID() != GRKINDEXT_BATTLE)
+    {
+        Toast("Requires Falcon on Battlefield");
+        return;
+    }
+    int index = -1;
+    for (int i = 0; i < script_num; i++)
+        if (Script_Is(scripts[i].name, reference_names[mode - 1]))
+        {
+            index = i;
+            break;
+        }
+    if (index < 0 || index >= script_shown)
+    {
+        Toast("Reference script missing from disc");
+        return;
+    }
+    // Preserve the menu's real settings before applying temporary helpers.
+    Presets_KeepUser();
+    Options_Dev[DOPT_SCRIPT].val = index + 1;
+    Event_ChangeScript(menu, index + 1);
+    if (menu)
+        event_vars->Menu_Exit(menu);
+}
+
+void Event_ReferenceDemo(GOBJ *menu)
+{
+    Reference_Play(menu, 1);
+}
+
+void Event_ReferencePractice(GOBJ *menu)
+{
+    Reference_Play(menu, 2);
 }
 
 ///////////////////////
@@ -19156,6 +19385,7 @@ static void Event_ThinkFrame(GOBJ *event)
 {
     GOBJ *ft = Fighter_GetGObj(0);
     FighterData *fp = ft->userdata;
+    Script_TraceFrame(fp);
     if (card_probe > 0 && script_cur >= 0)
     {
         char buf[48];
@@ -19366,6 +19596,15 @@ static void Event_ThinkFrame(GOBJ *event)
     prev_vel = (Vec2){fp->phys.self_vel.X, fp->phys.self_vel.Y};
 
     Drill_Think();
+    // Practice keeps real intangibility while paused on the first hang.
+    // Restore helpers only once the player has taken over and left it.
+    if (reference_mode == 2 && !script_pending && script_cur < 0 &&
+        sid != ASID_CLIFFCATCH && sid != ASID_CLIFFWAIT)
+        Reference_Restore(1);
+    // Finish only after the old frame's learning and landing resolution;
+    // All may then reset caches for the next trial without contamination.
+    if (script_trace_end_pending)
+        Script_End();
 }
 
 // Save and load position like the lab: hold D-pad right to save, press
@@ -20166,8 +20405,7 @@ void Event_Update(void)
         capture_clean = 0;
     if ((down & HSD_BUTTON_DPAD_LEFT) && Options_Dev[DOPT_SCRIPT].val)
     {
-        script_cur = -1;
-        script_pending = 1;
+        Event_ChangeScript(0, Options_Dev[DOPT_SCRIPT].val);
     }
     else if ((down & HSD_BUTTON_DPAD_LEFT) && Reset_Mode() != RESET_NONE &&
              Options_Ledge[LOPT_START].val == START_LEDGE)

@@ -5,7 +5,8 @@ set -Eeo pipefail
 # ensure an iso was passed
 if [ -z "${1}" ]; then
     echo "Usage:"
-    echo "    $0 <path/to/vanilla/melee.iso> [release]"
+    echo "    $0 <path/to/vanilla/melee.iso> [release|test]"
+    echo "    (test: optimized like a release, LLSCRIPT allowed, no zip)"
     exit 1
 fi
 iso="${1}"
@@ -21,6 +22,9 @@ if [ "${2}" = "release" ]; then
         echo "Error: move TM-CE.iso out of the way first, so the release is built from a fresh copy"
         exit 1
     fi
+elif [ "${2}" = "test" ]; then
+    # a Landing Lab test or data capture build, optimized like a release
+    optimized=true
 elif [ -n "${2}" ]; then
     mode="${2}"
 fi
@@ -79,7 +83,7 @@ mex_build() {
         local dat=""
     fi
 
-    if [ "${release}" = true ]; then
+    if [ "${release}" = true ] || [ "${optimized}" = true ]; then
         local opt="-O2"
     else
         local opt="-DTM_DEBUG"
@@ -166,10 +170,8 @@ ${gc_fst} set-header TM-CE.iso "GTME01" "TM-CE + Landing Lab"
 
 echo "built TM-CE.iso"
 
-# build release: the patch, checked by applying it, in
-# TM-CE-LandingLab-<version>.zip with one folder of the same name
-if [ "${2}" = "release" ]; then
-    # no two files on the disc may overlap
+# no two files on the disc may overlap (releases and test builds)
+if [ "${2}" = "release" ] || [ "${2}" = "test" ]; then
     if ! ${gc_fst} tree TM-CE.iso -s -o -x | python3 -c '
 import sys
 rows = []
@@ -184,6 +186,11 @@ sys.exit(1 if bad else 0)'; then
         echo "Error: files overlap on TM-CE.iso"
         exit 1
     fi
+fi
+
+# build release: the patch, checked by applying it, in
+# TM-CE-LandingLab-<version>.zip with one folder of the same name
+if [ "${2}" = "release" ]; then
     ${xdelta} -fs "${iso}" -e "TM-CE.iso" "TM-CE/patch.xdelta"
     if [ "$(${xdelta} -dc -s "${iso}" TM-CE/patch.xdelta | sha256sum | cut -d' ' -f1)" != \
          "$(sha256sum TM-CE.iso | cut -d' ' -f1)" ]; then

@@ -1288,6 +1288,16 @@ void EventInit(int page, int eventID, MatchInit *matchData)
         matchData->playerData[0].p_kind = PKIND_HMN;
         matchData->playerData[0].portNumberOverride = hmn_port;
 
+#ifdef LL_TEST_CHAR
+        // a Landing Lab data capture build's fighter, in place of the one
+        // picked (the files load at the match start, as a fixed CPU's do).
+        // Only there: most events leave playerKind 0, not -1.
+        if (event->playerKind == LL_TEST_CHAR) {
+            matchData->playerData[0].c_kind = LL_TEST_CHAR;
+            matchData->playerData[0].costume = 0;
+        }
+#endif
+
         // Force Popo if required
         if (event->force_sopo && matchData->playerData[0].c_kind == CKIND_ICECLIMBERS) {
             matchData->playerData[0].c_kind = CKIND_POPO;

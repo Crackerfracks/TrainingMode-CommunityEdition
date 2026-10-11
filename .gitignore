@@ -35,6 +35,7 @@ build/
 root/
 *.iso
 TM-CE.zip
+TM-CE-LandingLab-*.zip
 TM-CE/
 
 # Mac files

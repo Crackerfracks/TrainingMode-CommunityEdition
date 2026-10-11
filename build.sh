@@ -12,6 +12,15 @@ iso="${1}"
 
 if [ "${2}" = "release" ]; then
     release=true
+    # a release ships the reference script, built fresh from the vanilla ISO
+    if [ -n "${LLSCRIPT}" ]; then
+        echo "Error: unset LLSCRIPT for a release (it would ship a test script)"
+        exit 1
+    fi
+    if [ -f TM-CE.iso ]; then
+        echo "Error: move TM-CE.iso out of the way first, so the release is built from a fresh copy"
+        exit 1
+    fi
 elif [ -n "${2}" ]; then
     mode="${2}"
 fi
@@ -153,9 +162,38 @@ ${gc_fst} set-header TM-CE.iso "GTME01" "TM-CE + Landing Lab"
 
 echo "built TM-CE.iso"
 
-# build release
+# build release: the patch, checked by applying it, in
+# TM-CE-LandingLab-<version>.zip with one folder of the same name
 if [ "${2}" = "release" ]; then
+    # no two files on the disc may overlap
+    if ! ${gc_fst} tree TM-CE.iso -s -o -x | python3 -c '
+import sys
+rows = []
+for l in sys.stdin:
+    p = l.rstrip("\n").split("\t")
+    if len(p) == 3 and p[1].startswith("0x") and int(p[2], 16) > 0:
+        rows.append((int(p[1], 16), int(p[2], 16), p[0]))
+rows.sort()
+bad = [(a[2], b[2]) for a, b in zip(rows, rows[1:]) if a[0] + a[1] > b[0]]
+print("overlaps:", bad if bad else "none")
+sys.exit(1 if bad else 0)'; then
+        echo "Error: files overlap on TM-CE.iso"
+        exit 1
+    fi
     ${xdelta} -fs "${iso}" -e "TM-CE.iso" "TM-CE/patch.xdelta"
-    zip -r TM-CE.zip TM-CE/
-    echo "built TM-CE.zip"
+    if [ "$(${xdelta} -dc -s "${iso}" TM-CE/patch.xdelta | sha256sum | cut -d' ' -f1)" != \
+         "$(sha256sum TM-CE.iso | cut -d' ' -f1)" ]; then
+        echo "Error: the patch doesn't rebuild TM-CE.iso"
+        exit 1
+    fi
+    version=$(sed -n 's/.*TM_VERSSHORT "TM-CE LL \([0-9.]*\)".*/\1/p' src/events.h)
+    name="TM-CE-LandingLab-${version}"
+    pkg=$(mktemp -d)
+    mkdir "${pkg}/${name}"
+    cp TM-CE/README.txt TM-CE/patch.xdelta TM-CE/xdelta3.exe TM-CE/build_linux_and_mac.sh \
+        "TM-CE/DRAG VANILLA MELEE HERE.bat" "${pkg}/${name}/"
+    rm -f "${name}.zip"
+    (cd "${pkg}" && zip -qr - "${name}") > "${name}.zip"
+    rm -rf "${pkg}"
+    echo "built ${name}.zip"
 fi

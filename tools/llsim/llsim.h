@@ -1,0 +1,15 @@
+/* llsim.h: what main.c (the PC side) calls in sim.c (the game side). */
+#ifndef LLSIM_H
+#define LLSIM_H
+
+void llsim_common(int at, const unsigned *w, int n);
+void llsim_attr(int at, const unsigned *w, int n);
+void llsim_special(int at, const unsigned *w, int n);
+void llsim_softland(unsigned bits);
+int llsim_group(int g, const int *v);
+int llsim_line(int i, const int *v, unsigned xc, unsigned xd, unsigned xe, unsigned flags);
+int llsim_vert(int i, unsigned cx, unsigned cy, unsigned ox, unsigned oy);
+int llsim_ready(int fighter_kind, int wlground);
+void llsim_check(void);
+
+#endif

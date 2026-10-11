@@ -10710,6 +10710,8 @@ static u32 Float_Bits(float f)
     return v.u;
 }
 
+static Prediction *pred_route; // (Ledge routes, below)
+
 static void Sim_Dump(FighterData *fp)
 {
     float soft = Fighter_GetSoftLandVelocity(fp);
@@ -10746,6 +10748,7 @@ static void Sim_Dump(FighterData *fp)
         OSReport("LLDUMP vert %d %08x %08x %08x %08x\n", i, Float_Bits(verts[i].pos_curr.X), Float_Bits(verts[i].pos_curr.Y),
                  Float_Bits(verts[i].pos_orig.X), Float_Bits(verts[i].pos_orig.Y));
     OSReport("LLDUMP end %d lines %d verts\n", line_n, vert_n);
+    Sim_Check(fp, pred_route); // the route's own prediction, redone next time it's needed
 }
 
 // Each frame after the learning: held at the hover spot.
@@ -16553,46 +16556,13 @@ void Event_Init(GOBJ *gobj)
 {
     int init_tick = OSGetTick(); // the start-up work, timed for the log
     Cues_Clear();
-    common_fastfall_stick = Common_Float(COMMON_FASTFALL_STICK);
-    common_fastfall_window = Common_Int(COMMON_FASTFALL_WINDOW);
-    common_lcancel_window = Common_Int(COMMON_LCANCEL_WINDOW);
-    common_lcancel_div = Common_Float(COMMON_LCANCEL_DIV);
-    common_platform_drop = Common_Float(COMMON_PLATFORM_DROP);
-    common_aerial_stick_x = Common_Float(COMMON_AERIAL_STICK_X);
-    common_aerial_stick_y = Common_Float(COMMON_AERIAL_STICK_Y);
-    common_aerial_angle = Common_Float(COMMON_AERIAL_ANGLE);
-    common_run_friction = Common_Float(COMMON_RUN_FRICTION);
-    common_run_stick = Common_Float(COMMON_RUN_STICK);
-    common_run_taper = Common_Float(COMMON_RUN_TAPER);
-    common_dashrun_friction = Common_Float(COMMON_DASHRUN_FRICTION);
-    common_jump_back_stick = Common_Float(COMMON_JUMP_BACK_STICK);
-    common_dodge_deadzone.X = Common_Float(COMMON_DODGE_DEADZONE);
-    common_dodge_deadzone.Y = Common_Float(COMMON_DODGE_DEADZONE + 4);
-    common_dodge_force = Common_Float(COMMON_DODGE_FORCE);
-    common_dodge_decay = Common_Float(COMMON_DODGE_DECAY);
-    common_waveland_lag = Common_Float(COMMON_WAVELAND_LAG);
-    common_fall_lean_deadzone = Common_Float(COMMON_FALL_LEAN_DEADZONE);
-    common_fall_lean_rate = Common_Float(COMMON_FALL_LEAN_RATE);
-    common_air_friction_oob = Common_Float(COMMON_AIR_FRICTION_OOB);
-    common_upb_drift_stick = Common_Float(COMMON_UPB_DRIFT_STICK);
-    common_drop_stick = fabs(Common_Float(COMMON_DROP_STICK));
-    common_drop_window = Common_Frames(COMMON_DROP_WINDOW);
-    common_spot_stick = -fabs(Common_Float(COMMON_SPOT_STICK));
-    common_spot_window = Common_Frames(COMMON_SPOT_WINDOW);
-
-    ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
-    upb_table = calloc(sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
-    Learned_Clear();
-    Learned_Bake();
-    Lean_Index();
+    Sim_Setup();
     pred_live = calloc(sizeof(Prediction));
     pred_seg = calloc(sizeof(Prediction));
     pred_fh = calloc(sizeof(Prediction));
     pred_sh = calloc(sizeof(Prediction));
     actual_pos = calloc(sizeof(Vec2) * (LL_SIM_FRAMES + 1));
     actual_bottom = calloc(sizeof(float) * (LL_SIM_FRAMES + 1));
-    floor_cache = calloc(sizeof(FloorLine) * LL_MAX_FLOORS);
-    ceil_cache = calloc(sizeof(FloorLine) * LL_MAX_CEILS);
     quads = calloc(sizeof(Quad) * LL_QUADS);
     ledges = calloc(sizeof(LedgeEntry) * LR_LEDGES);
     pred_route = calloc(sizeof(Prediction));
@@ -16616,11 +16586,6 @@ void Event_Init(GOBJ *gobj)
     jt_path_bottom = calloc(sizeof(float) * JT_PATH);
     slide_pos = calloc(sizeof(Vec2) * 2 * SLIDE_MAX);
     slide_bottom = calloc(sizeof(float) * 2 * SLIDE_MAX);
-    for (int side = 0; side < 2; side++)
-    {
-        wall_ids[side] = calloc(sizeof(s16) * LL_MAX_WALLS);
-        wall_box[side] = calloc(sizeof(WallBox) * LL_MAX_WALLS);
-    }
 
     // HUD panel on the event gobj, paths on their own gobj in world space
     GObj_AddGXLink(gobj, Hud_GX, GXLINK_HUD, 80);

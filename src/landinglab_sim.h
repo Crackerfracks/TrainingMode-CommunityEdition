@@ -3819,3 +3819,106 @@ static void Sim_ToStart(SimState *s, SimStart *start, SimStart *out)
     out->special_lag = s->special_lag;
     out->dodge_late = 0;
 }
+
+// The common numbers, the tables and the stage caches' room, once at the
+// start (Event_Init, or tools/llsim with the game's data loaded).
+static void Sim_Setup(void)
+{
+    common_fastfall_stick = Common_Float(COMMON_FASTFALL_STICK);
+    common_fastfall_window = Common_Int(COMMON_FASTFALL_WINDOW);
+    common_lcancel_window = Common_Int(COMMON_LCANCEL_WINDOW);
+    common_lcancel_div = Common_Float(COMMON_LCANCEL_DIV);
+    common_platform_drop = Common_Float(COMMON_PLATFORM_DROP);
+    common_aerial_stick_x = Common_Float(COMMON_AERIAL_STICK_X);
+    common_aerial_stick_y = Common_Float(COMMON_AERIAL_STICK_Y);
+    common_aerial_angle = Common_Float(COMMON_AERIAL_ANGLE);
+    common_run_friction = Common_Float(COMMON_RUN_FRICTION);
+    common_run_stick = Common_Float(COMMON_RUN_STICK);
+    common_run_taper = Common_Float(COMMON_RUN_TAPER);
+    common_dashrun_friction = Common_Float(COMMON_DASHRUN_FRICTION);
+    common_jump_back_stick = Common_Float(COMMON_JUMP_BACK_STICK);
+    common_dodge_deadzone.X = Common_Float(COMMON_DODGE_DEADZONE);
+    common_dodge_deadzone.Y = Common_Float(COMMON_DODGE_DEADZONE + 4);
+    common_dodge_force = Common_Float(COMMON_DODGE_FORCE);
+    common_dodge_decay = Common_Float(COMMON_DODGE_DECAY);
+    common_waveland_lag = Common_Float(COMMON_WAVELAND_LAG);
+    common_fall_lean_deadzone = Common_Float(COMMON_FALL_LEAN_DEADZONE);
+    common_fall_lean_rate = Common_Float(COMMON_FALL_LEAN_RATE);
+    common_air_friction_oob = Common_Float(COMMON_AIR_FRICTION_OOB);
+    common_upb_drift_stick = Common_Float(COMMON_UPB_DRIFT_STICK);
+    common_drop_stick = fabs(Common_Float(COMMON_DROP_STICK));
+    common_drop_window = Common_Frames(COMMON_DROP_WINDOW);
+    common_spot_stick = -fabs(Common_Float(COMMON_SPOT_STICK));
+    common_spot_window = Common_Frames(COMMON_SPOT_WINDOW);
+
+    ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
+    upb_table = calloc(sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
+    Learned_Clear();
+    Learned_Bake();
+    Lean_Index();
+    floor_cache = calloc(sizeof(FloorLine) * LL_MAX_FLOORS);
+    ceil_cache = calloc(sizeof(FloorLine) * LL_MAX_CEILS);
+    for (int side = 0; side < 2; side++)
+    {
+        wall_ids[side] = calloc(sizeof(s16) * LL_MAX_WALLS);
+        wall_box[side] = calloc(sizeof(WallBox) * LL_MAX_WALLS);
+    }
+}
+
+// Script command "dump" ends with this, and tools/llsim runs the same: hops
+// from fixed spots on Battlefield's floors predicted in full, one line each
+// with what they land as and a hash of every frame, so the PC build can be
+// checked against the game line for line.
+static u32 Check_Hash(u32 h, u32 v)
+{
+    for (int i = 0; i < 4; i++)
+    {
+        h ^= (v >> (i * 8)) & 0xFF;
+        h *= 16777619u;
+    }
+    return h;
+}
+
+static u32 Check_Bits(float f)
+{
+    union
+    {
+        float f;
+        u32 u;
+    } v = {f};
+    return v.u;
+}
+
+static void Sim_Check(FighterData *live, Prediction *p)
+{
+    static FighterData fp; // a copy, facing right with no stick or trigger history
+    static const float spots[][2] = {{-60, 0}, {-40, 0}, {-20, 0}, {0, 0}, {20, 0}, {40, 0}, {60, 0}, {-40, 27.2f}, {0, 54.4f}};
+    static const float sticks[] = {-1, 0, 1};
+    static const float speeds[] = {0, 1.5f};
+    fp = *live;
+    fp.facing_direction = 1;
+    fp.input.lstick.Y = 0;
+    fp.input.timer_trigger_any_ignore_hitlag = LL_TIMER_MAX;
+    OSReport("LLCHECK begin wlground %d\n", Cues_WavelandGround());
+    for (int i = 0; i < (int)countof(spots); i++)
+        for (int sh = 0; sh < 2; sh++)
+            for (int k = 0; k < (int)countof(sticks); k++)
+                for (int v = 0; v < (int)countof(speeds); v++)
+                {
+                    SimStart s;
+                    Sim_GroundJumpAt(&fp, sh, spots[i][0], spots[i][1], speeds[v], sticks[k], 1, &s, 0);
+                    Predict(&fp, &s, p, BR_ALL);
+                    u32 h = 2166136261u;
+                    for (int f = 0; f <= p->num; f++)
+                    {
+                        h = Check_Hash(h, Check_Bits(p->pos[f].X));
+                        h = Check_Hash(h, Check_Bits(p->pos[f].Y));
+                        h = Check_Hash(h, Check_Bits(p->bottom[f]));
+                        h = Check_Hash(h, (u32)p->ts[f] | p->ai_mask[f] << 8 | p->ai_show[f] << 16 | p->wl_mask[f] << 24);
+                    }
+                    OSReport("LLCHECK %d %d %d %d num %d land %d kind %d lag %d ai %d %d %d wl %d %d %d hash %08x\n", i, sh, k, v,
+                             p->num, p->land_frame, p->land_kind, p->lag, p->ai_first, p->ai_width, p->ai_aerials,
+                             p->wl_first, p->wl_width, p->wl_dirs, h);
+                }
+    OSReport("LLCHECK end\n");
+}

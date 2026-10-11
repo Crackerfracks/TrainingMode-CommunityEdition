@@ -1,0 +1,121 @@
+# 0.9.9 checks: build with LLSCRIPT=src/landinglab_099_test.txt and start the
+# event on Battlefield. Each "shot" freezes the game until D-pad down. The
+# shots only need the fixed strip's corner, low-res.
+autorun
+
+# Highway, a followed route: the hop, the double jump on its frame and the
+# nair. In the shots: notes drop into each lane's window (a frame one note
+# tall over the strikeline); the JUMP and AI hits burn the note white with
+# a beam up the lane. Logs: LLFOLLOW, LLJUMPEND JUMP hit 0, an AI landing.
+script Highway hit
+preset load Defaults
+set Timers/Fixed Strip = 2
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+120
+follow 24
+shot highway hit, follow frame 24
+follow 2
+shot highway hit, follow frame 26
+follow 2
+shot highway hit, follow frame 28
+follow 2
+shot highway hit, follow frame 30
+follow 2
+shot highway hit, follow frame 32
+follow 2
+shot highway hit, follow frame 34
+follow 2
+shot highway hit, follow frame 36
+follow 2
+shot highway hit, follow frame 38
+follow 2
+shot highway hit, follow frame 40
+follow 2
+shot highway hit, follow frame 42
+follow 2
+shot highway hit, follow frame 44
+follow 2
+shot highway hit, follow frame 46
+follow 2
+shot highway hit, follow frame 48
+follow 2
+shot highway hit, follow frame 50
+follow 2
+shot highway hit, follow frame 52
+follow 2
+shot highway hit, follow frame 54
+follow 2
+shot highway hit, follow frame 56
+follow 2
+shot highway hit, follow frame 58
+follow 2
+follow 20
+land 150
+set Jump/Show = 0
+set Timers/Fixed Strip = 1
+
+# Highway, a skipped double jump: a short hop with no double jump. The JUMP
+# note sits in its window in gray and fades (LLJUMPEND JUMP late -1).
+script Highway skip
+preset load Defaults
+set Timers/Fixed Strip = 2
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+120
+1 X
+24
+shot highway skip, frame 25 after the hop
+3
+shot highway skip, frame 28 after the hop
+3
+shot highway skip, frame 31 after the hop
+3
+shot highway skip, frame 34 after the hop
+3
+shot highway skip, frame 37 after the hop
+3
+shot highway skip, frame 40 after the hop
+3
+shot highway skip, frame 43 after the hop
+3
+shot highway skip, frame 46 after the hop
+3
+shot highway skip, frame 49 after the hop
+3
+shot highway skip, frame 52 after the hop
+3
+land 150
+set Jump/Show = 0
+set Timers/Fixed Strip = 1
+
+# Cells, the same skip, and the JUMP label: it ends short of the gate's lit
+# ticks (it ran into them in 0.9.8).
+script Cells skip and labels
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+120
+1 X
+24
+shot cells skip, frame 25 after the hop
+3
+shot cells skip, frame 28 after the hop
+3
+shot cells skip, frame 31 after the hop
+3
+shot cells skip, frame 34 after the hop
+3
+shot cells skip, frame 37 after the hop
+3
+shot cells skip, frame 40 after the hop
+3
+shot cells skip, frame 43 after the hop
+3
+shot cells skip, frame 46 after the hop
+3
+land 150
+set Jump/Show = 0

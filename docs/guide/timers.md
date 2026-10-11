@@ -13,7 +13,7 @@ The Timers menu, in menu order.
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |
 | Near Falcon | Off, Bubble, Halo, Pincers, ECB Fill, Lights, Old Strip | Off | A countdown that rides with Falcon. Bubble: a ring closes on where his body will be. Halo: a bead runs into a notch. Pincers, ECB Fill and Lights close, fill or count in on him. |
-| Fixed Strip | Off, Cells, Highway, Dial | Cells | A countdown in a corner. Cells slide into a gate, Highway drops notes onto a line, Dial sweeps a hand into the window. Press as it arrives. |
+| Fixed Strip | Off, Cells, Highway, Dial | Cells | A countdown in a corner. Cells slide into a gate, Highway drops notes into a window, Dial sweeps a hand into the window. Press as it arrives. |
 | Wide Cells | Off, On | On | Makes each frame cell of the cell timers a little wider. |
 | Landing Spot | Off, On | On | Brackets close in on the landing spot of an AI or NIL and meet it on the frame to press. |
 | Waveland | Off, Ticks, Rails, Chevrons | Ticks | Drawn at the slide. Ticks run in from its ends and spike where they meet, rails fill in, or chevrons hop in a notch a frame. They meet on the frame to airdodge. |
@@ -32,6 +32,7 @@ The Timers menu, in menu order.
 
 - Start with the corner strip. It stays in one place, so you can read it without looking at Falcon.
 - Try Near Falcon when you want the countdown where you are already looking. Bubble draws every live cue at its own spot. The other looks draw only the soonest cue, and when two tie, the AI comes before the NIL and the NIL before the waveland.
+- How a window ends shows where it was due. A hit flashes the gate white (on Highway the note burns white and a beam runs up the lane). A skip leaves the note in the gate or window in gray for a moment. A miss leaves it cracked in two. Early presses on the JUMP lane say how early.
 - While ledge routes are showing in the timer, the Near Falcon timers are not drawn.
 - Timers get fainter or bolder with Intensity, and each can fade as you learn it. See [Visibility](visibility.md).
 

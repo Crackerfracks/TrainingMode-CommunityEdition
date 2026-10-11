@@ -4878,7 +4878,7 @@ static EventOption Options_Timers[TOPT_COUNT] = {
         .value_num = countof(strip_names),
         .values = strip_names,
         .desc = {"A countdown in a corner. Cells slide into a gate,",
-                 "Highway drops notes onto a line, Dial sweeps a",
+                 "Highway drops notes into a window, Dial sweeps a",
                  "hand into the window. Press as it arrives."},
     },
     {
@@ -8867,6 +8867,8 @@ static void Text_Plate(float x0, float x1, float y)
 #define MT_WIDE 0.074f   // Wide Cells: a fifth of the mockup's cell width
 #define MT_FIXED 1.5f    // the fixed strip's scale
 #define MT_FIXED_MAX 20  // ... and its most cells, leaving room for the stick
+#define MT_LABEL_W 2.8f   // the fixed strip's longest label at its size
+#define MT_LABEL_GAP 1.25f // from a label's end to the gate, before the scale: past the lit ticks
 
 enum cell_kind
 {
@@ -9526,8 +9528,18 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         {
             float q = (float)r->implode / LL_FADE;
             GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
-            if (r->implode == 0)
-                Hud_Rect(gx - 0.1f * scale, gy0, gx + cw + 0.1f * scale, gy1, dc); // the frame that was needed
+            // the cell that was due stays in the gate, fading: whole and gray
+            // for a skip, cracked in two for a miss (Stephen, 0.9.8: a skip
+            // barely showed)
+            float a = 0.9f * (1.f - q);
+            if (r->implode_tone == TONE_MISS)
+            {
+                float d = 0.3f * scale * Ease_Out(q), h = (gy1 - gy0) / 2 - 0.05f * scale;
+                Hud_Rect(gx - 0.05f * scale, gcy + 0.05f * scale + d, gx + cw + 0.05f * scale, gcy + 0.05f * scale + h + d, Color_Fill(dc, a));
+                Hud_Rect(gx - 0.05f * scale, gcy - 0.05f * scale - h - d, gx + cw + 0.05f * scale, gcy - 0.05f * scale - d, Color_Fill(dc, a));
+            }
+            else
+                Hud_Rect(gx - 0.1f * scale, gy0, gx + cw + 0.1f * scale, gy1, Color_Fill(dc, a * 0.8f));
             float k = 1.f - Ease_Out(q);
             float hw = (cw / 2 + 0.9f * scale) * k, hh = ((gy1 - gy0) / 2 + 0.6f * scale) * k;
             if (hw > 0.05f)
@@ -9550,8 +9562,10 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         if (r->dim)
             tc = Color_Fill(tc, 0.6f);
         tc.a = 255;
-        Text_Plate(gx - 3.4f, gx - 3.2f + Text_Width(r->label, 0.42f) + 0.2f, ty);
-        Hud_Text(r->label, gx - 3.2f, ty, 0.42f, tc);
+        // right-aligned, ending short of the gate's ticks
+        float lx1 = gx - MT_LABEL_GAP * scale, lx0 = lx1 - Text_Width(r->label, 0.42f);
+        Text_Plate(lx0 - 0.2f, lx1 + 0.2f, ty);
+        Hud_Text(r->label, lx0, ty, 0.42f, tc);
         if (r->info[0])
         {
             float ix = x1 + 0.5f * scale;
@@ -9706,7 +9720,9 @@ static void Strip_CellsAt(FighterData *fp, float *gx, float *base)
 {
     float x0, y0, x1, y1;
     Pad_Box(fp, &x0, &y0, &x1, &y1);
-    *gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 3.2f;
+    // room on the left for the longest label ("Route", "JUMP"), which ends
+    // clear of the gate's lit ticks (Stephen, 0.9.8: JUMP ran into them)
+    *gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 0.3f + MT_LABEL_W + MT_LABEL_GAP * MT_FIXED;
     *base = -SAFE_H + 0.4f;
     float far = *gx + (MT_FIXED_MAX - 1) * Meter_Pitch() * MT_FIXED + (MT_CW + MT_WIDE) * MT_FIXED + 0.3f;
     Box b = {*gx, *base, far, *base + 2.f}, wm = Wm_Box();
@@ -10072,6 +10088,72 @@ static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
     }
 }
 
+// A lane's window at the bottom: a frame one note tall that notes drop
+// into, the way the cells' gate has posts
+// (Stephen, 0.9.8: notes slammed into the bottom with nothing to stop in).
+// It lights while a press is due. Its endings play in it: a hit burns the
+// note white and sends a beam up the lane; a skip leaves the note in the
+// window in gray, fading; a miss leaves it cracked in two, the halves
+// drifting apart. Lanes sit too close for side ticks, so the strikeline
+// under them all carries those (Highway_Draw).
+static void Hw_Window(MeterRow *r, float lx, float rx, float line_y)
+{
+    float in = 0.15f, mid = (lx + rx) / 2;
+    float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - 0.14f, wy1 = line_y + HW_PITCH + 0.1f;
+    int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
+    int ending = !r->dim && r->implode >= 0;
+    float q = ending ? (float)r->implode / LL_FADE : 1.f;
+    GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
+
+    if (ending)
+    {
+        // the note that was due, kept in the window
+        float a = 0.9f * (1.f - q);
+        float ny0 = line_y + 0.04f, ny1 = line_y + HW_PITCH - 0.04f;
+        if (r->implode_tone == TONE_MISS)
+        {
+            float d = 0.45f * Ease_Out(q), h = (mid - lx - in) - 0.06f;
+            Hud_Rect(mid - 0.06f - h - d, ny0, mid - 0.06f - d, ny1, Color_Fill(dc, a));
+            Hud_Rect(mid + 0.06f + d, ny0, mid + 0.06f + h + d, ny1, Color_Fill(dc, a));
+        }
+        else
+        {
+            Hud_Rect(lx + in, ny0, rx - in, ny1, Color_Fill(dc, a * 0.75f));
+            Hud_Frame(lx + in, ny0, rx - in, ny1, 1.4f * PX, Color_Fill(color_white, a * 0.35f));
+        }
+    }
+    if (!r->dim && r->burst >= 0)
+    {
+        // the burn: white, cooling to the row's color, and a beam up the lane
+        float b = (float)r->burst / LL_BURST, fade = 1.f - b;
+        Hud_Rect(lx + 0.05f, line_y, rx - 0.05f, line_y + HW_PITCH, Color_Fill(Color_Mix(color_white, r->color, b), fade));
+        float beam = (2.f + 5.f * Ease_Out(b)) * HW_PITCH, bw = (rx - lx) * (0.5f - 0.3f * b);
+        for (int i = 0; i < 4; i++)
+        {
+            float y = line_y + HW_PITCH + beam * i / 4.f;
+            Hud_Rect(mid - bw, y, mid + bw, y + beam / 4.f, Color_Over(Color_Mix(r->color, color_white, 0.5f), 0.5f * fade * (1.f - i / 4.f)));
+        }
+    }
+
+    if (hot > 0)
+        Hud_Rect(wx0 - 0.2f, wy0 - 0.2f, wx1 + 0.2f, wy1 + 0.2f, Color_Fill(r->color, 0.3f));
+    GXColor fc = hot >= 2 ? color_white : hot ? Color_Mix(r->color, color_white, 0.4f)
+                 : ending ? Color_Mix(dc, color_white, 0.3f)
+                          : Color_Over(color_white, r->dim ? 0.3f : 0.6f);
+    float t = hot >= 2 ? 0.16f : 0.1f;
+    Hud_Frame(wx0, wy0, wx1, wy1, t, fc);
+    Hud_Rect(wx0, wy0, wx1, wy0 + t + 0.06f, fc); // the floor of it, heavier
+    if (!r->dim)
+    {
+        // the hit's ghost; the burn and beam above stand in for the burst's
+        // rays, and the window plays the fold
+        MeterRow e = *r;
+        e.burst = -1;
+        e.implode = -1;
+        Strip_Ending(&e, mid, line_y + HW_PITCH / 2, HW_LANE / 2, HW_PITCH / 2, 1.f, 0);
+    }
+}
+
 // The highway (Fixed Strip): one vertical lane per row, notes falling onto a
 // hit line at the bottom, a row a frame with every fifth one heavier, the
 // label under the lane. The hit line lights while a press is due, and the
@@ -10100,6 +10182,23 @@ static void Highway_Draw(FighterData *fp)
         Hud_Rect(lanes_l - 0.1f, y - e, lanes_r + 0.1f, y + e, Color_Over(color_white, five ? 0.3f : 0.12f));
     }
 
+    // the strikeline: under every lane's window, a tick out past each end
+    // that stretches on the press frame
+    int press = 0;
+    for (int i = 0; i < rows; i++)
+        if (!meter[i].gap && !meter[i].dim && (meter[i].flash >= 0 || meter[i].hot >= 2))
+            press = 1;
+    float tick = press ? 0.6f : 0.35f;
+    GXColor sc = press ? color_white : Color_Over(color_white, 0.45f);
+    // (not into the glyphs' column, where the next input's glyph sits)
+    float tl = glyph > 0 && right ? 0 : tick, tr = glyph > 0 && !right ? 0 : tick;
+    float my = line_y + HW_PITCH / 2;
+    Hud_Rect(lanes_l - 0.12f - tl, line_y - 0.2f, lanes_r + 0.12f + tr, line_y - 0.12f, sc);
+    if (tl > 0)
+        Hud_Rect(lanes_l - 0.12f - tl, my - 0.06f, lanes_l - 0.2f, my + 0.06f, sc);
+    if (tr > 0)
+        Hud_Rect(lanes_r + 0.2f, my - 0.06f, lanes_r + 0.12f + tr, my + 0.06f, sc);
+
     for (int i = 0; i < rows; i++)
     {
         MeterRow *r = &meter[i];
@@ -10111,20 +10210,7 @@ static void Highway_Draw(FighterData *fp)
         Hud_Rect(lx, line_y, rx, line_y + HW_ROWS * HW_PITCH, Color_Over(color_white, 0.05f));
         Hw_Lane(r, glyph_x, lx, line_y);
 
-        int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
-        if (hot > 0)
-        {
-            GXColor fill = Color_Mix(r->color, color_white, hot >= 2 ? 1.f : 0.4f);
-            Hud_Rect(lx - 0.3f, line_y - 0.2f, rx + 0.3f, line_y + HW_PITCH + 0.12f, Color_Fill(r->color, 0.3f));
-            Hud_Rect(lx - 0.15f, line_y - 0.09f, rx + 0.15f, line_y + 0.09f, fill);
-            if (hot >= 2)
-                Hud_Rect(lx - 0.3f, line_y - 0.2f, rx + 0.3f, line_y + 0.2f, color_white); // the press frame
-        }
-        else
-            Hud_Rect(lx - 0.2f, line_y - 0.07f, rx + 0.2f, line_y + 0.07f, Color_Over(color_white, r->dim ? 0.3f : 0.6f));
-
-        if (!r->dim)
-            Strip_Ending(r, (lx + rx) / 2, line_y + HW_PITCH / 2, HW_LANE / 2, HW_PITCH / 2, 1.f, 0);
+        Hw_Window(r, lx, rx, line_y);
         Strip_Label(r, (lx + rx) / 2, y0 + 0.75f, HW_LANE - 0.3f);
     }
     vis_k = base_k;
@@ -10200,8 +10286,19 @@ static void Dial_One(MeterRow *r, float cx, float cy)
             Hud_Seg(cx, cy, hx, hy, 0.2f, Color_Over(hc, al));
         }
     }
-    if (r->implode == 0)
-        Dial_Fan(cx, cy, R - 0.05f, 0, DL_DEG, r->implode_tone == TONE_MISS ? color_miss : color_skip); // the frame that was needed
+    if (r->implode >= 0)
+    {
+        // the frame that was due, kept in the wedge, fading; a miss's split
+        float q = (float)r->implode / LL_FADE, a = 0.9f * (1.f - q);
+        if (r->implode_tone == TONE_MISS)
+        {
+            float d = 4.f * Ease_Out(q);
+            Dial_Fan(cx, cy, R - 0.05f, -d, DL_DEG * 0.5f - 1.f - d, Color_Fill(color_miss, a));
+            Dial_Fan(cx, cy, R - 0.05f, DL_DEG * 0.5f + 1.f + d, DL_DEG + d, Color_Fill(color_miss, a));
+        }
+        else
+            Dial_Fan(cx, cy, R - 0.05f, 0, DL_DEG, Color_Fill(color_skip, a * 0.8f));
+    }
     if (!r->dim)
         Strip_Ending(r, cx, cy, R, R, 1.f, 1);
 }
@@ -17481,7 +17578,8 @@ static void Row_JumpEnd(MeterRow *row)
     else
     {
         row->implode = a;
-        row->implode_tone = TONE_MISS;
+        // a press too soon is a miss; none on the frame is a skip, gray
+        row->implode_tone = jt_end_off > 0 ? TONE_MISS : TONE_SKIP;
         if (jt_end_off > 0)
             sprintf(row->info, "early %d", jt_end_off);
         else

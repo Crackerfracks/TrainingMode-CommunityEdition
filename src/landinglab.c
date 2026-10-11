@@ -17137,7 +17137,8 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
     int driven = sid >= ASID_WALKSLOW && sid <= ASID_RUNBRAKE && sid != ASID_RUNBRAKE;
     // a dash or run speeds up toward its run speed, stick held or not
     int dashrun = sid == ASID_DASH || sid == ASID_RUN;
-    int coast = !dashrun && (fabs(jt_stick_x) < JT_HOP_STILL || !driven);
+    int brake = sid == ASID_RUNBRAKE; // ftCo_RunBrake_Phys: the dash's friction, not the coast's (0.9.2 test)
+    int coast = !dashrun && !brake && (fabs(jt_stick_x) < JT_HOP_STILL || !driven);
     int run_at = dashrun ? Dash_RunAt(fp, sid) : JT_D;
     int off_end = 0;
     gt_steps[0] = (GroundStep){x, y, v};
@@ -17146,6 +17147,8 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
     {
         if (dashrun)
             v += DashRun_Accel(fp, v, jt_stick_x, d >= run_at);
+        else if (brake)
+            v += DashRun_Accel(fp, v, 0, 0);
         else if (coast)
         {
             float friction = fp->attr.ground_friction;
@@ -17645,7 +17648,7 @@ static int Jump_Stride(void)
 #define GL_HEIGHTS 12   // floor heights, relative to the floor jumped from
 #define GL_TOUCH 5      // touchdown frames kept per variant and height
 #define GL_MARGIN 3.f   // how far past a floor's end a touchdown still counts as maybe on it
-#define GL_KEYS 4       // jumping forward or back, facing left or right
+#define GL_KEYS 2       // jumping forward or back
 #define GL_X (JT_SIM + GT_HJ_MAX + 12) // sideways path frames from the takeoff
 typedef struct GlEntry
 {
@@ -17668,15 +17671,23 @@ static int gl_ah[GL_HEIGHTS];  // library height index of each
 static int gl_an;
 static float gl_ay;            // the anchor floor's height
 
+// Facing left is facing right in a mirror: the same heights, with the
+// double jump's up-left and up-right swapped (which one is backwards
+// changes the animation).
 static GlEntry *Gl_Entry(int key, int v, int h)
 {
+    if (jt_start.facing < 0 && v >= 4)
+    {
+        int r = (v - 4) % GT_STILL_STICKS;
+        if (r != JT_UP)
+            v += (r == JT_UPLEFT ? JT_UPRIGHT : JT_UPLEFT) - r;
+    }
     return &gl_lib[(key * GT_STILL_CANDIDATES + v) * GL_HEIGHTS + h];
 }
 
 static int Gl_Key(void)
 {
-    int back = jt_stick_x * jt_start.facing <= -common_jump_back_stick;
-    return back * 2 + (jt_start.facing < 0);
+    return jt_stick_x * jt_start.facing <= -common_jump_back_stick; // jumping backwards
 }
 
 static void Gl_CheckGen(void)

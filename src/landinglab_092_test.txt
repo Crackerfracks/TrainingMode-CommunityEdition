@@ -14,7 +14,7 @@ start -50 0 right
 300
 shot standing after the library build: the plan parked in the JUMP lane
 1 s:0.5,0
-40
+60
 shot standing again: the plan back quickly
 set Jump/Show = 0
 

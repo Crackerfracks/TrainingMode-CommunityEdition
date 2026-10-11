@@ -16218,6 +16218,10 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
                     bottom[n++] = s.bottom;
                 }
             }
+            // a double jump once the hop is coming down: legal, but nobody
+            // plays "SH, then DJ just before landing" (Stephen, 0.9.2)
+            if (s.vy < 0 && !path)
+                return;
             st.skip_line = -1;
             st.stick_x = jt_stick_xy[stick][0];
             st.stick_y = jt_stick_xy[stick][1];

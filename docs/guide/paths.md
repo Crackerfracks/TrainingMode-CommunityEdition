@@ -14,7 +14,7 @@ The Paths menu, in menu order.
 | --- | --- | --- | --- |
 | Landing Path | Off, On | Off | Draws where the bottom of Falcon's ECB goes if you keep holding the stick and press nothing. It uses the landing's color when its cue is on. |
 | Body Path | Off, On | Off | Also draws a dotted line through Falcon's body, which is easier to follow than the ECB bottom. |
-| Ledge Route | Off, On | On | While Falcon hangs on a ledge and on the way back, draws the chosen route's path. Shown with Show Routes or Assist on in Ledge Practice, and for the jump chosen in Jump Timing. |
+| Ledge Route | Off, On | On | While Falcon hangs on a ledge and on the way back, draws the chosen route's path. Shown with Show Routes or Assist on in Ledge Practice. Jump Timing's path has its own toggle there. |
 | Input Markers | Off, On | On | Marks the inputs along the path where each is due, and which aerials interrupt. White: stick. Yellow: jump. Pink: aerial (the C-stick directions that work light up). Cyan: airdodge. |
 | Window Bands | Off, On | On | Shades the stretch of the path where a press works: cyan for a perfect waveland's airdodge, pink for an AI's aerial. Falcon's feet are in it on those frames. |
 | Marker Size | Small, Medium, Large | Medium | How big the input markers and the aerial picker are. |

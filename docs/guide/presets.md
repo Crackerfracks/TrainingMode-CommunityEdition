@@ -2,7 +2,7 @@
 
 Presets save a whole setup so you can switch between them in one step, and pick the one the event starts with.
 
-Four built-in presets, four slots of your own, and User Custom, which saves itself every time you close the menu, whether you meant it to or not.
+Four built-in presets, four slots of your own, and User Custom, which saves itself every time you close the menu after changing something by hand.
 
 <!-- GIF: the quick menu opening over a frozen jump, flipping to another preset card, then the stick playing out of it, at default settings -->
 
@@ -81,7 +81,7 @@ Ledge routes from the ledge, both kinds, reset to the same ledge each time.
 ## Saving and naming
 
 - Save to Preset writes the current settings into the preset chosen in Preset: User Custom or Preset 1 to 4.
-- User Custom is rewritten for you whenever the menu closes with changes, and when you leave the event.
+- User Custom is rewritten for you whenever the menu closes with changes made by hand, and when you leave the event. Loading another preset and leaving it as it is doesn't touch User Custom, so switching back gets your own settings back. Change a setting after loading one, and the result becomes User Custom.
 - Name Preset opens a letter grid. Names are up to 12 letters, and the name shows in the Preset and Load at Start lists.
 - The quick menu can save too. See below.
 
@@ -98,7 +98,7 @@ Name grid inputs (the same grid names camera views):
 
 ## What a preset stores
 
-A preset stores every list, number and toggle in the Cues, Intensity by Group, Rumble, Timers, Paths, HUD, Sounds, Ledge Practice, Jump Timing, Camera and Speed menus. That is 68 options.
+A preset stores every list, number and toggle in the Cues, Intensity by Group, Rumble, Timers, Paths, HUD, Sounds, Ledge Practice, Jump Timing, Camera and Speed menus. That is 70 options.
 
 It does not store:
 

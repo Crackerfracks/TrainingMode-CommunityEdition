@@ -4150,6 +4150,8 @@ enum options_jump
     JOPT_KIND,
     JOPT_TARGET,
     JOPT_LEAD,
+    JOPT_PATH,
+    JOPT_TEXT,
 #ifdef LL_GROUND_GUIDE
     JOPT_BANDS,
     JOPT_MARKS,
@@ -4225,6 +4227,20 @@ static EventOption Options_Jump[JOPT_COUNT] = {
         .desc = {"Only show a jump at least this far ahead, so",
                  "there's time to see it coming. Jumps due sooner",
                  "are left out: there's no time to react to them."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Path",
+        .desc = {"Draw the shown jump's path in its color, with a",
+                 "yellow bar where Falcon is on the jump's frame",
+                 "and a pink one on the aerial's."},
+    },
+    {
+        .kind = OPTKIND_TOGGLE,
+        .name = "Plan Text",
+        .val = 1,
+        .desc = {"Spell the shown jump out in the info panel, as",
+                 "in \"DJ up in 6f, nair f7-9: AI\"."},
     },
 #ifdef LL_GROUND_GUIDE
     {
@@ -4733,8 +4749,8 @@ static EventOption Options_Paths[POPT_COUNT] = {
         .val = 1,
         .desc = {"While Falcon hangs on a ledge and on the way",
                  "back, draw the chosen route's path. Shown with",
-                 "Show Routes or Assist on in Ledge Practice, and",
-                 "for the jump chosen in Jump Timing."},
+                 "Show Routes or Assist on in Ledge Practice.",
+                 "Jump Timing's path has its own toggle there."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -5450,6 +5466,8 @@ static const PresetMenu preset_menus[] = {
 
 static PresetFile *preset_file;    // what's on the card, and what gets written to it
 static PresetSlot *preset_builtin; // [PS_COUNT - PS_SAVED]
+static int preset_active;          // the preset the settings came from
+static PresetSlot *preset_as_set;  // and the settings as it set them
 static u8 preset_dirty;            // preset_file changed since it was last written
 static u8 preset_was_paused;
 static u8 preset_cam_pending; // a preset changed the camera mode
@@ -5563,6 +5581,14 @@ static int Preset_Same(PresetSlot *a, PresetSlot *b)
         if (a->opt[i].key != b->opt[i].key || a->opt[i].val != b->opt[i].val)
             return 0;
     return 1;
+}
+
+// The settings now came from preset which. Until they're changed by hand,
+// closing the menu leaves User Custom alone.
+static void Preset_Use(int which)
+{
+    preset_active = which;
+    Preset_Capture(preset_as_set);
 }
 
 // The built-in presets, as changes to the defaults.
@@ -5713,6 +5739,7 @@ void Event_PresetLoad(GOBJ *menu)
         return;
     }
     Preset_Apply(s);
+    Preset_Use(which);
     OSReport("LLPRESET load %s\n", preset_names[which]);
     SFX_PlayCommon(1);
 }
@@ -5728,6 +5755,7 @@ void Event_PresetSave(GOBJ *menu)
     }
     Preset_Capture(&preset_file->slot[which]);
     preset_dirty = 1;
+    Preset_Use(which);
     OSReport("LLPRESET save %s, %d settings\n", preset_names[which], preset_file->slot[which].num);
     Preset_Describe(which);
     SFX_PlayCommon(1);
@@ -5739,6 +5767,7 @@ static void Presets_Init(void)
 {
     preset_file = calloc(sizeof(PresetFile));
     preset_builtin = calloc(sizeof(PresetSlot) * (PS_COUNT - PS_SAVED));
+    preset_as_set = calloc(sizeof(PresetSlot));
     preset_file->magic = PRESET_MAGIC;
     preset_file->version = PRESET_VERSION;
     preset_file->start = PS_USER;
@@ -5792,6 +5821,7 @@ static void Presets_Loaded(int ok)
     int start = preset_file->start < PS_COUNT ? preset_file->start : PS_USER;
     Options_Presets[PROPT_START].val = start;
     Preset_Apply(Preset_Slot(start));
+    Preset_Use(start);
     OSReport("LLPRESET start %s (%s), card file %s\n", preset_names[start], Preset_Slot(start)->used ? "applied" : "empty", ok ? "read" : "not read");
     Preset_Describe(Options_Presets[PROPT_PICK].val);
 }
@@ -6144,11 +6174,22 @@ static void Card_Flush(void)
     }
 }
 
-// The settings as they are now into User Custom, if they changed.
+// The settings as they are now into User Custom, if they changed. A preset
+// loaded and left as it is doesn't count: User Custom keeps what was made by
+// hand, so going back to it gets that back.
 static void Presets_KeepUser(void)
 {
     PresetSlot now;
     Preset_Capture(&now);
+    if (preset_active != PS_USER && Preset_Same(&now, preset_as_set))
+        return;
+    if (preset_active != PS_USER)
+    {
+        OSReport("LLPRESET %s changed by hand: kept as User Custom\n", preset_names[preset_active]);
+        preset_active = PS_USER;
+        Options_Presets[PROPT_PICK].val = PS_USER;
+        Preset_Describe(PS_USER);
+    }
     if (!Preset_Same(&now, &preset_file->slot[PS_USER]))
     {
         memcpy(&preset_file->slot[PS_USER], &now, sizeof(now));
@@ -17225,7 +17266,8 @@ static void Jump_Publish(FighterData *fp)
     jt_route = *b;
     jt_route_abs = jt_anchor;
     Jump_Path(fp);
-    Jump_Text(&jt_route, e);
+    if (Options_Jump[JOPT_TEXT].val)
+        Jump_Text(&jt_route, e);
 }
 
 // A gate across a path on frame i: a short bar square to it, which the
@@ -17256,7 +17298,7 @@ static void Draw_Gate(Vec2 *pos, float *bottom, int num, int i, GXColor c)
 
 static void Draw_JumpPath(void)
 {
-    if (!Jump_Showing() || !Options_Paths[POPT_ROUTE].val || jt_path_num < 2)
+    if (!Jump_Showing() || !Options_Jump[JOPT_PATH].val || jt_path_num < 2)
         return;
     int from = Jump_E();
     if (from < 0)
@@ -19302,6 +19344,7 @@ static void Chord(int lr, int z, int down)
         }
         Options_Presets[PROPT_PICK].val = cur;
         Preset_Apply(Preset_Slot(cur));
+        Preset_Use(cur);
         Preset_Describe(cur);
         sprintf(buf, "Preset: %s", preset_names[cur]);
         Toast(buf);
@@ -19613,6 +19656,7 @@ static void Deck_Save(int which)
     }
     Preset_Capture(&preset_file->slot[which]);
     preset_dirty = 1;
+    Preset_Use(which);
     Options_Presets[PROPT_PICK].val = which;
     Preset_Describe(which);
     Labels_Refresh();
@@ -19733,6 +19777,7 @@ static void Deck_Think(void)
             }
             Options_Presets[PROPT_PICK].val = cur;
             Preset_Apply(Preset_Slot(cur));
+            Preset_Use(cur);
             Preset_Describe(cur);
             deck.changed = 0;
             Deck_Demo(Fighter_GetGObj(0)->userdata);

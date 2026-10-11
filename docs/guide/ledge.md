@@ -44,7 +44,7 @@ If no route of the chosen kind keeps GALINT, Route shows "none" and its descript
 
 ## Ledge Route path
 
-Paths > Ledge Route draws the chosen route's path, from the hang and on the way back to the stage. It is on at the start. It shows with Show Routes or Assist on, and for the jump picked in Jump Timing. Input Markers and Frame Dots work on it too. See [Paths](paths.md).
+Paths > Ledge Route draws the chosen route's path, from the hang and on the way back to the stage. It is on at the start. It shows with Show Routes or Assist on. The path for Jump Timing's jump has its own toggle, Jump Timing > Path. Input Markers and Frame Dots work on it too. See [Paths](paths.md).
 
 ## Assist
 

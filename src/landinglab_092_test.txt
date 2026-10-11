@@ -68,6 +68,7 @@ set Jump/Show = 1
 set Jump/Kind = 2
 start -50 0 right
 120
+6 s:1,0
 follow 55 s:1,0
 land 150
 set Jump/Show = 0

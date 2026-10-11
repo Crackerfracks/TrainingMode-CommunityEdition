@@ -17605,7 +17605,7 @@ static float Jump_Facing(JumpRoute *r)
 // works as shown. A route's frame k is game frame anchor + k.
 static int follow_fh_until = -1; // a full hop holds jump through the squat
 static int follow_hold_x = -1000; // after the hop or double jump: the stick's x kept (-1000: the step's own)
-static int follow_set_t;
+static int follow_set_t = -100;
 static int follow_aerial_t = -1, follow_aerial; // the aerial, kept from the jump (the route goes once the DJ is used)
 static float follow_face;
 static void Jump_Follow(ScriptInput *in)
@@ -17648,7 +17648,8 @@ static void Jump_Follow(ScriptInput *in)
         follow_aerial = r->aerial;
         follow_face = Jump_Facing(r);
     }
-    if ((r->hop == GT_SH || r->hop == GT_FH) && t == abs + r->hp)
+    // once: a standing plan's hop is always "now", and jump held on is a full hop
+    if ((r->hop == GT_SH || r->hop == GT_FH) && t == abs + r->hp && t > follow_set_t + 10)
     {
         in->buttons |= HSD_BUTTON_X;
         follow_fh_until = r->hop == GT_FH ? t + 6 : -1;

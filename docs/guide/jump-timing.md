@@ -35,7 +35,7 @@ On that path, a yellow gate crosses it where Falcon will be on the jump's frame,
 
 - Set Land On to one target when you are drilling a specific platform. Any picks the quickest landing wherever it is.
 - Kind on Both shows whichever of NIL and AI lets Falcon act sooner.
-- Jump Timing does not search for jumps from the ground in this build. To see a hop from the ground, use Jump Preview in [Paths](paths.md).
+- On the ground, standing still shows what a hop now leads to, parked in the JUMP lane until you take off. Running, dashing or sliding toward a platform's edge shows the double jumps after you go off it, so the note is already moving in the lane before you leave the floor. Hops while you move aren't searched yet.
 - Jump Timing is also a row in the quick menu, so you can switch it on and off between attempts. See [Presets](presets.md).
 
 [Back to the README](../../README.md)

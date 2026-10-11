@@ -15922,6 +15922,15 @@ static int gt_steps_n;
 static int gt_sid;            // the state at the anchor
 static u8 gt_still;           // ... standing still: every frame's hop is the same, so the search tries the
                               // next frame's alone, and the anchor stays while he does
+// Running or sliding off the floor's end (Stephen, 0.8.6: no notes ahead of
+// time on a platform at any speed). gt_edge is the frame he leaves it, -1
+// none; gt_fall is his state as the fall starts, and jt_cache from gt_edge
+// on holds the fall. A run-off candidate is the double jump j frames into
+// it, searched like one in the air, so its notes come up while he still
+// runs, Warning frames ahead, and move toward the gate with him.
+#define GT_RUNOFF 3
+static int gt_edge = -1;
+static SimStart gt_fall;
 
 // Frames since the anchor, as the routes count them: standing still, the
 // anchor is always now.
@@ -16134,7 +16143,8 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
     *n_out = 0;
     if (path)
         *num = 0;
-    if (jt_ground)
+    int air_like = !jt_ground || c->hop == GT_RUNOFF;
+    if (!air_like)
     {
         // d frames on the ground, the press, the squat, the takeoff
         GroundStep *g = &gt_steps[d];
@@ -16198,15 +16208,17 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
     }
     else
     {
-        SimStart st = jt_start;
+        // in the air, or running off the floor's end and falling d - gt_edge frames
+        SimStart st = jt_ground ? gt_fall : jt_start;
         SimState s = jt_cache[d];
         SimStep step;
         if (path)
         {
             for (int i = 0; i <= d; i++)
             {
-                path[n] = (Vec2){jt_cache[i].x, jt_cache[i].y};
-                bottom[n++] = jt_cache[i].bottom;
+                int floor = jt_ground && i < gt_edge;
+                path[n] = floor ? (Vec2){gt_steps[i].x, gt_steps[i].y} : (Vec2){jt_cache[i].x, jt_cache[i].y};
+                bottom[n++] = floor ? 0 : jt_cache[i].bottom;
             }
         }
 
@@ -16257,13 +16269,13 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
     JumpRoute base = {0};
     base.stick = stick;
     base.hold = hold;
-    base.hop = jt_ground ? c->hop : 0;
-    base.hj = jt_ground ? c->hj : -1;
-    base.hp = jt_ground ? d + 1 : 0;
+    base.hop = air_like ? 0 : c->hop;
+    base.hj = air_like ? -1 : c->hj;
+    base.hp = air_like ? 0 : d + 1;
     base.d = d;
-    base.dj = jt_ground && c->hj >= 0 ? off : d + 1;
+    base.dj = !air_like && c->hj >= 0 ? off : d + 1;
     base.press = -1;
-    base.changes = !jt_ground ? Jump_Changes(stick, hold) : c->hj >= 0 ? 1 + Jump_Changes(stick, hold) : 1 + !hold;
+    base.changes = air_like ? Jump_Changes(stick, hold) : c->hj >= 0 ? 1 + Jump_Changes(stick, hold) : 1 + !hold;
 
     int nr = 0;
     if (p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame)
@@ -17024,7 +17036,11 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
     jt_bottom = floor_num > 0 ? low - JT_BOTTOM : -100000.f;
 
     float x = fp->phys.pos.X, y = fp->phys.pos.Y, v = fp->phys.self_vel_ground.X;
-    int coast = fabs(jt_stick_x) < JT_HOP_STILL; // no stick: friction slows him (ft_80084F3C)
+    // no stick, or a state the stick doesn't drive (a waveland's slide):
+    // friction slows him (ft_80084F3C)
+    int driven = sid >= ASID_WALKSLOW && sid <= ASID_RUNBRAKE && sid != ASID_RUNBRAKE;
+    int coast = fabs(jt_stick_x) < JT_HOP_STILL || !driven;
+    int off_end = 0;
     gt_steps[0] = (GroundStep){x, y, v};
     gt_steps_n = 1;
     for (int d = 1; d < JT_D; d++)
@@ -17040,7 +17056,10 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
         Vec2 spot;
         float x0, x1;
         if (!Floor_Under(x, y + 3.f, &spot, &x0, &x1) || fabs(spot.Y - y) > 3.f)
-            break; // off the end of the floor
+        {
+            off_end = 1; // off the end of the floor
+            break;
+        }
         y = spot.Y;
         gt_steps[d] = (GroundStep){x, y, v};
         gt_steps_n = d + 1;
@@ -17049,6 +17068,52 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
     gt_still = coast && fabs(v) < 0.0001f && fabs(gt_steps[0].v) < 0.0001f;
     if (gt_still)
         jt_cache_n = 1;
+
+    // off the end: the frame he goes over keeps the ground's speed as the
+    // air speed with none down, the fall's ECB under a fresh bottom lock
+    // (as Sim_GroundJumpAt's takeoff), and the double jump is the one left
+    gt_edge = -1;
+    int walk = sid == ASID_WALKSLOW || sid == ASID_WALKMIDDLE || sid == ASID_WALKFAST; // walks teeter at the edge
+    if (off_end && !gt_still && !walk && fabs(v) > 0.0001f)
+    {
+        gt_edge = gt_steps_n;
+        SimStart *f = &gt_fall;
+        memset(f, 0, sizeof(*f));
+        f->pos = (Vec2){x, y};
+        f->vel = (Vec2){v, 0};
+        f->stick_x = jt_stick_x;
+        f->stick_y = fp->input.lstick.Y;
+        f->facing = fp->facing_direction;
+        Ecb_FromFighter(fp, &f->ecb);
+        if (Ecb_Get(TS_FALL, 0)->has_shape)
+            Ecb_FromSample(Ecb_Get(TS_FALL, 0), fp->facing_direction, &f->ecb);
+        f->ecb.bottom = 0;
+        Ecb_Fix(&f->ecb);
+        f->ts = TS_FALL;
+        f->len = state_len[TS_FALL];
+        if (f->len == 0)
+        {
+            f->len = LL_GUESS_JUMP_LEN;
+            f->len_estimated = 1;
+        }
+        f->tilt_timer = LL_TIMER_MAX;
+        f->trigger_timer = LL_TIMER_MAX;
+        f->ecb_lock = 9;
+        f->skip_line = -1;
+        SimState s;
+        SimStep step;
+        Sim_Init(f, &s);
+        jt_cache[gt_edge] = s;
+        jt_cache_n = gt_edge + 1;
+        for (int d = gt_edge + 1; d < JT_D; d++)
+        {
+            Sim_Step(fp, f, &s, -1, 0, &step);
+            if (step.landed || step.ceiling)
+                break;
+            jt_cache[d] = s;
+            jt_cache_n = d + 1;
+        }
+    }
 
     jt_next = 0;
     jt_done = 0;
@@ -17075,9 +17140,17 @@ static int Jump_Eligible(FighterData *fp, int ts, int tracked_air)
     if (!Options_Jump[JOPT_SHOW].val)
         return 0;
     if (fp->phys.air_state == 0)
-        return JT_HOP_SETTING != HOP_OFF && Jump_GroundState(fp->state_id) && hang_ledge < 0 &&
-               !route_active && !Options_Ledge[LOPT_ASSIST].val && fabs(fp->phys.self_vel_ground.X) < 0.0001f &&
-               fabs(fp->input.lstick.X) < JT_HOP_STILL; // standing still only
+    {
+        // standing still (the standstill plan), or moving toward the floor's
+        // end (a run-off: run, dash or a waveland's slide)
+        int sid = fp->state_id;
+        int moving = fabs(fp->phys.self_vel_ground.X) >= 0.0001f;
+        if (JT_HOP_SETTING == HOP_OFF || hang_ledge >= 0 || route_active || Options_Ledge[LOPT_ASSIST].val)
+            return 0;
+        if (!moving)
+            return Jump_GroundState(sid) && fabs(fp->input.lstick.X) < JT_HOP_STILL;
+        return Jump_GroundState(sid) || sid == ASID_LANDINGFALLSPECIAL || sid == ASID_LANDING;
+    }
     if (!tracked_air)
         return 0;
     if (ts != TS_FALL && ts != TS_JUMPF && ts != TS_JUMPB)
@@ -17193,6 +17266,7 @@ static void Jump_Carry(FighterData *fp, int ts, int e)
 {
     int steps0 = sim_steps;
     JumpCand keep[2 * JT_CARRY + 1];
+    u8 keep_seen[2 * JT_CARRY + 1]; // the one on screen: it stays, however near its jump now is
     int n = 0, now = event_vars->game_timer;
     for (int k = -1; k < 2; k++)
     {
@@ -17211,7 +17285,10 @@ static void Jump_Carry(FighterData *fp, int ts, int e)
             for (int j = 0; j < n; j++)
                 dup |= keep[j].d == d && keep[j].stick == r->stick && keep[j].hold == r->hold;
             if (!dup)
+            {
+                keep_seen[n] = k < 0;
                 keep[n++] = (JumpCand){d, r->stick, r->hold, 0, -1};
+            }
         }
     }
     int had = jt_have;
@@ -17228,6 +17305,7 @@ static void Jump_Carry(FighterData *fp, int ts, int e)
         {
             if (!Jump_OnTarget(&found[i]))
                 continue;
+            found[i].seen = keep_seen[j];
             Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
             total++;
         }
@@ -17319,7 +17397,30 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
                    fabs(fp->phys.pos.Y - gt_steps[at].y) <= 1.f && Options_Jump[JOPT_TARGET].val == jt_target &&
                    JT_HOP_SETTING == jt_hop;
         if (!same)
+        {
+            // a dash speeds up, so its run-off is anchored again most
+            // frames: the jump shown keeps its frame into the fall, tried
+            // again from the new edge, so it stays up instead of flickering
+            int had = jt_have && jt_active && jt_ground && !gt_still && gt_edge >= 0 && !jt_route.hop;
+            JumpRoute was = jt_route;
+            int j = (jt_route_abs + was.d) - (jt_anchor + gt_edge);
             Jump_AnchorGround(fp, sid);
+            if (had && gt_edge >= 0 && j >= 0 && gt_edge + j < jt_cache_n)
+            {
+                JumpCand c = {gt_edge + j, was.stick, was.hold, GT_RUNOFF, -1};
+                JumpRoute found[JT_TRY];
+                int found_n;
+                Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+                for (int i = 0; i < found_n; i++)
+                {
+                    if (!Jump_OnTarget(&found[i]))
+                        continue;
+                    found[i].seen = 1;
+                    Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+                }
+                jt_have = 1;
+            }
+        }
         else if (!gt_still && e >= JT_REANCHOR)
             Jump_Extend(fp, ts, e);
         jt_hop = JT_HOP_SETTING;
@@ -17336,7 +17437,9 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
             OSReport("LLJUMPA %d air %s e %d tried %d dx %.4f dy %.4f ts %d prev %d\n", event_vars->game_timer, why, e,
                      jt_tries, dx, dy, ts, jt_prev_ts);
         }
-        int seed = jt_ground || !jt_active;
+        // off the floor's end: the run-off's jumps are carried into the fall
+        int runoff = jt_active && jt_ground && !gt_still && gt_edge >= 0;
+        int seed = (jt_ground && !runoff) || !jt_active;
         if (!seed && e >= 0)
             Jump_Carry(fp, ts, e);
         else
@@ -17366,9 +17469,10 @@ static void Jump_Log(void)
 {
     JumpRoute *b = Jump_Pick(-1000); // the best of all, however near
     char buf[320];
-    int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d", jt_anchor,
+    int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d edge %d", jt_anchor,
                     jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
-                    jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found);
+                    jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found,
+                    jt_ground ? gt_edge : -1);
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)
@@ -17436,8 +17540,18 @@ static int Jump_Cand(int i, JumpCand *c)
     c->hold = i % 2;
     if (c->d >= jt_cache_n)
         return -1; // he lands (or the floor ends) before this frame
+    if (jt_ground && gt_edge < 0)
+        return -1; // moving with no edge ahead: hops on the move stay shelved (Stephen, 0.8.3)
+    if (jt_ground && c->d >= gt_edge)
+    {
+        // off the end: the double jump c->d - gt_edge frames into the fall
+        c->hop = GT_RUNOFF;
+        return !(c->stick == JT_UP && c->hold);
+    }
     if (jt_ground)
     {
+        if (c->d < gt_edge)
+            return 0; // still on the floor: no hop from the run (shelved with the ground guide)
         // the slots of the first two sticks are the hops
         if (c->stick != JT_UPLEFT && c->stick != JT_UPRIGHT)
             return 0;

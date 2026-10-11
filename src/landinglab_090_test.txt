@@ -1,0 +1,45 @@
+# 0.9.0 checks: build with LLSCRIPT=src/landinglab_090_test.txt and start the
+# event on Battlefield. Each "shot" freezes the game until D-pad down.
+autorun
+
+# Running off the top platform to the right: while Falcon still runs, the
+# ground anchor sees the edge (LLJUMP anchor ... ground ... edge N, N > 0)
+# and finds double jumps into the fall (found > 0), so the JUMP lane has a
+# note before he leaves the platform. At the edge the shown jump is carried
+# into the fall (LLJUMP carry ... kept > 0) and counts down without a gap.
+script Run off top plat
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start -14 54.4 right
+20
+12 s:1,0
+shot running, still on the platform: a note in the JUMP lane
+20 s:1,0
+land 150
+set Jump/Show = 0
+
+# The same off the right platform's outer edge, from a longer run, so the
+# run reaches full speed (a steady anchor: few LLJUMP anchor lines).
+script Run off right plat
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start 21 27.2 right
+20
+14 s:1,0
+shot running toward the edge
+30 s:1,0
+land 150
+set Jump/Show = 0
+
+# Standing still still parks its plan (0.8.6 behavior unchanged).
+script Standstill plan
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start 0 0 right
+90
+shot standing: the plan parked in the JUMP lane
+land 30
+set Jump/Show = 0

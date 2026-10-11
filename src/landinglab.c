@@ -16588,16 +16588,26 @@ static JumpRoute *Jump_Find(JumpRoute *r, int anchor)
     return 0;
 }
 
-static JumpRoute *Jump_Pick(void)
+// The best jump that may come up now: one whose jump is still Warning
+// frames off. One found in time but not shown then (another was better)
+// would otherwise pop up late, once the one shown went by (Stephen, 0.8.5).
+static JumpRoute *Jump_Pick(int e)
 {
     int kinds = Options_Jump[JOPT_KIND].val;
     JumpRoute *best = 0;
     for (int k = 0; k < 2; k++)
     {
-        if ((k == 0 && kinds == ROUTES_AI) || (k == 1 && kinds == ROUTES_NIL) || jt_best_n[k] == 0)
+        if ((k == 0 && kinds == ROUTES_AI) || (k == 1 && kinds == ROUTES_NIL))
             continue;
-        if (!best || Jump_Better(&jt_best[k][0], best))
-            best = &jt_best[k][0];
+        for (int i = 0; i < jt_best_n[k]; i++)
+        {
+            JumpRoute *x = &jt_best[k][i];
+            if (x->dj - e - 1 < Jump_Lead())
+                continue;
+            if (!best || Jump_Better(x, best))
+                best = x;
+            break; // best first: the rest of this kind are worse
+        }
     }
     return best;
 }
@@ -16865,7 +16875,9 @@ static void Jump_Carry(FighterData *fp, int ts, int e)
                 keep[n++] = (JumpCand){d, r->stick, r->hold, 0, -1};
         }
     }
+    int had = jt_have;
     Jump_Anchor(fp, ts);
+    jt_have = had; // so the one shown is found again among them, not picked afresh
     int found_n = 0, total = 0;
     for (int j = 0; j < n; j++)
     {
@@ -16963,7 +16975,7 @@ static float Jump_Facing(JumpRoute *r)
 // frames counted from the anchor.
 static void Jump_Log(void)
 {
-    JumpRoute *b = Jump_Pick();
+    JumpRoute *b = Jump_Pick(-1000); // the best of all, however near
     char buf[320];
     int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d", jt_anchor,
                     jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
@@ -17165,13 +17177,13 @@ static void Jump_Publish(FighterData *fp)
     }
     int e = Jump_E();
     Jump_Prune(e);
-    JumpRoute *b = Jump_Pick();
+    JumpRoute *b = Jump_Pick(e);
     // The one up stays up while the search goes on: another takes its place
     // only when it acts JT_SWITCH frames sooner and came up no more than
     // JT_SETTLE frames ago, or when it no longer works. (Stephen, 0.8.3: the
     // route changed every frame as the search found slightly better ones.)
     JumpRoute *cur = jt_have ? Jump_Find(&jt_route, jt_route_abs) : 0;
-    if (b && cur && b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))
+    if (cur && (!b || (b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))))
         b = cur;
     jt_have = b != 0;
     if (jt_ground)
@@ -17271,7 +17283,14 @@ static void Row_Jump(MeterRow *row, JumpRoute *r, int e)
 static void Meter_AddJump(void)
 {
     if (!Jump_Showing())
+    {
+        // an empty JUMP lane while Jump Timing is on, so a jump comes in
+        // along a lane that's already there rather than the lane popping
+        // in and out with it (Stephen, 0.8.5)
+        if (Options_Jump[JOPT_SHOW].val && !route_rows_active && hang_ledge < 0)
+            Meter_Add(color_in_jump, "JUMP");
         return;
+    }
     JumpRoute *r = &jt_route;
     int e = Jump_E();
     MeterRow *row;

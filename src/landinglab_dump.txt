@@ -1,0 +1,11 @@
+# Dump for tools/llsim: build with LLSCRIPT=src/landinglab_dump.txt and
+# start the event (test builds go to Battlefield). Writes LLDUMP lines: the
+# common fighter table, Falcon's attributes, and the stage's collision.
+autorun
+
+script Dump
+preset load Defaults
+start -50 0 right
+60
+dump
+10

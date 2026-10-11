@@ -5041,6 +5041,19 @@ static void Text_Plate(float x0, float x1, float y)
     Hud_Rect(x0, y + 0.15f, x1, y + 2.35f, Color_Over(color_plate, 0.72f));
 }
 
+// The y to draw a line of text at so its middle is at mid: a row is 2.5
+// tall at size 0.42, and smaller text sits lower in it.
+static float Text_MidY(float mid, float size)
+{
+    return mid - 1.25f + (0.42f - size) * 2.f;
+}
+
+// A plate from x0 to x1, half tall above and below mid.
+static void Text_PlateAt(float x0, float x1, float mid, float half)
+{
+    Hud_Rect(x0, mid - half, x1, mid + half, Color_Over(color_plate, 0.72f));
+}
+
 ///////////////////////
 /// The meter       ///
 ///////////////////////
@@ -5054,8 +5067,9 @@ static void Text_Plate(float x0, float x1, float y)
 #define MT_WIDE 0.074f   // Wide Cells: a fifth of the mockup's cell width
 #define MT_FIXED 1.5f    // the fixed strip's scale
 #define MT_FIXED_MAX 20  // ... and its most cells, leaving room for the stick
-#define MT_LABEL_W 2.8f   // the fixed strip's longest label at its size
-#define MT_LABEL_GAP 1.25f // from a label's end to the gate, before the scale: past the lit ticks
+#define ST_TEXT 0.36f      // every fixed strip label's and note's text size (Stephen, 0.9.9: they should match)
+#define MT_LABEL_W 2.6f    // the cells' label column: the longest label ("Route", "JUMP") at ST_TEXT
+#define MT_LABEL_GAP 0.95f // from the labels' right edge to the gate, before the scale: past the lit ticks
 
 enum cell_kind
 {
@@ -5577,7 +5591,10 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         if (!meter[i].gap && meter[i].fade > plate_k)
             plate_k = meter[i].fade;
     vis_k = base_k * plate_k;
-    Hud_Rect(gx - 0.32f * scale, base - 0.22f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
+    // (with labels, it reaches over their column too: one panel, no plate
+    // per label to overlap the next row's)
+    float plate_x0 = labels ? gx - MT_LABEL_GAP * scale - MT_LABEL_W - 0.25f : gx - 0.32f * scale;
+    Hud_Rect(plate_x0, base - 0.22f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
 
     // rows from the bottom up, each in its own lane (Meter_Settle)
     for (int i = 0; i < rows; i++)
@@ -5668,7 +5685,7 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         {
             // the press frame: a white flash past the plate, and two ticks
             Hud_Rect(gx - 0.2f * scale, gy0 - 0.45f * scale, gx + cw + 0.2f * scale, gy1 + 0.45f * scale, color_white);
-            Hud_Rect(gx - 1.0f * scale, gcy - 0.06f * scale, gx - 0.4f * scale, gcy + 0.06f * scale, Color_Fill(color_white, 0.9f));
+            Hud_Rect(gx - 0.75f * scale, gcy - 0.06f * scale, gx - 0.4f * scale, gcy + 0.06f * scale, Color_Fill(color_white, 0.9f)); // short of the labels
             Hud_Rect(gx + cw + 0.4f * scale, gcy - 0.06f * scale, gx + cw + 1.0f * scale, gcy + 0.06f * scale, Color_Fill(color_white, 0.9f));
         }
     }
@@ -5715,22 +5732,23 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         {
             float q = (float)r->implode / LL_FADE;
             GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
-            // the cell that was due stays in the gate, fading: whole and gray
-            // for a skip, cracked in two for a miss (Stephen, 0.9.8: a skip
-            // barely showed)
+            // the cell that was due stays in the gate on its own row,
+            // fading: whole and gray for a skip, cracked in two for a miss
+            // (Stephen, 0.9.8: a skip barely showed)
+            float ry0 = base + i * (ch + gap), ry1 = ry0 + ch, rcy = (ry0 + ry1) / 2;
             float a = 0.9f * (1.f - q);
             if (r->implode_tone == TONE_MISS)
             {
-                float d = 0.3f * scale * Ease_Out(q), h = (gy1 - gy0) / 2 - 0.05f * scale;
-                Hud_Rect(gx - 0.05f * scale, gcy + 0.05f * scale + d, gx + cw + 0.05f * scale, gcy + 0.05f * scale + h + d, Color_Fill(dc, a));
-                Hud_Rect(gx - 0.05f * scale, gcy - 0.05f * scale - h - d, gx + cw + 0.05f * scale, gcy - 0.05f * scale - d, Color_Fill(dc, a));
+                float d = 0.25f * scale * Ease_Out(q), h = ch / 2 - 0.05f * scale;
+                Hud_Rect(gx, rcy + 0.05f * scale + d, gx + cw, rcy + 0.05f * scale + h + d, Color_Fill(dc, a));
+                Hud_Rect(gx, rcy - 0.05f * scale - h - d, gx + cw, rcy - 0.05f * scale - d, Color_Fill(dc, a));
             }
             else
-                Hud_Rect(gx - 0.1f * scale, gy0, gx + cw + 0.1f * scale, gy1, Color_Fill(dc, a * 0.8f));
+                Hud_Rect(gx, ry0, gx + cw, ry1, Color_Fill(dc, a * 0.8f));
             float k = 1.f - Ease_Out(q);
-            float hw = (cw / 2 + 0.9f * scale) * k, hh = ((gy1 - gy0) / 2 + 0.6f * scale) * k;
+            float hw = (cw / 2 + 0.7f * scale) * k, hh = (ch / 2 + 0.4f * scale) * k;
             if (hw > 0.05f)
-                Hud_Frame(gcx - hw, gcy - hh, gcx + hw, gcy + hh, 1.4f * PX * scale, Color_Fill(dc, 0.6f * (1.f - q)));
+                Hud_Frame(gcx - hw, rcy - hh, gcx + hw, rcy + hh, 1.4f * PX * scale, Color_Fill(dc, 0.6f * (1.f - q)));
         }
     }
 
@@ -5744,20 +5762,19 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
             continue;
         vis_k = base_k * r->fade;
         float y0 = base + i * (ch + gap);
-        float ty = y0 + ch / 2 - 1.25f;
+        float ty = Text_MidY(y0 + ch / 2, ST_TEXT);
         GXColor tc = Color_Mix(r->color, color_white, 0.35f);
         if (r->dim)
             tc = Color_Fill(tc, 0.6f);
         tc.a = 255;
-        // right-aligned, ending short of the gate's ticks
-        float lx1 = gx - MT_LABEL_GAP * scale, lx0 = lx1 - Text_Width(r->label, 0.42f);
-        Text_Plate(lx0 - 0.2f, lx1 + 0.2f, ty);
-        Hud_Text(r->label, lx0, ty, 0.42f, tc);
+        // right-aligned on its row, just short of the gate's ticks (the
+        // game aligns it, so it can't run long)
+        Hud_TextAligned(r->label, gx - MT_LABEL_GAP * scale, ty, ST_TEXT, tc, 2);
         if (r->info[0])
         {
             float ix = x1 + 0.5f * scale;
-            Text_Plate(ix - 0.2f, ix + Text_Width(r->info, 0.42f) + 0.2f, ty);
-            Hud_Text(r->info, ix, ty, 0.42f, (GXColor){220, 220, 220, 255});
+            Text_PlateAt(ix - 0.2f, ix + Text_Width(r->info, ST_TEXT) + 0.2f, y0 + ch / 2, (ch + gap) / 2);
+            Hud_Text(r->info, ix, ty, ST_TEXT, (GXColor){220, 220, 220, 255});
         }
     }
     vis_k = base_k;
@@ -6088,14 +6105,11 @@ static void Strip_Label(MeterRow *r, float cx, float y, float room)
     if (r->dim)
         tc = Color_Fill(tc, 0.6f);
     tc.a = 255;
-    float size = 0.42f, w = Text_Width(r->label, size);
-    if (w > room)
-    {
-        size *= room / w;
-        w = room;
-    }
-    Text_Plate(cx - w / 2 - 0.2f, cx + w / 2 + 0.2f, y - 1.25f);
-    Hud_Text(r->label, cx - w / 2, y - 1.25f + (0.42f - size) * 2.f, size, tc);
+    // one size for every label, centered by the game on its lane (Stephen,
+    // 0.9.9: JUMP came out smaller and off its lane when it was shrunk to fit)
+    float w = Text_Width(r->label, ST_TEXT);
+    Text_PlateAt(cx - w / 2 - 0.2f, cx + w / 2 + 0.2f, y, 0.85f);
+    Hud_TextAligned(r->label, cx, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 1);
 }
 
 // The dial's wedge, ring and hand are measured in degrees clockwise from
@@ -9893,6 +9907,7 @@ enum script_cmd
     SCMD_VIEW,
     SCMD_BAKE,
     SCMD_TRACE,
+    SCMD_DUMP,
 };
 
 typedef struct ScriptInput
@@ -10188,10 +10203,10 @@ static void Script_Parse(void)
         }
         else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
                  Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset") ||
-                 Script_Is(w, "bake") || Script_Is(w, "trace"))
+                 Script_Is(w, "bake") || Script_Is(w, "trace") || Script_Is(w, "dump"))
         {
             op->kind = SOP_CMD;
-            op->count = w[0] == 't' ? SCMD_TRACE : w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
+            op->count = w[0] == 'd' ? SCMD_DUMP : w[0] == 't' ? SCMD_TRACE : w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
@@ -10657,6 +10672,71 @@ static int Script_Preset(const char *name)
 
 // A step that does what the menu would. The line is copied first: the
 // script can run again.
+// Script command "dump": what the PC build of the sim (tools/llsim) needs
+// from the game, to the log. The common fighter table, Falcon's attributes
+// and special attributes as raw words, the soft landing speed, and the
+// stage's collision: each group's ranges, each line's description (its two
+// flag bytes raw) and flags, and each vertex. tools/llsim/dump.py reads it.
+static void Dump_Words(const char *what, void *data, int bytes)
+{
+    char buf[200];
+    for (int at = 0; at < bytes; at += 32)
+    {
+        char *t = buf + sprintf(buf, "LLDUMP %s %x", what, at);
+        for (int i = at; i < at + 32 && i < bytes; i += 4)
+            t += sprintf(t, " %08x", *(u32 *)((u8 *)data + i));
+        OSReport("%s\n", buf);
+    }
+}
+
+static u32 Float_Bits(float f)
+{
+    union
+    {
+        float f;
+        u32 u;
+    } v = {f};
+    return v.u;
+}
+
+static void Sim_Dump(FighterData *fp)
+{
+    float soft = Fighter_GetSoftLandVelocity(fp);
+    OSReport("LLDUMP begin stage %d char %d\n", Stage_GetExternalID(), fp->kind);
+    Dump_Words("common", *stc_ftcommon, 0x480);
+    Dump_Words("attr", &fp->attr, sizeof(fp->attr));
+    Dump_Words("special", fp->special_attributes, 0x60);
+    OSReport("LLDUMP softland %08x\n", Float_Bits(soft));
+    RawCollLine *lines = (RawCollLine *)*stc_collline;
+    CollVert *verts = *stc_collvert;
+    int line_n = 0, vert_n = 0, g = 0;
+    for (CollGroup *group = *stc_firstcollgroup; group != 0; group = group->next, g++)
+    {
+        CollGroupDesc *d = group->desc;
+        OSReport("LLDUMP group %d %d %d %d %d %d %d %d %d %d %d %d %d %d\n", g, d->floor_start, d->floor_num,
+                 d->ceil_start, d->ceil_num, d->rwall_start, d->rwall_num, d->lwall_start, d->lwall_num,
+                 d->dyn_start, d->dyn_num, d->vert_start, d->vert_num, group->is_enabled);
+        int ends[5] = {d->floor_start + d->floor_num, d->ceil_start + d->ceil_num, d->rwall_start + d->rwall_num,
+                       d->lwall_start + d->lwall_num, d->dyn_start + d->dyn_num};
+        for (int i = 0; i < 5; i++)
+            if (ends[i] > line_n)
+                line_n = ends[i];
+        if (d->vert_start + d->vert_num > vert_n)
+            vert_n = d->vert_start + d->vert_num;
+    }
+    for (int i = 0; i < line_n; i++)
+    {
+        CollLineDesc *d = lines[i].desc;
+        u8 *raw = (u8 *)d;
+        OSReport("LLDUMP line %d %d %d %d %d %d %d %02x %02x %02x %08x\n", i, d->vert_prev, d->vert_next, d->line_prev,
+                 d->line_next, d->line_prev_altgroup, d->line_next_altgroup, raw[0xC], raw[0xD], raw[0xE], lines[i].flags);
+    }
+    for (int i = 0; i < vert_n; i++)
+        OSReport("LLDUMP vert %d %08x %08x %08x %08x\n", i, Float_Bits(verts[i].pos_curr.X), Float_Bits(verts[i].pos_curr.Y),
+                 Float_Bits(verts[i].pos_orig.X), Float_Bits(verts[i].pos_orig.Y));
+    OSReport("LLDUMP end %d lines %d verts\n", line_n, vert_n);
+}
+
 static void Script_Cmd(ScriptOp *op)
 {
     char line[96], buf[160];
@@ -10850,6 +10930,9 @@ static void Script_Cmd(ScriptOp *op)
         break;
     case SCMD_FADE:
         Event_FadeReset(0); // Auto Fade's hit rates from earlier runs
+        break;
+    case SCMD_DUMP:
+        Sim_Dump(Fighter_GetGObj(0)->userdata);
         break;
     case SCMD_BAKE:
 #ifdef LL_GROUND_GUIDE

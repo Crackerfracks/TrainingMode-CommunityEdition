@@ -4173,7 +4173,9 @@ enum jump_target
 // is off (Stephen, 0.8.3 notes: it made him stand still and wait, then sent
 // him to a platform's edge); a guide worked out ahead of time replaces it.
 enum { HOP_OFF, HOP_SHORT, HOP_FULL, HOP_BOTH };
-#define JT_HOP_SETTING HOP_OFF
+// Standing still, both hops are searched and the plan is shown parked until
+// takeoff (Stephen, 0.8.5); moving on the ground, nothing is searched.
+#define JT_HOP_SETTING HOP_BOTH
 
 static const char *jump_target_names[] = {"Any", "Top Platform", "Left Platform", "Right Platform", "Any Platform",
                                           "Main Floor"};
@@ -15534,6 +15536,7 @@ typedef struct JumpRoute
     u8 changes; // stick changes the route asks for
     u8 where;   // what it lands on: JWHERE_* bits
     u8 hop;     // from the ground: GT_SH or GT_FH, 0 for a double jump from the air
+    u8 seen;    // already shown (a standstill plan carried into the air): no Warning cutoff
     s8 hj;      // ... with a double jump hj frames after the takeoff, -1 for the hop alone
     s16 hp;     // ... the frame the hop is pressed on
     u8 d;       // frames of fall before the jump
@@ -16602,7 +16605,7 @@ static JumpRoute *Jump_Pick(int e)
         for (int i = 0; i < jt_best_n[k]; i++)
         {
             JumpRoute *x = &jt_best[k][i];
-            if (x->dj - e - 1 < Jump_Lead())
+            if (x->dj - e - 1 < Jump_Lead() && !x->seen && !(jt_ground && gt_still))
                 continue;
             if (!best || Jump_Better(x, best))
                 best = x;
@@ -16741,7 +16744,8 @@ static int Jump_Eligible(FighterData *fp, int ts, int tracked_air)
         return 0;
     if (fp->phys.air_state == 0)
         return JT_HOP_SETTING != HOP_OFF && Jump_GroundState(fp->state_id) && hang_ledge < 0 &&
-               !route_active && !Options_Ledge[LOPT_ASSIST].val;
+               !route_active && !Options_Ledge[LOPT_ASSIST].val && fabs(fp->phys.self_vel_ground.X) < 0.0001f &&
+               fabs(fp->input.lstick.X) < JT_HOP_STILL; // standing still only
     if (!tracked_air)
         return 0;
     if (ts != TS_FALL && ts != TS_JUMPF && ts != TS_JUMPB)
@@ -16837,8 +16841,11 @@ static void Jump_Seed(FighterData *fp, int ts)
     int found_n;
     Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
     for (int i = 0; i < found_n; i++)
+    {
+        found[i].seen = 1; // shown parked before the takeoff
         if (Jump_OnTarget(&found[i]))
             Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+    }
     if (cue_log)
         OSReport("LLJUMP seed %d d %d stick %d found %d\n", event_vars->game_timer, c.d, c.stick, found_n);
 }
@@ -16907,6 +16914,13 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
     int e = event_vars->game_timer - jt_anchor;
     if (fp->state_id == ASID_KNEEBEND)
         gt_squat_short = fp->state_var.state_var1 != 0; // let go of the jump: a short hop
+    if (fp->state_id == ASID_KNEEBEND && jt_active && jt_ground && gt_still)
+    {
+        // the jumpsquat: the standstill plan stays parked until the takeoff
+        jt_prev_ts = ts;
+        jt_prev_tilt = (u8)fp->input.timer_lstick_tilt_y;
+        return;
+    }
     if (!Jump_Eligible(fp, ts, tracked_air))
     {
         // why not, once a second, while it's on and Falcon is in the air
@@ -17177,6 +17191,11 @@ static void Jump_Publish(FighterData *fp)
     }
     int e = Jump_E();
     Jump_Prune(e);
+    if (jt_ground && gt_still && !jt_done)
+    {
+        jt_have = 0; // standing still: the plan comes up once, when the search is through, and stays
+        return;
+    }
     JumpRoute *b = Jump_Pick(e);
     // The one up stays up while the search goes on: another takes its place
     // only when it acts JT_SWITCH frames sooner and came up no more than
@@ -17294,6 +17313,32 @@ static void Meter_AddJump(void)
     JumpRoute *r = &jt_route;
     int e = Jump_E();
     MeterRow *row;
+    if (r->hop)
+    {
+        // standing still: what a hop now leads to, parked and dim, laid out
+        // as it will be at the takeoff, in the lanes the air countdown uses,
+        // so it starts moving where it sits when Falcon leaves the ground
+        int t0 = r->hj >= 0 ? r->dj - r->hj - 1 : r->hp; // the takeoff
+        row = Meter_Add(color_in_jump, "JUMP");
+        if (!row)
+            return;
+        row->fade = 0.5f;
+        if (r->hj >= 0)
+        {
+            for (int n = t0 + 1; n < r->dj; n++)
+                Route_Cell(row, -t0 - 1, n, CELL_AIR, 0);
+            Route_Cell(row, -t0 - 1, r->dj, CELL_PRESS, GLYPH_JUMP);
+        }
+        sprintf(row->info, "%s", r->hop == GT_SH ? "SH" : "FH");
+        route_rows_active = 1;
+        jump_rows_active = 1;
+        row = Meter_Add(land_kind_colors[r->kind], r->kind == LAND_AI ? "AI" : "NIL");
+        if (!row)
+            return;
+        row->fade = 0.5f * Fade_Factor(VG_TIMERS, r->kind == LAND_AI ? CUE_AI : CUE_NIL);
+        Row_Jump(row, r, t0);
+        return;
+    }
     // from the ground: the hop's row, then (with a double jump) the jump's
     for (int step = r->hop ? 0 : 1; step < 2; step++)
     {

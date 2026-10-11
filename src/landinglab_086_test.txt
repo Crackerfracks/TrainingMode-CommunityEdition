@@ -1,0 +1,36 @@
+# 0.8.6 checks: build with LLSCRIPT=src/landinglab_086_test.txt and start the
+# event on Battlefield. Each "shot" freezes the game until D-pad down.
+autorun
+
+# Standing still under the top platform: once its search is through
+# (LLJUMP anchor ... ground still done), Jump Timing parks its plan, dim, in
+# the JUMP and NIL/AI lanes: "if you hop now". A full hop: the plan is seeded
+# into the air search at takeoff (LLJUMP seed ... found > 0) and counts down
+# from there (an LLJUMPR line right after the seed, its dj under 20), with
+# no Warning cutoff.
+script Standstill plan
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start 0 0 right
+90
+shot standing: the plan parked and dim in the JUMP lane, path and gates drawn
+5 X
+2
+shot just after takeoff: the same notes, now moving
+land 150
+set Jump/Show = 0
+
+# A fall with drift changes: the shown jump survives the stick moving
+# (LLJUMP carry ... kept > 0) and no route comes up under 20 frames out
+# unless it was shown already.
+script Drift keeps the jump
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+air -38 75 right 0 0 0
+6
+4 s:0.5,0
+4 s:0,0
+land 150
+set Jump/Show = 0

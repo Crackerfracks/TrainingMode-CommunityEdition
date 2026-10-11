@@ -89,6 +89,10 @@ mex_build() {
     # Battlefield, as the test scripts are written for it
     if [ -n "${LLSCRIPT}" ]; then
         opt="${opt} -DLL_TEST_STAGE"
+        # LLSTAGE picks another stage (a GRKINDEXT_ name), LLCHAR another
+        # fighter (a CKIND_ name), for the data dumps (tools/llsim)
+        if [ -n "${LLSTAGE}" ]; then opt="${opt} -DLL_TEST_STAGE_ID=${LLSTAGE}"; fi
+        if [ -n "${LLCHAR}" ]; then opt="${opt} -DLL_TEST_CHAR=${LLCHAR}"; fi
     fi
 
     warn="-Wall -Wextra -Wno-char-subscripts -Wno-builtin-declaration-mismatch -Wno-unused-parameter"

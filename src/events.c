@@ -305,9 +305,15 @@ EventDesc LandingLab = {
         .hmn = CSSID_CAPTAIN_FALCON,
         .cpu = -1,
     },
+#ifdef LL_TEST_CHAR
+    .playerKind = LL_TEST_CHAR, // a data dump build's fighter, in place of the one picked
+#else
     .playerKind = -1,
+#endif
     .cpuKind = -1,
-#ifdef LL_TEST_STAGE
+#ifdef LL_TEST_STAGE_ID
+    .stage = LL_TEST_STAGE_ID, // a data dump build's stage
+#elif defined(LL_TEST_STAGE)
     .stage = GRKINDEXT_BATTLE, // test builds skip the stage select
 #else
     .stage = -1,

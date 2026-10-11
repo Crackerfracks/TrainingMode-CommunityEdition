@@ -1,0 +1,52 @@
+# Character capture for tools/llsim: build with
+#   LLSCRIPT=src/landinglab_capture.txt LLCHAR=CKIND_<NAME> [LLSTAGE=...]
+# and start the event. It dumps the fighter and stage (LLDUMP), then plays
+# each tracked animation whole while held in the air, learning its ECB
+# frame by frame from a clean slate, and writes the table (LLECB, LLLEN).
+# Kirby and Jigglypuff's air jumps are their own states and aren't caught.
+autorun
+
+script Capture
+preset load Defaults
+set Jump/Show = 0
+start 0 0 right
+60
+dump
+capture
+
+# the jump forward from the ground, then its fall
+10 X
+hover 0 100
+80
+# the jump backward from the top platform
+hover off
+land 120
+20
+10 X s:-1,0
+hover 0 100
+80
+
+# double jumps forward and back, into FallAerial
+refill
+1 X
+80
+refill
+1 X s:-1,0
+80
+
+# the aerials, each whole, then the airdodge into the helpless fall
+1 A
+80
+1 c:1,0
+80
+1 c:-1,0
+80
+1 c:0,1
+80
+1 c:0,-1
+80
+1 L
+90
+dumpecb
+hover off
+land 120

@@ -9908,6 +9908,10 @@ enum script_cmd
     SCMD_BAKE,
     SCMD_TRACE,
     SCMD_DUMP,
+    SCMD_HOVER,
+    SCMD_CAPTURE,
+    SCMD_DUMPECB,
+    SCMD_REFILL,
 };
 
 typedef struct ScriptInput
@@ -10203,10 +10207,12 @@ static void Script_Parse(void)
         }
         else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
                  Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset") ||
-                 Script_Is(w, "bake") || Script_Is(w, "trace") || Script_Is(w, "dump"))
+                 Script_Is(w, "bake") || Script_Is(w, "trace") || Script_Is(w, "dump") || Script_Is(w, "hover") ||
+                 Script_Is(w, "capture") || Script_Is(w, "dumpecb") || Script_Is(w, "refill"))
         {
             op->kind = SOP_CMD;
-            op->count = w[0] == 'd' ? SCMD_DUMP : w[0] == 't' ? SCMD_TRACE : w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
+            op->count = Script_Is(w, "dumpecb") ? SCMD_DUMPECB : Script_Is(w, "refill") ? SCMD_REFILL : w[0] == 'h' ? SCMD_HOVER : Script_Is(w, "capture") ? SCMD_CAPTURE
+                      : w[0] == 'd' ? SCMD_DUMP : w[0] == 't' ? SCMD_TRACE : w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }
         else if (Script_Is(w, "wl") || Script_Is(w, "ai") || Script_Is(w, "land"))
@@ -10516,6 +10522,9 @@ static int Script_PlaceLedge(GOBJ *ft, ScriptOp *op)
 static void Script_Next(void);
 
 static void Script_End(void);
+// Capturing a character's ECB (script commands hover, capture, dumpecb).
+static int hover_on, capture_on;
+static float hover_x, hover_y;
 
 // Post-collision snapshot at event priority 15, before event overrides. Three
 // bounded physical records form one logical FRAME. Never indexes tracked data.
@@ -10589,6 +10598,8 @@ static void Script_End(void)
     }
     script_trace = 0;
     script_trace_end_pending = 0;
+    hover_on = 0;
+    capture_on = 0;
     Script *sc = &scripts[script_cur];
     sprintf(buf, "LLSCRIPT end %s at %d, last landing: %s\n", sc->name, event_vars->game_timer, text_last);
     Log(buf);
@@ -10735,6 +10746,43 @@ static void Sim_Dump(FighterData *fp)
         OSReport("LLDUMP vert %d %08x %08x %08x %08x\n", i, Float_Bits(verts[i].pos_curr.X), Float_Bits(verts[i].pos_curr.Y),
                  Float_Bits(verts[i].pos_orig.X), Float_Bits(verts[i].pos_orig.Y));
     OSReport("LLDUMP end %d lines %d verts\n", line_n, vert_n);
+}
+
+// Each frame after the learning: held at the hover spot.
+static void Hover_Think(FighterData *fp)
+{
+    if (!hover_on)
+        return;
+    fp->phys.pos.X = hover_x;
+    fp->phys.pos.Y = hover_y;
+    fp->phys.self_vel.X = 0;
+    fp->phys.self_vel.Y = 0;
+    fp->coll_data.u.ecb_bot_lock_frames = 0;
+}
+
+// Script command "dumpecb": the learned ECB of every tracked state, frame by
+// frame (LLECB ts frame flags bottom top side front back, the floats as
+// bits; flags as in BakedEcb), and how long each state ran before ending by
+// itself (LLLEN ts len next).
+static void Ecb_Dump(FighterData *fp)
+{
+    char buf[160];
+    OSReport("LLECB begin char %d\n", fp->kind);
+    for (int ts = 0; ts < TS_COUNT; ts++)
+    {
+        for (int f = 0; f < LL_STATE_FRAMES; f++)
+        {
+            EcbSample *e = Ecb_Slot(ts, f);
+            if (!e->seen)
+                continue;
+            int flags = (e->has_bottom ? BAKED_BOTTOM : 0) | (e->has_shape ? BAKED_SHAPE : 0) | (e->aerial_lag ? BAKED_LAG : 0);
+            sprintf(buf, "LLECB %d %d %d %08x %08x %08x %08x %08x\n", ts, f, flags, Float_Bits(e->bottom),
+                    Float_Bits(e->top), Float_Bits(e->side_y), Float_Bits(e->front), Float_Bits(e->back));
+            OSReport("%s", buf);
+        }
+        OSReport("LLLEN %d %d %d\n", ts, state_len[ts], state_next[ts]);
+    }
+    OSReport("LLECB end\n");
 }
 
 static void Script_Cmd(ScriptOp *op)
@@ -10933,6 +10981,39 @@ static void Script_Cmd(ScriptOp *op)
         break;
     case SCMD_DUMP:
         Sim_Dump(Fighter_GetGObj(0)->userdata);
+        break;
+    case SCMD_HOVER:
+    {
+        // hover x y: held there from now on (still, no bottom lock), so
+        // whole animations play in the air; hover off lets go
+        char *a = Script_Word(&rest), *b = Script_Word(&rest);
+        if (a && Script_Is(a, "off"))
+            hover_on = 0;
+        else
+        {
+            ok = a && b;
+            if (ok)
+            {
+                hover_x = Script_Number(&a);
+                hover_y = Script_Number(&b);
+                hover_on = 1;
+            }
+        }
+        break;
+    }
+    case SCMD_CAPTURE:
+        // forget everything, baked data too: what's learned from here on is
+        // this character's own
+        Learned_Clear();
+        capture_on = 1;
+        break;
+    case SCMD_DUMPECB:
+        Ecb_Dump(Fighter_GetGObj(0)->userdata);
+        break;
+    case SCMD_REFILL:
+        // the jumps back, once (a double jump to capture): left alone
+        // otherwise, so a double jump still falls into FallAerial
+        ((FighterData *)Fighter_GetGObj(0)->userdata)->jump.jumps_used = 1;
         break;
     case SCMD_BAKE:
 #ifdef LL_GROUND_GUIDE
@@ -16806,6 +16887,9 @@ static void Event_ThinkFrame(GOBJ *event)
     prev_lock = fp->coll_data.u.ecb_bot_lock_frames;
     prev_wl_late = live_visible && Cues_Waveland() && pred_live->wl_late && pred_live->wl_first == 1;
     prev_vel = (Vec2){fp->phys.self_vel.X, fp->phys.self_vel.Y};
+    Hover_Think(fp);
+    if (hover_on)
+        prev_vel = (Vec2){0, 0};
 
     Drill_Think();
     // Finish only after the old frame's learning and landing resolution;

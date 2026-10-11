@@ -1754,6 +1754,8 @@ static int Lines_Connected(int start, int target)
 // next one?
 static int Floor_PastEnd(int id, float x)
 {
+    if (id < 0)
+        return 0; // the hop library's endless floor
     Vec2 *v0 = Line_V0(id), *v1 = Line_V1(id);
     int rightward = v0->X < v1->X;
     float lo = rightward ? v0->X : v1->X, hi = rightward ? v1->X : v0->X;
@@ -16139,10 +16141,13 @@ typedef struct JumpCand
     int hold;  // after the double jump (or the hop): keep its x
     int hop;   // on the ground: GT_SH or GT_FH
     int hj;    // ... a double jump this many frames after the takeoff, or -1
+    int v;     // ... which of the standstill variants (Gt_Variant) it is
 } JumpCand;
 
+static u8 jt_try_predicted; // the last Jump_Try got as far as its prediction (pred_route is its)
 static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, Vec2 *path, float *bottom, int *num)
 {
+    jt_try_predicted = 0;
     int d = c->d, stick = c->stick, hold = c->hold;
     SimStart ps;
     int n = 0, off;
@@ -16253,6 +16258,7 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
         sim_stop_vy = Fighter_GetSoftLandVelocity(fp) - 0.001f;
     int steps0 = sim_steps;
     Predict(fp, &ps, pred_route, BR_AI);
+    jt_try_predicted = 1;
     jt_steps += sim_steps - steps0;
     jt_tries++;
     sim_rising_only = 0;
@@ -16911,8 +16917,10 @@ static void Jump_Prune(int e)
         int n = 0;
         for (int i = 0; i < jt_best_n[k]; i++)
         {
-            if (Jump_First(&jt_best[k][i]) > e)
-                jt_best[k][n++] = jt_best[k][i];
+            // a hop with a double jump stays through the jumpsquat
+            JumpRoute *r = &jt_best[k][i];
+            if ((r->hop == GT_SH || r->hop == GT_FH) && r->hj >= 0 ? r->dj > e : Jump_First(r) > e)
+                jt_best[k][n++] = *r;
         }
         jt_best_n[k] = n;
     }
@@ -16955,7 +16963,7 @@ static JumpRoute *Jump_Pick(int e)
         for (int i = 0; i < jt_best_n[k]; i++)
         {
             JumpRoute *x = &jt_best[k][i];
-            if (x->dj - e - 1 < Jump_Lead() && !x->seen && !(jt_ground && gt_still))
+            if (Jump_First(x) - e - 1 < Jump_Lead() && !x->seen && !(jt_ground && gt_still))
                 continue;
             if (!best || Jump_Better(x, best))
                 best = x;
@@ -17016,6 +17024,10 @@ static void Jump_Anchor(FighterData *fp, int ts)
 
 // The same from the ground: where Falcon goes as he stands, walks or runs
 // with the stick held as it is, until the floor under him ends.
+static void Gl_Anchor(FighterData *fp);
+static int gl_builds, gl_pass, gl_skip;
+static int Gt_Variant(int i, JumpCand *c);
+
 // A dash or run's speed change this frame (ftCo_Dash_Phys, ftCo_Run_Phys,
 // ftCommon_CalcGroundAccel_DashRun): toward the stick's share of the run
 // speed, eased off as a run nears it
@@ -17203,6 +17215,7 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
             jt_cache_n = d + 1;
         }
     }
+    Gl_Anchor(fp);
 
     jt_next = 0;
     jt_done = 0;
@@ -17328,7 +17341,7 @@ static void Jump_Seed(FighterData *fp, int ts)
     gt_plan_ok = 0;
     if (gt_plan.hop != (gt_squat_short ? GT_SH : GT_FH))
         return;
-    JumpCand c = {gt_plan.hj - frame_in_state, gt_plan.stick, gt_plan.hold, 0, -1};
+    JumpCand c = {gt_plan.hj - frame_in_state, gt_plan.stick, gt_plan.hold, 0, -1, 0};
     if (c.d < 0 || c.d >= jt_cache_n)
         return;
     JumpRoute found[JT_TRY];
@@ -17376,7 +17389,7 @@ static void Jump_Carry(FighterData *fp, int ts, int e)
             if (!dup)
             {
                 keep_seen[n] = k < 0;
-                keep[n++] = (JumpCand){d, r->stick, r->hold, 0, -1};
+                keep[n++] = (JumpCand){d, r->stick, r->hold, 0, -1, 0};
             }
         }
     }
@@ -17456,9 +17469,11 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
     int e = event_vars->game_timer - jt_anchor;
     if (fp->state_id == ASID_KNEEBEND)
         gt_squat_short = fp->state_var.state_var1 != 0; // let go of the jump: a short hop
-    if (fp->state_id == ASID_KNEEBEND && jt_active && jt_ground && gt_still)
+    if (fp->state_id == ASID_KNEEBEND && jt_active && jt_ground && (gt_still || (jt_have && jt_route.hop == GT_SH) ||
+                                                                     (jt_have && jt_route.hop == GT_FH)))
     {
-        // the jumpsquat: the standstill plan stays parked until the takeoff
+        // the jumpsquat: the standstill plan stays parked, and a hop on the
+        // move keeps counting, until the takeoff
         jt_prev_ts = ts;
         jt_prev_tilt = (u8)fp->input.timer_lstick_tilt_y;
         return;
@@ -17499,7 +17514,7 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
             Jump_AnchorGround(fp, sid);
             if (had && gt_edge >= 0 && j >= 0 && gt_edge + j < jt_cache_n)
             {
-                JumpCand c = {gt_edge + j, was.stick, was.hold, GT_RUNOFF, -1};
+                JumpCand c = {gt_edge + j, was.stick, was.hold, GT_RUNOFF, -1, 0};
                 JumpRoute found[JT_TRY];
                 int found_n;
                 Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
@@ -17565,6 +17580,8 @@ static void Jump_Log(void)
                     jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
                     jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found,
                     jt_ground ? gt_edge : -1);
+    if (jt_ground)
+        n += sprintf(buf + n, " lib pass %d skip %d builds %d", gl_pass, gl_skip, gl_builds);
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)
@@ -17594,20 +17611,332 @@ static void Jump_Log(void)
 #define GT_STILL_STICKS 3
 #define GT_STILL_CANDIDATES (4 + GT_HJ_MAX * 2 * GT_STILL_STICKS)
 
+#define GT_STRIDE (GT_STILL_CANDIDATES + JT_STICKS * 2) // moving: a frame's hops, then its run-off double jumps
+
 static int Jump_Total(void)
 {
-    return jt_ground && gt_still ? GT_STILL_CANDIDATES : JT_CANDIDATES;
+    return jt_ground && gt_still ? GT_STILL_CANDIDATES : jt_ground ? JT_D * GT_STRIDE : JT_CANDIDATES;
+}
+
+// Candidates per frame of the anchor, for skipping the ones already gone by.
+static int Jump_Stride(void)
+{
+    return jt_ground ? GT_STRIDE : JT_STICKS * 2;
+}
+
+///////////////////////
+/// Hop library     ///
+///////////////////////
+
+// Hops from the ground at any speed (Stephen, 0.8.6: notes "grounded at any
+// speed, on platform surfaces at any speed"). A hop has GT_STILL_CANDIDATES
+// variants and a run has a hop start on every frame, too many to predict.
+// But how high Falcon is never depends on how fast he moves sideways
+// (gravity, jumps, fastfall and the states' lengths are all vertical; only
+// jumping forward or back changes the animation, so the ECB), so whether a
+// variant can NIL or AI onto a floor h above the takeoff, and on which
+// frames, is the same from anywhere at any speed. The library predicts each
+// variant once against an endless flat floor at each height the stage has,
+// with no walls or ceilings, and keeps the touchdown frames. A candidate
+// then only needs its sideways path, which is cheap, to see whether a
+// touchdown falls on a real floor at that height; only those get the real
+// prediction, so what's shown is exact and the library only picks what's
+// worth trying. Plan: landing-trainer/plan-hop-library.md.
+#define GL_HEIGHTS 12   // floor heights, relative to the floor jumped from
+#define GL_TOUCH 5      // touchdown frames kept per variant and height
+#define GL_MARGIN 3.f   // how far past a floor's end a touchdown still counts as maybe on it
+#define GL_KEYS 4       // jumping forward or back, facing left or right
+#define GL_X (JT_SIM + GT_HJ_MAX + 12) // sideways path frames from the takeoff
+typedef struct GlEntry
+{
+    u8 built;
+    u8 unsure; // the prediction relied on unlearned ECB frames: always worth trying
+    u8 n;
+    u8 t[GL_TOUCH]; // touchdown frames from the hop's press frame (d = 0)
+} GlEntry;
+static GlEntry *gl_lib; // [GL_KEYS][GT_STILL_CANDIDATES][GL_HEIGHTS]
+static float gl_hval[GL_HEIGHTS];
+static u8 gl_hplat[GL_HEIGHTS];
+static int gl_hnum;
+static int gl_gen = -1; // the options the library was built under
+static int gl_build_steps;
+static int gl_idle_v, gl_idle_h; // where the background build is
+static int gl_idle_sig = -1;     // ... for which key and rows
+
+// The heights of the anchor's floor's neighbors, as library rows
+static int gl_ah[GL_HEIGHTS];  // library height index of each
+static int gl_an;
+static float gl_ay;            // the anchor floor's height
+
+static GlEntry *Gl_Entry(int key, int v, int h)
+{
+    return &gl_lib[(key * GT_STILL_CANDIDATES + v) * GL_HEIGHTS + h];
+}
+
+static int Gl_Key(void)
+{
+    int back = jt_stick_x * jt_start.facing <= -common_jump_back_stick;
+    return back * 2 + (jt_start.facing < 0);
+}
+
+static void Gl_CheckGen(void)
+{
+    int gen = ai_only | (ai_show_all << 8);
+    if (gen == gl_gen)
+        return;
+    gl_gen = gen;
+    memset(gl_lib, 0, sizeof(GlEntry) * GL_KEYS * GT_STILL_CANDIDATES * GL_HEIGHTS);
+    gl_hnum = 0;
+    gl_idle_v = gl_idle_h = 0;
+}
+
+// The floors' heights from the anchor's floor, as library height rows
+static void Gl_DjPaths(FighterData *fp);
+static int gl_path_d = -1;
+static void Gl_Anchor(FighterData *fp)
+{
+    Gl_CheckGen();
+    gl_path_d = -1;
+    gl_pass = gl_skip = 0;
+    Gl_DjPaths(fp);
+    gl_an = 0;
+    gl_ay = gt_steps[0].y;
+    for (int i = 0; i < floor_num; i++)
+    {
+        FloorLine *f = &floor_cache[i];
+        float h = (f->y0 + f->y1) * 0.5f - gl_ay;
+        int k;
+        for (k = 0; k < gl_hnum; k++)
+            if (fabs(gl_hval[k] - h) < 0.05f && gl_hplat[k] == f->is_platform)
+                break;
+        if (k == gl_hnum)
+        {
+            if (gl_hnum >= GL_HEIGHTS)
+                continue;
+            gl_hval[gl_hnum] = h;
+            gl_hplat[gl_hnum++] = f->is_platform;
+        }
+        int dup = 0;
+        for (int j = 0; j < gl_an; j++)
+            dup |= gl_ah[j] == k;
+        if (!dup && gl_an < GL_HEIGHTS)
+            gl_ah[gl_an++] = k;
+    }
+    // the background build starts over for a new set of rows
+    int sig = Gl_Key();
+    for (int j = 0; j < gl_an; j++)
+        sig = sig * 31 + gl_ah[j] + 1;
+    if (sig != gl_idle_sig)
+    {
+        gl_idle_sig = sig;
+        gl_idle_v = gl_idle_h = 0;
+    }
+}
+
+// One library entry: the variant from a standstill at 0, 0 onto an endless
+// floor at that height
+static void Gl_Build(FighterData *fp, int key, int v, int h)
+{
+    GlEntry *g = Gl_Entry(key, v, h);
+    JumpCand c;
+    memset(g, 0, sizeof(*g));
+    g->built = 1;
+    Gt_Variant(v, &c); // built whatever the hop setting, so a change needs no rebuild
+    c.d = 0;
+    FloorLine vf = {-100000.f, gl_hval[h], 100000.f, gl_hval[h], -2, gl_hplat[h]};
+    FloorLine *fc = floor_cache;
+    int fn = floor_num, cn = ceil_num, w0 = wall_num[0], w1 = wall_num[1];
+    GroundStep g0 = gt_steps[0];
+    float bot = jt_bottom;
+    int edge = gt_edge;
+    floor_cache = &vf;
+    floor_num = 1;
+    ceil_num = 0;
+    wall_num[0] = wall_num[1] = 0;
+    gt_steps[0] = (GroundStep){0, 0, 0};
+    jt_bottom = (gl_hval[h] < 0 ? gl_hval[h] : 0) - JT_BOTTOM;
+    gt_edge = -1;
+    int steps0 = sim_steps;
+    JumpRoute found[JT_TRY];
+    int found_n;
+    Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+    gl_build_steps += sim_steps - steps0;
+    gl_builds++;
+    floor_cache = fc;
+    floor_num = fn;
+    ceil_num = cn;
+    wall_num[0] = w0;
+    wall_num[1] = w1;
+    gt_steps[0] = g0;
+    jt_bottom = bot;
+    gt_edge = edge;
+    if (jt_try_predicted)
+    {
+        Prediction *p = pred_route;
+        if (p->uncertain_from <= (p->land_frame ? p->land_frame : p->num))
+            g->unsure = 1;
+    }
+    for (int i = 0; i < found_n && g->n < GL_TOUCH; i++)
+    {
+        int t = found[i].land;
+        int dup = 0;
+        for (int j = 0; j < g->n; j++)
+            dup |= g->t[j] == t;
+        if (!dup && t > 0 && t < 256)
+            g->t[g->n++] = t;
+    }
+}
+
+// Sideways only: where Falcon is each frame on from x, vx in state ts
+// (frame, len), the stick at first for the first step and rest after. Mirrors
+// Sim_Step's x: a state running out, the fall's clamp, drift.
+static void Gl_Steps(FighterData *fp, float x, float vx, int ts, int frame, int len, float first, float rest, float *out,
+                     int n)
+{
+    float stick = first;
+    out[0] = x;
+    for (int k = 1; k < n; k++)
+    {
+        frame++;
+        if (len > 0 && frame >= len)
+        {
+            int next = Tracked_Next(ts);
+            if (next == TS_FALL)
+            {
+                float max = fp->attr.aerial_drift_max;
+                vx = vx < -max ? -max : vx > max ? max : vx;
+            }
+            ts = next;
+            frame = 0;
+            len = state_len[ts];
+        }
+        vx += Drift_Accel(fp, vx, stick);
+        x += vx;
+        out[k] = x;
+        stick = rest;
+    }
+}
+
+// From a frame's takeoff: x k frames on with the stick kept (gl_pre_sx) or
+// let go (gl_pre_0); and, per anchor, x n frames after a double jump from
+// 0 for each standstill stick (it sets the speed, so what came before
+// doesn't matter)
+static float *gl_pre_sx, *gl_pre_0; // [GL_X]
+static float *gl_dj;                // [GT_STILL_STICKS][GL_X]
+static int gl_path_hop, gl_path_until;
+
+static void Gl_DjPaths(FighterData *fp)
+{
+    for (int st = 0; st < GT_STILL_STICKS; st++)
+    {
+        float dj_x = jt_stick_xy[st][0];
+        int ts = dj_x * fp->facing_direction > -common_jump_back_stick ? TS_JUMPAERIALF : TS_JUMPAERIALB;
+        int len = state_len[ts] ? state_len[ts] : LL_GUESS_JUMP_LEN;
+        // Gt_Variant holds the x of a sideways double jump, lets go of an up one
+        Gl_Steps(fp, 0, dj_x * fp->attr.air_jump_h_multiplier, ts, -1, len, dj_x, st != JT_UP ? dj_x : 0,
+                 &gl_dj[st * GL_X], GL_X);
+    }
+}
+
+// Whether a moving candidate is worth predicting: one of its touchdowns
+// from the library falls on a real floor at that height.
+static int Gl_Worth(FighterData *fp, JumpCand *c, int build)
+{
+    int key = Gl_Key();
+    int v = c->v;
+    // the library rows first: one not built yet means it can't say
+    int any = 0;
+    for (int j = 0; j < gl_an; j++)
+    {
+        GlEntry *g = Gl_Entry(key, v, gl_ah[j]);
+        if (!g->built)
+        {
+            if (!build)
+                return 1;
+            Gl_Build(fp, key, v, gl_ah[j]);
+        }
+        if (g->unsure)
+            return 1;
+        any |= g->n > 0;
+    }
+    if (!any)
+        return 0;
+
+    GroundStep *gs = &gt_steps[c->d];
+    if (gl_path_d != c->d || gl_path_hop != c->hop)
+    {
+        SimStart ps;
+        gl_path_until = Sim_GroundJumpAt(fp, c->hop == GT_SH, gs->x, gs->y, gs->v, jt_stick_x, 1, &ps, 0);
+        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, jt_stick_x, jt_stick_x, gl_pre_sx, GL_X);
+        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, 0, 0, gl_pre_0, GL_X);
+        gl_path_d = c->d;
+        gl_path_hop = c->hop;
+    }
+    for (int j = 0; j < gl_an; j++)
+    {
+        GlEntry *g = Gl_Entry(key, v, gl_ah[j]);
+        float y = gs->y + gl_hval[gl_ah[j]];
+        for (int i = 0; i < g->n; i++)
+        {
+            int k = g->t[i] - gl_path_until; // frames after the takeoff
+            float x;
+            if (c->hj < 0)
+            {
+                if (k < 1 || k >= GL_X)
+                    continue;
+                x = (c->hold ? gl_pre_sx : gl_pre_0)[k];
+            }
+            else
+            {
+                int n = k - c->hj; // frames from the double jump's own, which is 1
+                if (c->hj >= GL_X || n < 1 || n >= GL_X)
+                    continue;
+                x = gl_pre_sx[c->hj] + gl_dj[c->stick * GL_X + n];
+            }
+            for (int f = 0; f < floor_num; f++)
+            {
+                FloorLine *fl = &floor_cache[f];
+                float fy = (fl->y0 + fl->y1) * 0.5f;
+                float lo = fl->x0 < fl->x1 ? fl->x0 : fl->x1, hi = fl->x0 < fl->x1 ? fl->x1 : fl->x0;
+                if (fabs(fy - y) < 0.1f && x >= lo - GL_MARGIN && x <= hi + GL_MARGIN)
+                    return 1;
+            }
+        }
+    }
+    return 0;
+}
+
+// While nothing else searches: build the library for where Falcon stands,
+// so his hops are ready before he moves.
+static void Gl_Idle(FighterData *fp, int budget)
+{
+    if (!jt_ground || gl_an == 0)
+        return;
+    int key = Gl_Key(), start = sim_steps, t0 = OSGetTick();
+    while (gl_idle_v < GT_STILL_CANDIDATES && sim_steps - start < budget &&
+           OSTicksToMicroseconds(OSGetTick() - t0) < LR_TIME_US)
+    {
+        GlEntry *g = Gl_Entry(key, gl_idle_v, gl_ah[gl_idle_h]);
+        if (!g->built || g->unsure)
+            Gl_Build(fp, key, gl_idle_v, gl_ah[gl_idle_h]);
+        if (++gl_idle_h >= gl_an)
+        {
+            gl_idle_h = 0;
+            if (++gl_idle_v >= GT_STILL_CANDIDATES && cue_log)
+                OSReport("LLLIB built key %d heights %d: %d predictions, %d steps\n", key, gl_an, gl_builds,
+                         gl_build_steps);
+        }
+    }
 }
 
 // Candidate i: 1 to try it, 0 to skip it, -1 when none after it can work.
-static int Jump_Cand(int i, JumpCand *c)
+static int Gt_Variant(int i, JumpCand *c)
 {
     int want = JT_HOP_SETTING;
     c->hj = -1;
     c->stick = JT_UP;
-    if (jt_ground && gt_still)
+    c->v = i;
     {
-        c->d = 0;
         if (i < 4)
         {
             c->hop = i < 2 ? GT_SH : GT_FH;
@@ -17627,34 +17956,44 @@ static int Jump_Cand(int i, JumpCand *c)
         }
         return !((c->hop == GT_SH && want == HOP_FULL) || (c->hop == GT_FH && want == HOP_SHORT));
     }
+}
+
+static int Jump_Cand(int i, JumpCand *c)
+{
+    if (jt_ground && gt_still)
+    {
+        c->d = 0;
+        return Gt_Variant(i, c);
+    }
+    c->hj = -1;
+    if (jt_ground)
+    {
+        // moving: each frame's hops (every standstill variant), then its
+        // double jumps off the floor's end
+        c->d = i / GT_STRIDE;
+        int v = i % GT_STRIDE;
+        if (c->d >= jt_cache_n)
+            return -1; // the floor ends, or the steps run out, before this frame
+        if (v < GT_STILL_CANDIDATES)
+        {
+            if (gt_edge >= 0 && c->d >= gt_edge)
+                return 0;
+            return Gt_Variant(v, c);
+        }
+        v -= GT_STILL_CANDIDATES;
+        if (gt_edge < 0 || c->d < gt_edge)
+            return 0;
+        // off the end: the double jump c->d - gt_edge frames into the fall
+        c->stick = v / 2;
+        c->hold = v % 2;
+        c->hop = GT_RUNOFF;
+        return !(c->stick == JT_UP && c->hold);
+    }
     c->d = i / (JT_STICKS * 2);
     c->stick = (i / 2) % JT_STICKS;
     c->hold = i % 2;
     if (c->d >= jt_cache_n)
-        return -1; // he lands (or the floor ends) before this frame
-    if (jt_ground && gt_edge < 0)
-        return -1; // moving with no edge ahead: hops on the move stay shelved (Stephen, 0.8.3)
-    if (jt_ground && c->d >= gt_edge)
-    {
-        // off the end: the double jump c->d - gt_edge frames into the fall
-        c->hop = GT_RUNOFF;
-        return !(c->stick == JT_UP && c->hold);
-    }
-    if (jt_ground)
-    {
-        if (c->d < gt_edge)
-            return 0; // still on the floor: no hop from the run (shelved with the ground guide)
-        // the slots of the first two sticks are the hops
-        if (c->stick != JT_UPLEFT && c->stick != JT_UPRIGHT)
-            return 0;
-        c->hop = c->stick == JT_UPLEFT ? GT_SH : GT_FH;
-        c->stick = JT_UP;
-        if ((c->hop == GT_SH && want == HOP_FULL) || (c->hop == GT_FH && want == HOP_SHORT))
-            return 0;
-        if (c->hold && fabs(jt_stick_x) < JT_HOP_STILL)
-            return 0;
-        return 1;
-    }
+        return -1; // he lands before this frame
     c->hop = 0;
     return !(c->stick == JT_UP && c->hold); // up has no x to keep
 }
@@ -17673,8 +18012,8 @@ static void Jump_Solve(FighterData *fp)
     int t0 = OSGetTick();
     while (jt_next < total && sim_steps - start < JT_BUDGET)
     {
-        if (!(jt_ground && gt_still) && jt_next < (e + Jump_Lead()) * JT_STICKS * 2)
-            jt_next = (e + Jump_Lead()) * JT_STICKS * 2;
+        if (!(jt_ground && gt_still) && jt_next < (e + Jump_Lead()) * Jump_Stride())
+            jt_next = (e + Jump_Lead()) * Jump_Stride();
         if (jt_next >= total)
             break;
         JumpCand c;
@@ -17686,6 +18025,15 @@ static void Jump_Solve(FighterData *fp)
         }
         if (!ok)
             continue;
+        // a hop: only when the library says it may land on something (moving,
+        // its rows are built as needed; standing, once built in the background)
+        if (jt_ground && (c.hop == GT_SH || c.hop == GT_FH) && !Gl_Worth(fp, &c, !gt_still))
+        {
+            gl_skip++;
+            continue;
+        }
+        if (jt_ground && (c.hop == GT_SH || c.hop == GT_FH))
+            gl_pass++;
         JumpRoute found[JT_TRY];
         int found_n;
         Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
@@ -17716,7 +18064,7 @@ static void Jump_Path(FighterData *fp)
         return;
     JumpRoute found[JT_TRY];
     int found_n;
-    JumpCand c = {r->d, r->stick, r->hold, r->hop, r->hj};
+    JumpCand c = {r->d, r->stick, r->hold, r->hop, r->hj, 0};
     Jump_Try(fp, &c, found, &found_n, jt_path, jt_path_bottom, &jt_path_num);
     if (jt_path_num > r->land + 1 && r->land > 0)
         jt_path_num = r->land + 1; // up to its own touchdown
@@ -17793,7 +18141,7 @@ static void Jump_Publish(FighterData *fp)
     jt_have = b != 0;
     if (jt_ground)
     {
-        gt_plan_ok = b && gt_still && b->hop && b->hj >= 0;
+        gt_plan_ok = b && (b->hop == GT_SH || b->hop == GT_FH) && b->hj >= 0; // its double jump goes on after the takeoff
         if (gt_plan_ok)
             gt_plan = *b;
     }
@@ -17904,7 +18252,7 @@ static void Meter_AddJump(void)
     JumpRoute *r = &jt_route;
     int e = Jump_E();
     MeterRow *row;
-    if (r->hop)
+    if (r->hop && gt_still)
     {
         // standing still: what a hop now leads to, parked and dim, laid out
         // as it will be at the takeoff, in the lanes the air countdown uses,
@@ -17937,7 +18285,8 @@ static void Meter_AddJump(void)
             break;
         int at = step == 0 ? r->hp : r->dj;
         int until = at - e - 1; // cells to the press: 0 is the next frame
-        row = Meter_Add(color_in_jump, step == 0 ? (r->hop == GT_SH ? "SH" : "FH") : r->hop ? "DJ" : "JUMP");
+        // the double jump in the JUMP lane, as it goes on in the air after the takeoff
+        row = Meter_Add(color_in_jump, step == 0 ? (r->hop == GT_SH ? "SH" : "FH") : "JUMP");
         if (!row)
             return;
         for (int n = e + 1; n < at; n++)
@@ -17947,7 +18296,7 @@ static void Meter_AddJump(void)
             row->hot = 2;
         if (until > 0)
             sprintf(row->info, "%df", until);
-        else
+        else if (until == 0)
             sprintf(row->info, "now");
         if (step == 1 && until >= 0)
         {
@@ -19688,6 +20037,11 @@ void Event_Init(GOBJ *gobj)
     route_path_bottom = calloc(sizeof(float) * LR_PATH);
     jt_cache = calloc(sizeof(SimState) * JT_D);
     gt_steps = calloc(sizeof(GroundStep) * JT_D);
+    gl_lib = calloc(sizeof(GlEntry) * GL_KEYS * GT_STILL_CANDIDATES * GL_HEIGHTS);
+    gl_pre_sx = calloc(sizeof(float) * GL_X);
+    gl_pre_0 = calloc(sizeof(float) * GL_X);
+    gl_dj = calloc(sizeof(float) * GT_STILL_STICKS * GL_X);
+    gl_gen = -1;
 #ifdef LL_GROUND_GUIDE
     gd_mem = (u8 *)(((u32)calloc(GD_STRIDE * GD_SLOTS + 32) + 31) & ~31);
     for (int j = 0; j < GD_SLOTS; j++)
@@ -19946,6 +20300,8 @@ static void Event_ThinkFrame(GOBJ *event)
     int t_solve = OSGetTick();
     Jump_Solve(fp);
     Jump_Publish(fp);
+    if (jt_active && jt_ground && jt_done && Options_Jump[JOPT_SHOW].val)
+        Gl_Idle(fp, LR_BUDGET); // the hop library, in the frames the jump search leaves
 #ifdef LL_GROUND_GUIDE
     if (!jt_active || jt_done)
         Guide_Solve(fp); // worked out once, in the frames the jump search leaves

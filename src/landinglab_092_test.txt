@@ -1,0 +1,49 @@
+# 0.9.2 checks: build with LLSCRIPT=src/landinglab_092_test.txt and start the
+# event on Battlefield. Each "shot" freezes the game until D-pad down.
+autorun
+
+# Standing still first: the plan comes up (LLJUMP anchor ... ground still
+# done), then the hop library builds in the frames left over (LLLIB built
+# ... predictions, steps). The second standstill anchor after it should be
+# done much sooner (lib pass small, skip large).
+script Standstill and library
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+300
+shot standing after the library build: the plan parked in the JUMP lane
+1 s:0.5,0
+40
+shot standing again: the plan back quickly
+set Jump/Show = 0
+
+# Running under the platforms: hops on the move. LLJUMP anchor ... ground
+# lines with found > 0 and LLJUMPR ... hop 1 or 2 lines; the lane has an SH
+# or FH row counting down, with a JUMP row under it for a double jump.
+script Run under platforms
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+300
+14 s:1,0
+shot running toward the platforms: an SH or FH note counting down
+30 s:1,0
+20
+set Jump/Show = 0
+
+# Running left off the right platform's inner edge, under the top platform:
+# a double jump up from the fall reaches it. LLJUMP anchor ... ground ...
+# edge N with found > 0 before the edge, LLJUMP carry ... kept > 0 at it.
+script Run off right plat inward
+preset load Defaults
+set Jump/Show = 1
+set Jump/Kind = 2
+start 50 27.2 left
+300
+10 s:-1,0
+shot running left toward the inner edge: a note in the JUMP lane
+20 s:-1,0
+land 150
+set Jump/Show = 0

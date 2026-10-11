@@ -17014,7 +17014,14 @@ static void Jump_Log(void)
 // stick is kept. Standing still, every frame's hop is the same, so the
 // hops alone come first, then each hop with a double jump on each of its
 // frames (the stick of the double jump, and keeping its x or not).
-#define GT_STILL_CANDIDATES (4 + 2 * JT_D * JT_STICKS * 2)
+// Standing still: the hops alone, then for each double jump frame up to
+// GT_HJ_MAX after the takeoff, both hops with the double jump straight up,
+// or up and over either way holding that side. All of JT_D frames and every
+// stick took over two seconds standing still (0.8.6 test: 599 of 924 tried
+// in 94 frames), so the plan never came up.
+#define GT_HJ_MAX 30
+#define GT_STILL_STICKS 3
+#define GT_STILL_CANDIDATES (4 + GT_HJ_MAX * 2 * GT_STILL_STICKS)
 
 static int Jump_Total(void)
 {
@@ -17039,15 +17046,13 @@ static int Jump_Cand(int i, JumpCand *c)
         }
         else
         {
+            static const u8 still_sticks[GT_STILL_STICKS] = {JT_UP, JT_UPLEFT, JT_UPRIGHT};
             i -= 4;
-            c->hj = i / (2 * JT_STICKS * 2); // the double jump's frame first, both hops at each
-            i %= 2 * JT_STICKS * 2;
-            c->hop = i < JT_STICKS * 2 ? GT_SH : GT_FH;
-            i %= JT_STICKS * 2;
-            c->stick = i / 2;
-            c->hold = i % 2;
-            if (c->stick == JT_UP && c->hold)
-                return 0;
+            c->hj = i / (2 * GT_STILL_STICKS); // the double jump's frame first, both hops at each
+            i %= 2 * GT_STILL_STICKS;
+            c->hop = i < GT_STILL_STICKS ? GT_SH : GT_FH;
+            c->stick = still_sticks[i % GT_STILL_STICKS];
+            c->hold = c->stick != JT_UP;
         }
         return !((c->hop == GT_SH && want == HOP_FULL) || (c->hop == GT_FH && want == HOP_SHORT));
     }

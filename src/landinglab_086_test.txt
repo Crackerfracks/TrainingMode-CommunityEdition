@@ -28,7 +28,7 @@ script Drift keeps the jump
 preset load Defaults
 set Jump/Show = 1
 set Jump/Kind = 2
-air -38 75 right 0 0 0
+air -38 120 right 0 0 0
 6
 4 s:0.5,0
 4 s:0,0

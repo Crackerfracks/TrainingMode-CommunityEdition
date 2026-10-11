@@ -1,8 +1,8 @@
 # Jump Timing
 
-Jump Timing shows, while Falcon falls with his double jump left, when to jump and which aerial to press to land.
+Jump Timing shows, while Falcon falls with his double jump left, when to jump and which aerial to press to land. On the ground it also shows what a hop leads to, standing still or on the move.
 
-Jump Timing also tried to work from the ground once. It's in the Confessions.
+Jump Timing also tried to work from the ground once and gave up. It's in the Confessions. It's back now, and this time it's cheating: every hop is worked out once per platform height, then just slid sideways to wherever you are.
 
 <!-- GIF: Fountain of Dreams, Falcon falls past a platform and the Jump Timing cue shows the double jump and the nair for an AI, with Show turned on -->
 
@@ -35,7 +35,10 @@ On that path, a yellow gate crosses it where Falcon will be on the jump's frame,
 
 - Set Land On to one target when you are drilling a specific platform. Any picks the quickest landing wherever it is.
 - Kind on Both shows whichever of NIL and AI lets Falcon act sooner.
-- On the ground, standing still shows what a hop now leads to, parked in the JUMP lane until you take off. Running, dashing or sliding toward a platform's edge shows the double jumps after you go off it, so the note is already moving in the lane before you leave the floor. Hops while you move aren't searched yet.
+- On the ground, standing still shows what a hop now leads to, parked in the JUMP lane until you take off.
+- Walking, dashing or running, it assumes you keep going as you are. A HOP lane counts down to the frame to short hop (SH) or full hop (FH), and the JUMP lane under it counts to the double jump.
+- Running or sliding toward a platform's edge also shows the double jumps after you go off it, so the note is already moving in the lane before you leave the floor.
+- The first time you stand on a new floor height, the hops take a few seconds to work out. After that they come up almost at once.
 - Jump Timing is also a row in the quick menu, so you can switch it on and off between attempts. See [Presets](presets.md).
 
 [Back to the README](../../README.md)

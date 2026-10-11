@@ -18297,7 +18297,8 @@ static void Meter_AddJump(void)
         int at = step == 0 ? r->hp : r->dj;
         int until = at - e - 1; // cells to the press: 0 is the next frame
         // the double jump in the JUMP lane, as it goes on in the air after the takeoff
-        row = Meter_Add(color_in_jump, step == 0 ? (r->hop == GT_SH ? "SH" : "FH") : "JUMP");
+        // one HOP lane for either hop (0.9.2 test: SH and FH lanes both stayed up)
+        row = Meter_Add(color_in_jump, step == 0 ? "HOP" : "JUMP");
         if (!row)
             return;
         for (int n = e + 1; n < at; n++)
@@ -18305,10 +18306,11 @@ static void Meter_AddJump(void)
         Route_Cell(row, -e - 1, at, CELL_PRESS, GLYPH_JUMP);
         if (until == 0)
             row->hot = 2;
+        const char *what = step == 0 ? (r->hop == GT_SH ? "SH " : "FH ") : "";
         if (until > 0)
-            sprintf(row->info, "%df", until);
+            sprintf(row->info, "%s%df", what, until);
         else if (until == 0)
-            sprintf(row->info, "now");
+            sprintf(row->info, "%snow", what);
         if (step == 1 && until >= 0)
         {
             jt_due = until;

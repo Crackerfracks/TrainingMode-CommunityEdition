@@ -57,6 +57,9 @@
 #define COMMON_AERIAL_STICK_Y 0xE0  // float
 #define COMMON_AERIAL_ANGLE 0x20    // float, radians: steeper than this is an uair or dair
 #define COMMON_RUN_FRICTION 0x6C    // float: ground friction multiplier above walk speed
+#define COMMON_RUN_STICK 0x58       // float: stick x * facing >= this turns a dash into a run
+#define COMMON_RUN_TAPER 0x5C       // float: how much a run's speed-up eases off toward its top speed
+#define COMMON_DASHRUN_FRICTION 0x60 // float: friction multiplier while a dash or run turns or slows
 #define COMMON_JUMP_BACK_STICK 0x78 // float: stick x * facing <= -this jumps backwards
 #define COMMON_DODGE_DEADZONE 0x32C // Vec2: stick inside both is a neutral airdodge
 #define COMMON_DODGE_FORCE 0x338    // float: airdodge starting speed
@@ -2418,6 +2421,9 @@ static float common_aerial_stick_x;
 static float common_aerial_stick_y;
 static float common_aerial_angle;
 static float common_run_friction;
+static float common_run_stick;
+static float common_run_taper;
+static float common_dashrun_friction;
 static float common_jump_back_stick;
 static Vec2 common_dodge_deadzone;
 static float common_dodge_force;
@@ -17010,6 +17016,84 @@ static void Jump_Anchor(FighterData *fp, int ts)
 
 // The same from the ground: where Falcon goes as he stands, walks or runs
 // with the stick held as it is, until the floor under him ends.
+// A dash or run's speed change this frame (ftCo_Dash_Phys, ftCo_Run_Phys,
+// ftCommon_CalcGroundAccel_DashRun): toward the stick's share of the run
+// speed, eased off as a run nears it
+static float DashRun_Accel(FighterData *fp, float v, float stick, int run)
+{
+    float b = fp->attr.dashrun_acceleration_b;
+    float accel = stick * fp->attr.dashrun_acceleration_a + (stick > 0 ? b : -b);
+    float target = stick * fp->attr.dashrun_terminal_velocity;
+    float friction = fp->attr.ground_friction * common_dashrun_friction;
+    float vmax = fp->attr.grounded_max_horizontal_velocity;
+    if (target == 0)
+        return fabs(friction) > fabs(v) ? -v : v > 0 ? -friction : friction;
+    if (run)
+    {
+        float f = v / target;
+        if (f > 0 && f < 1)
+            accel *= (1 - f) * common_run_taper;
+    }
+    if (v * accel < 0)
+        return accel;
+    if (accel > 0)
+    {
+        if (v + accel > target)
+        {
+            accel = -friction;
+            if (v + accel < target)
+                accel = target - v;
+            if (v + accel > vmax)
+                accel = vmax - v;
+        }
+    }
+    else if (v + accel < target)
+    {
+        accel = friction;
+        if (v + accel > target)
+            accel = target - v;
+        if (v + accel < -vmax)
+            accel = -vmax - v;
+    }
+    return accel;
+}
+
+// The dash animation frame a held dash turns into a run on, learned from
+// the first one seen (the dash's script sets the flag that allows it)
+static float dash_run_frame = -1;
+static float dash_last_frame = -1;
+static void Dash_Learn(FighterData *fp, int sid, int prev_sid)
+{
+    if (prev_sid == ASID_DASH && sid == ASID_RUN && dash_last_frame >= 0 && dash_run_frame < 0)
+    {
+        dash_run_frame = dash_last_frame + 1;
+        if (cue_log)
+            OSReport("LLDASH run from dash frame %.0f\n", dash_run_frame);
+    }
+    dash_last_frame = sid == ASID_DASH ? fp->state.frame : -1;
+}
+
+// Frames from now until a dash's speed-up eases off as a run's does
+static int Dash_RunAt(FighterData *fp, int sid)
+{
+    if (sid == ASID_RUN)
+        return 1;
+    if (sid != ASID_DASH || fp->input.lstick.X * fp->facing_direction < common_run_stick)
+        return JT_D; // stays a dash
+    if (fp->ftcmd_var.flag0)
+        return 1;
+    float at = dash_run_frame;
+    if (at < 0)
+    {
+        Figatree *anim = fp->figatree_curr;
+        if (!anim)
+            return JT_D;
+        at = anim->frame_num; // a guess until one is seen
+    }
+    int k = (int)(at - fp->state.frame + 0.999f);
+    return k < 1 ? 1 : k;
+}
+
 static void Jump_AnchorGround(FighterData *fp, int sid)
 {
     jt_active = 1;
@@ -17039,13 +17123,18 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
     // no stick, or a state the stick doesn't drive (a waveland's slide):
     // friction slows him (ft_80084F3C)
     int driven = sid >= ASID_WALKSLOW && sid <= ASID_RUNBRAKE && sid != ASID_RUNBRAKE;
-    int coast = fabs(jt_stick_x) < JT_HOP_STILL || !driven;
+    // a dash or run speeds up toward its run speed, stick held or not
+    int dashrun = sid == ASID_DASH || sid == ASID_RUN;
+    int coast = !dashrun && (fabs(jt_stick_x) < JT_HOP_STILL || !driven);
+    int run_at = dashrun ? Dash_RunAt(fp, sid) : JT_D;
     int off_end = 0;
     gt_steps[0] = (GroundStep){x, y, v};
     gt_steps_n = 1;
     for (int d = 1; d < JT_D; d++)
     {
-        if (coast)
+        if (dashrun)
+            v += DashRun_Accel(fp, v, jt_stick_x, d >= run_at);
+        else if (coast)
         {
             float friction = fp->attr.ground_friction;
             if (fabs(v) > fp->attr.walk_maximum_velocity)
@@ -17401,6 +17490,9 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
             // a dash speeds up, so its run-off is anchored again most
             // frames: the jump shown keeps its frame into the fall, tried
             // again from the new edge, so it stays up instead of flickering
+            if (cue_log && jt_active && jt_ground && at < gt_steps_n)
+                OSReport("LLJUMPG %d reanchor sid %d was %d e %d dx %.4f v %.4f model %.4f\n", event_vars->game_timer,
+                         sid, gt_sid, e, fp->phys.pos.X - gt_steps[at].x, fp->phys.self_vel_ground.X, gt_steps[at].v);
             int had = jt_have && jt_active && jt_ground && !gt_still && gt_edge >= 0 && !jt_route.hop;
             JumpRoute was = jt_route;
             int j = (jt_route_abs + was.d) - (jt_anchor + gt_edge);
@@ -19556,6 +19648,9 @@ void Event_Init(GOBJ *gobj)
     common_aerial_stick_y = Common_Float(COMMON_AERIAL_STICK_Y);
     common_aerial_angle = Common_Float(COMMON_AERIAL_ANGLE);
     common_run_friction = Common_Float(COMMON_RUN_FRICTION);
+    common_run_stick = Common_Float(COMMON_RUN_STICK);
+    common_run_taper = Common_Float(COMMON_RUN_TAPER);
+    common_dashrun_friction = Common_Float(COMMON_DASHRUN_FRICTION);
     common_jump_back_stick = Common_Float(COMMON_JUMP_BACK_STICK);
     common_dodge_deadzone.X = Common_Float(COMMON_DODGE_DEADZONE);
     common_dodge_deadzone.Y = Common_Float(COMMON_DODGE_DEADZONE + 4);
@@ -19836,6 +19931,7 @@ static void Event_ThinkFrame(GOBJ *event)
 
     Ledge_Think(fp, sid);
     Drop_Think(fp, sid, prev_state_id);
+    Dash_Learn(fp, sid, prev_state_id);
     Assist_Think(fp, sid);
     // dropping through a platform (Pass) falls as a fall does: Jump Timing
     // takes it as one, so its jumps show from the drop on

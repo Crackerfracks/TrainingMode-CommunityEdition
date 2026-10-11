@@ -19,8 +19,10 @@ shot running, still on the platform: a note in the JUMP lane
 land 150
 set Jump/Show = 0
 
-# The same off the right platform's outer edge, from a longer run, so the
-# run reaches full speed (a steady anchor: few LLJUMP anchor lines).
+# The same off the right platform's outer edge, from a dash out of a
+# standstill. 0.9.1 models the dash and run speeding up, so the anchor holds
+# through the dash: LLDASH logs the dash frame the run starts on, and the
+# LLJUMPG reanchor lines (which give the miss as dx) should be rare after it.
 script Run off right plat
 preset load Defaults
 set Jump/Show = 1

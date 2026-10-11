@@ -4271,7 +4271,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
         .name = "Plan Text",
         .val = 1,
         .desc = {"Spell the shown jump out in the info panel, as",
-                 "in \"DJ up in 6f, nair f7-9: AI\"."},
+                 "in \"DJ up in 6f, nair +11-13: AI\"."},
     },
 #ifdef LL_GROUND_GUIDE
     {
@@ -15888,6 +15888,7 @@ typedef struct JumpRoute
     u8 hop;     // from the ground: GT_SH or GT_FH, 0 for a double jump from the air
     u8 seen;    // already shown (a standstill plan carried into the air): no Warning cutoff
     s8 hj;      // ... with a double jump hj frames after the takeoff, -1 for the hop alone
+    u8 late;    // ... and that double jump comes once the hop is falling
     s16 hp;     // ... the frame the hop is pressed on
     u8 d;       // frames of fall before the jump
     s16 dj;     // frame of the double jump
@@ -16078,6 +16079,8 @@ static int Jump_Better(JumpRoute *a, JumpRoute *b)
         return a->valid;
     if (!a->valid)
         return 0;
+    if (a->late != b->late)
+        return b->late;
     if (a->act != b->act)
         return a->act < b->act;
     if (Jump_Wide(a) != Jump_Wide(b))
@@ -16166,6 +16169,7 @@ static u8 jt_try_predicted; // the last Jump_Try got as far as its prediction (p
 static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, Vec2 *path, float *bottom, int *num)
 {
     jt_try_predicted = 0;
+    int late_dj = 0;
     int d = c->d, stick = c->stick, hold = c->hold;
     SimStart ps;
     int n = 0, off;
@@ -16218,10 +16222,9 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
                     bottom[n++] = s.bottom;
                 }
             }
-            // a double jump once the hop is coming down: legal, but nobody
-            // plays "SH, then DJ just before landing" (Stephen, 0.9.2)
-            if (s.vy < 0 && !path)
-                return;
+            // a double jump once the hop is coming down ranks after the
+            // rest (Stephen, 0.9.2: a mindgame, not a habit)
+            late_dj = s.vy < 0;
             st.skip_line = -1;
             st.stick_x = jt_stick_xy[stick][0];
             st.stick_y = jt_stick_xy[stick][1];
@@ -16310,6 +16313,7 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
     base.dj = !air_like && c->hj >= 0 ? off : d + 1;
     base.press = -1;
     base.changes = air_like ? Jump_Changes(stick, hold) : c->hj >= 0 ? 1 + Jump_Changes(stick, hold) : 1 + !hold;
+    base.late = late_dj;
 
     int nr = 0;
     if (p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame)
@@ -17602,10 +17606,29 @@ static float Jump_Facing(JumpRoute *r)
 static int follow_fh_until = -1; // a full hop holds jump through the squat
 static int follow_hold_x = -1000; // after the hop or double jump: the stick's x kept (-1000: the step's own)
 static int follow_set_t;
+static int follow_aerial_t = -1, follow_aerial; // the aerial, kept from the jump (the route goes once the DJ is used)
+static float follow_face;
 static void Jump_Follow(ScriptInput *in)
 {
     int t = event_vars->game_timer;
     FighterData *fp = Fighter_GetGObj(0)->userdata;
+    if (t == follow_aerial_t)
+    {
+        if (follow_aerial == TS_AIRN)
+        {
+            in->buttons |= HSD_BUTTON_A;
+            in->lx = 0; // a neutral A
+            in->ly = 0;
+        }
+        else
+        {
+            in->cx = follow_aerial == TS_AIRF ? (s8)(80 * follow_face) : follow_aerial == TS_AIRB ? (s8)(-80 * follow_face) : 0;
+            in->cy = follow_aerial == TS_AIRHI ? 80 : follow_aerial == TS_AIRLW ? -80 : 0;
+        }
+        OSReport("LLFOLLOW %d aerial %s\n", t, tracked_state_names[follow_aerial]);
+        follow_aerial_t = -1;
+        return;
+    }
     if (follow_fh_until >= t)
         in->buttons |= HSD_BUTTON_X;
     // back on the ground after it: the step's own stick again
@@ -17617,6 +17640,14 @@ static void Jump_Follow(ScriptInput *in)
         return;
     JumpRoute *r = &jt_route;
     int abs = jt_route_abs;
+    if (jt_ground && gt_still)
+        abs = t - r->hp; // standing still: the plan's hop is always on the next frame
+    if (r->kind == LAND_AI && ((r->hop && r->hj < 0 && t == abs + r->hp) || ((!r->hop || r->hj >= 0) && t == abs + r->dj)))
+    {
+        follow_aerial_t = abs + r->press;
+        follow_aerial = r->aerial;
+        follow_face = Jump_Facing(r);
+    }
     if ((r->hop == GT_SH || r->hop == GT_FH) && t == abs + r->hp)
     {
         in->buttons |= HSD_BUTTON_X;
@@ -17634,22 +17665,6 @@ static void Jump_Follow(ScriptInput *in)
         follow_hold_x = r->hold ? in->lx : 0;
         follow_set_t = t;
         OSReport("LLFOLLOW %d dj %s\n", t, jt_stick_names[r->stick]);
-    }
-    if (r->kind == LAND_AI && t == abs + r->press)
-    {
-        float face = Jump_Facing(r);
-        if (r->aerial == TS_AIRN)
-        {
-            in->buttons |= HSD_BUTTON_A;
-            in->lx = 0; // a neutral A
-            in->ly = 0;
-        }
-        else
-        {
-            in->cx = r->aerial == TS_AIRF ? (s8)(80 * face) : r->aerial == TS_AIRB ? (s8)(-80 * face) : 0;
-            in->cy = r->aerial == TS_AIRHI ? 80 : r->aerial == TS_AIRLW ? -80 : 0;
-        }
-        OSReport("LLFOLLOW %d aerial %s\n", t, tracked_state_names[r->aerial]);
     }
 }
 
@@ -18163,8 +18178,8 @@ static void Jump_Path(FighterData *fp)
     jt_path_anchor = jt_anchor;
 }
 
-// "DJ up in 6f, nair f7-9: AI": the frames are counted from now, the same
-// as the row's cells.
+// "DJ up in 6f, nair +11-13: AI": the first press counts from now, as the
+// row's cells do; each press after it from the one before.
 static void Jump_Text(JumpRoute *r, int e)
 {
     char aerial[8];
@@ -18172,27 +18187,34 @@ static void Jump_Text(JumpRoute *r, int e)
     char *t = text_next;
     const char *hop = r->hop == GT_SH ? "SH" : "FH";
     int hop_in = r->hp - e - 1;
+    // the first press counts from now, each after it from the one before
+    // (Stephen, 0.9.2: "SH now, DJ up f34, nair f45" read as one count)
+    int from = e + 1; // the frame "now" is
     if (r->hop && hop_in > 0)
         t += sprintf(t, "%s in %df", hop, hop_in);
     else if (r->hop)
         t += sprintf(t, "%s now", hop);
+    if (r->hop && r->hp > from)
+        from = r->hp;
     if (r->hop && r->hj >= 0)
-        t += sprintf(t, ", DJ %s f%d", jt_stick_names[r->stick], until);
+        t += sprintf(t, ", DJ %s +%d", jt_stick_names[r->stick], r->dj - from);
     else if (r->hop)
         ;
     else if (until > 0)
         t += sprintf(t, "DJ %s in %df", jt_stick_names[r->stick], until);
     else
         t += sprintf(t, "DJ %s now", jt_stick_names[r->stick]);
+    if ((!r->hop || r->hj >= 0) && r->dj > from)
+        from = r->dj;
     if (r->kind == LAND_AI)
     {
         sprintf(aerial, "%s", tracked_state_names[r->aerial]);
         aerial[0] |= 0x20; // lower case
-        int first = r->press - e - 1;
+        int first = r->press - from;
         if (r->press_w > 1)
-            t += sprintf(t, ", %s f%d-%d: AI", aerial, first, first + r->press_w - 1);
+            t += sprintf(t, ", %s +%d-%d: AI", aerial, first, first + r->press_w - 1);
         else
-            t += sprintf(t, ", %s f%d: AI", aerial, first);
+            t += sprintf(t, ", %s +%d: AI", aerial, first);
     }
     else
         sprintf(t, ": NIL");

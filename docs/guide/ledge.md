@@ -52,6 +52,8 @@ Paths > Ledge Route draws the chosen route's path, from the hang and on the way 
 
 Assist freezes the game on each input of the route and waits for you. When you press it, the game plays on at full speed to the next input.
 
+While it waits, the input it wants sits over Falcon's head in a ring that drains as the wait runs out, and beats faster near the end. Dots under it count the frames left in a longer window. The right input bursts the ring out in white. Running out of time folds it in, in the miss color, and the route starts over.
+
 - Assist Wait is how long it waits before it steps a frame or starts over. Start long and shorten it.
 - A slip is a miss only if it costs the landing, or if you turned on the matching buzz in Sounds (fastfall, jump or aerial timing). See [HUD](hud.md#sounds-menu).
 - With Reset on None, Assist still starts over on the same side.

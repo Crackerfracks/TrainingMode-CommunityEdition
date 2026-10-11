@@ -1,0 +1,52 @@
+# 0.9.10 checks: build with LLSCRIPT=src/landinglab_0910_test.txt and start
+# the event on Battlefield. First the dump for tools/llsim (LLDUMP lines),
+# then the strip labels: one size, right-aligned on their rows in Cells,
+# centered under the lanes in Highway.
+autorun
+
+script Dump
+preset load Defaults
+start -50 0 right
+60
+dump
+10
+
+script Cells labels
+preset load Defaults
+set Timers/Fixed Strip = 1
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+120
+shot cells labels: standing, JUMP and AI rows
+1 X
+30
+shot cells labels: frame 34 after the hop, skip ending
+3
+shot cells labels: frame 37 after the hop, skip ending
+3
+shot cells labels: frame 40 after the hop, skip ending
+3
+land 150
+set Timers/Fixed Strip = 1
+set Jump/Show = 0
+
+script Highway labels
+preset load Defaults
+set Timers/Fixed Strip = 2
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+120
+shot highway labels: standing, JUMP and AI rows
+1 X
+30
+shot highway labels: frame 34 after the hop, skip ending
+3
+shot highway labels: frame 37 after the hop, skip ending
+3
+shot highway labels: frame 40 after the hop, skip ending
+3
+land 150
+set Timers/Fixed Strip = 1
+set Jump/Show = 0

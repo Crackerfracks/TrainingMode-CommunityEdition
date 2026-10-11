@@ -49,3 +49,4 @@ bin/*.orig
 # Local agent mailbox and advisory scope leases
 .agent-state/
 tools/llsim/llsim
+tools/llsim/__pycache__/

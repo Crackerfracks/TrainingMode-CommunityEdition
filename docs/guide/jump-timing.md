@@ -27,6 +27,8 @@ It also works from a platform drop.
 
 The path for the jump is drawn when Jump Timing > Path is on (it starts off). Input markers show where each press is due whether the path is drawn or not. See [Paths](paths.md).
 
+The jump's lane in the timer ends like the cue lanes do: double jump on its frame and it bursts and flashes, early or late and it folds away in the miss color, with "early 2" or "late" beside it.
+
 On that path, a yellow gate crosses it where Falcon will be on the jump's frame, and a pink one where he presses the aerial. Press as his feet cross each gate.
 
 ## Tips

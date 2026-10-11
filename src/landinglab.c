@@ -9543,6 +9543,14 @@ static int Box_Hit(Box *a, Box *b)
     return a->x0 < b->x1 && b->x0 < a->x1 && a->y0 < b->y1 && b->y0 < a->y1;
 }
 
+// TM-CE's version text in the bottom right corner (TM_CreateWatermark:
+// right edge at x 615, top at y 446 of the 640 x 480 picture). Displays
+// that would cover it go up above it.
+static Box Wm_Box(void)
+{
+    return (Box){(470 - 320) * PX, -SAFE_H - 1.f, (620 - 320) * PX, -(443 - 240) * PX};
+}
+
 // Falcon's body from y0 to y1 at x, as a box on the screen, with a margin.
 static void Pin_AddBody(float x, float y0, float y1)
 {
@@ -9581,6 +9589,7 @@ static void Pin_Path(FighterData *fp)
 }
 
 static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1); // with the controller display
+static float Meter_Pitch(void);
 
 // The fixed strip's other looks sit in a bottom corner, the one away from
 // the controller display. The highway is a lane a row, HW_ROWS frames tall
@@ -9635,6 +9644,23 @@ static void Strip_Place(FighterData *fp, int look, float *x, float *y, float *w,
     Pad_Box(fp, &x0, &y0, &x1, &y1);
     *x = x0 + x1 < 0 ? SAFE_W - *w : -SAFE_W;
     *y = -SAFE_H + 0.4f;
+    Box b = {*x, *y, *x + *w, *y + *h}, wm = Wm_Box();
+    if (Box_Hit(&b, &wm))
+        *y = wm.y1 + 0.2f;
+}
+
+// The cell strip's left and bottom: above the version text when its
+// longest rows would reach it, so it doesn't move as rows grow.
+static void Strip_CellsAt(FighterData *fp, float *gx, float *base)
+{
+    float x0, y0, x1, y1;
+    Pad_Box(fp, &x0, &y0, &x1, &y1);
+    *gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 3.2f;
+    *base = -SAFE_H + 0.4f;
+    float far = *gx + (MT_FIXED_MAX - 1) * Meter_Pitch() * MT_FIXED + (MT_CW + MT_WIDE) * MT_FIXED + 0.3f;
+    Box b = {*gx, *base, far, *base + 2.f}, wm = Wm_Box();
+    if (Box_Hit(&b, &wm))
+        *base = wm.y1 + 0.4f;
 }
 
 // The fixed strip's box, so the near-Falcon strip keeps out of it.
@@ -9647,7 +9673,9 @@ static Box Strip_Box(FighterData *fp)
         Strip_Place(fp, look, &x, &y, &w, &h);
         return (Box){x - 0.2f, -SAFE_H, x + w + 0.2f, y + h + 0.3f};
     }
-    return (Box){-SAFE_W, -SAFE_H, SAFE_W, -SAFE_H + 0.4f + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
+    float gx, base;
+    Strip_CellsAt(fp, &gx, &base);
+    return (Box){-SAFE_W, -SAFE_H, SAFE_W, base + meter_rows * (MT_CH + MT_GAP) * MT_FIXED + 0.6f};
 }
 
 // Whether the meter at (gx, base), w by h, is clear of everything else.
@@ -10002,12 +10030,13 @@ static void Highway_Draw(FighterData *fp)
     int rows = meter_rows;
     float x0, y0, w, h;
     Strip_Place(fp, STRIP_HIGHWAY, &x0, &y0, &w, &h);
-    // lanes count from the screen's edge (the glyphs' column by it), so a
-    // lane added on the far side moves none of the others
+    // lanes count from the screen's edge and the glyphs' column comes after
+    // them, so neither a lane added nor the glyphs showing up moves any lane
+    // (Stephen, 0.8.6: the lanes shifted when the markers came in)
     int right = x0 > 0;
     float glyph = Strip_Glyphs() ? HW_GLYPH : 0;
-    float glyph_x = right ? x0 + w - STRIP_PAD - glyph / 2 : x0 + STRIP_PAD + glyph / 2;
-    float lanes_l = x0 + STRIP_PAD + (right ? 0 : glyph), lanes_r = x0 + w - STRIP_PAD - (right ? glyph : 0);
+    float glyph_x = right ? x0 + STRIP_PAD + glyph / 2 : x0 + w - STRIP_PAD - glyph / 2;
+    float lanes_l = x0 + STRIP_PAD + (right ? glyph : 0), lanes_r = x0 + w - STRIP_PAD - (right ? 0 : glyph);
     float line_y = y0 + HW_LABEL;
     float base_k = vis_k;
 
@@ -10045,7 +10074,7 @@ static void Highway_Draw(FighterData *fp)
 
         if (!r->dim)
             Strip_Ending(r, (lx + rx) / 2, line_y + HW_PITCH / 2, HW_LANE / 2, HW_PITCH / 2, 1.f, 0);
-        Strip_Label(r, (lx + rx) / 2, y0 + 0.75f, HW_LANE + HW_LANE_GAP - 0.5f);
+        Strip_Label(r, (lx + rx) / 2, y0 + 0.75f, HW_LANE - 0.3f);
     }
     vis_k = base_k;
 }
@@ -10164,10 +10193,9 @@ static void Meter_Fixed(FighterData *fp)
         Dial_Draw(fp);
         return;
     }
-    float x0, y0, x1, y1;
-    Pad_Box(fp, &x0, &y0, &x1, &y1);
-    float gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 3.2f;
-    Meter_Draw(gx, -SAFE_H + 0.4f, MT_FIXED, MT_FIXED_MAX, 1);
+    float gx, base;
+    Strip_CellsAt(fp, &gx, &base);
+    Meter_Draw(gx, base, MT_FIXED, MT_FIXED_MAX, 1);
 }
 
 ///////////////////////
@@ -11790,10 +11818,8 @@ static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
             bottom = cand[pick][1];
         }
     }
-    // TM-CE's version text sits in the bottom right corner (TM_CreateWatermark:
-    // right edge at x 615, top at y 446 of the 640 x 480 picture); a display
-    // over it goes up above it
-    Box wm = {(470 - 320) * PX, -SAFE_H - 1.f, (620 - 320) * PX, -(443 - 240) * PX};
+    // clear of TM-CE's version text
+    Box wm = Wm_Box();
     Box b = {left, bottom, left + w, bottom + h};
     if (Box_Hit(&b, &wm))
         bottom = wm.y1;
@@ -15598,6 +15624,14 @@ static float jt_bottom;         // how far down a fall is followed
 static float jt_stick_x;        // the stick at the anchor: the fall assumes it held
 static int jt_stick_down, jt_stick_drop;
 static int jt_prev_ts = -1, jt_prev_tilt;
+// The jump lane's ending, as the cues' rows have: the double jump on the
+// frame the lane said is a hit (a burst, a white flash and a bright ghost at
+// the gate), early or late folds it in the miss color. (Stephen, 0.8.6: the
+// notes hit the bottom and vanished.)
+static int jt_due = -1;      // last frame: frames to the double jump the lane showed, 0 the next one
+static char jt_due_label[8]; // ... in this lane
+static int jt_end_age = -1, jt_end_hit, jt_end_off;
+static char jt_end_label[8];
 static JumpRoute jt_best[2][JT_BEST]; // per kind (NIL, AI), best first
 static int jt_best_n[2];
 static JumpRoute jt_route;      // the one shown
@@ -16946,6 +16980,49 @@ static void Jump_Carry(FighterData *fp, int ts, int e)
         OSReport("LLJUMP carry %d e %d tried %d kept %d steps %d\n", now, e, n, total, jt_carry_steps);
 }
 
+// Whether the double jump came out on the frame the jump lane showed.
+static void Jump_Ending(FighterData *fp, int sid, int prev_sid)
+{
+    if (jt_end_age >= 0 && ++jt_end_age > LL_FADE + 2)
+        jt_end_age = -1;
+    int dj = (sid == ASID_JUMPAERIALF || sid == ASID_JUMPAERIALB) && prev_sid != sid;
+    if (jt_due >= 0 && (dj || jt_due == 0))
+    {
+        jt_end_age = 0;
+        jt_end_hit = dj && jt_due == 0;
+        jt_end_off = dj ? jt_due : -1; // frames early, -1 late
+        strcpy(jt_end_label, jt_due_label);
+        OSReport("LLJUMPEND %d %s %s %d\n", event_vars->game_timer, jt_end_label,
+                 jt_end_hit ? "hit" : dj ? "early" : "late", jt_end_off);
+    }
+    jt_due = -1;
+}
+
+// The ending on its lane's row.
+static void Row_JumpEnd(MeterRow *row)
+{
+    int a = jt_end_age;
+    if (jt_end_hit)
+    {
+        if (a < LL_BURST)
+            row->burst = a;
+        if (a < LL_GHOST)
+            Row_Ghost(row, a, 1);
+        if (a < 4)
+            row->flash = a;
+        sprintf(row->info, "hit");
+    }
+    else
+    {
+        row->implode = a;
+        row->implode_tone = TONE_MISS;
+        if (jt_end_off > 0)
+            sprintf(row->info, "early %d", jt_end_off);
+        else
+            sprintf(row->info, "late");
+    }
+}
+
 // Each frame, before the search: is Falcon in a fall to search, and is the
 // anchor still right for it. It is taken again when he comes back to a fall
 // after leaving one, when the stick or his path leaves what it assumed, and
@@ -17354,7 +17431,11 @@ static void Meter_AddJump(void)
         // along a lane that's already there rather than the lane popping
         // in and out with it (Stephen, 0.8.5)
         if (Options_Jump[JOPT_SHOW].val && !route_rows_active && hang_ledge < 0)
-            Meter_Add(color_in_jump, "JUMP");
+        {
+            MeterRow *row = Meter_Add(color_in_jump, jt_end_age >= 0 ? jt_end_label : "JUMP");
+            if (row && jt_end_age >= 0)
+                Row_JumpEnd(row);
+        }
         return;
     }
     JumpRoute *r = &jt_route;
@@ -17369,7 +17450,7 @@ static void Meter_AddJump(void)
         row = Meter_Add(color_in_jump, "JUMP");
         if (!row)
             return;
-        row->fade = 0.5f;
+        row->fade = 0.85f; // parked, not moving: dimmed a little, never grayed (Stephen, 0.8.6)
         if (r->hj >= 0)
         {
             for (int n = t0 + 1; n < r->dj; n++)
@@ -17382,7 +17463,7 @@ static void Meter_AddJump(void)
         row = Meter_Add(land_kind_colors[r->kind], r->kind == LAND_AI ? "AI" : "NIL");
         if (!row)
             return;
-        row->fade = 0.5f * Fade_Factor(VG_TIMERS, r->kind == LAND_AI ? CUE_AI : CUE_NIL);
+        row->fade = 0.85f * Fade_Factor(VG_TIMERS, r->kind == LAND_AI ? CUE_AI : CUE_NIL);
         Row_Jump(row, r, t0);
         return;
     }
@@ -17405,6 +17486,13 @@ static void Meter_AddJump(void)
             sprintf(row->info, "%df", until);
         else
             sprintf(row->info, "now");
+        if (step == 1 && until >= 0)
+        {
+            jt_due = until;
+            strcpy(jt_due_label, row->label);
+        }
+        if (jt_end_age >= 0 && Str_Same(jt_end_label, row->label))
+            Row_JumpEnd(row);
     }
     route_rows_active = 1;
     jump_rows_active = 1;
@@ -17452,6 +17540,7 @@ typedef struct Marker
     float cx, cy; // the chip's middle
     float w;
     int n;
+    int due; // frames to its press, 0 the next one; -1 not counted
     u8 glyph[3];
     GXColor color[3];
 } Marker;
@@ -17467,8 +17556,15 @@ static Marker *Marker_Add(float wx, float wy)
     if (!Hud_FromWorld(wx, wy, &m->px, &m->py))
         return 0;
     m->n = 0;
+    m->due = -1;
     mk_num++;
     return m;
+}
+
+static void Marker_Due(Marker *m, int due)
+{
+    if (m)
+        m->due = due;
 }
 
 static void Marker_Glyph(Marker *m, int glyph, GXColor c)
@@ -17539,11 +17635,19 @@ static void Markers_Flush(int side)
     for (int i = 0; i < mk_num; i++)
     {
         Marker *m = &mk[i];
-        float x0 = m->cx - m->w / 2, x1 = m->cx + m->w / 2;
-        Hud_Rect(x0, m->cy - h / 2, x1, m->cy + h / 2, Color_Fill(color_plate, 0.85f));
-        Hud_Frame(x0, m->cy - h / 2, x1, m->cy + h / 2, 0.07f * S, Color_Fill(m->color[0], 0.7f));
+        float x0 = m->cx - m->w / 2, x1 = m->cx + m->w / 2, y0 = m->cy - h / 2, y1 = m->cy + h / 2;
+        // a chip counts in like the timers' gates: its frame brightens over
+        // the last frames, and on the press it fills with its color in a
+        // white frame, the same flash as a lane's gate
+        int due = m->due;
+        float lead = due >= 1 && due <= 6 ? (7 - due) / 6.f : 0;
+        Hud_Rect(x0, y0, x1, y1, due == 0 ? Color_Fill(m->color[0], 0.9f) : Color_Fill(color_plate, 0.85f));
+        Hud_Frame(x0, y0, x1, y1, (0.07f + 0.08f * lead) * S, Color_Fill(m->color[0], 0.7f + 0.3f * lead));
+        if (due == 0)
+            Hud_Frame(x0 - 0.12f * S, y0 - 0.12f * S, x1 + 0.12f * S, y1 + 0.12f * S, 0.14f * S, color_white);
         for (int g = 0; g < m->n; g++)
-            Glyph_Draw(m->glyph[g], x0 + 0.15f * S + gw * (g + 0.5f), m->cy, 0.36f * S, m->color[g]);
+            Glyph_Draw(m->glyph[g], x0 + 0.15f * S + gw * (g + 0.5f), m->cy, 0.36f * S,
+                       due == 0 ? color_plate : m->color[g]);
     }
     mk_num = 0;
 }
@@ -17611,6 +17715,8 @@ static void Route_Marker(int frame, int g0, GXColor c0, int g1, GXColor c1)
     Marker *m = Marker_Add(route_path[i].X, route_path[i].Y + route_path_bottom[i]);
     Marker_Glyph(m, g0, c0);
     Marker_Glyph(m, g1, c1);
+    if (route_active)
+        Marker_Due(m, frame - route_e - 1);
 }
 
 static void Markers_Draw(void)
@@ -17662,6 +17768,7 @@ static void Markers_Draw(void)
             i = r->hp < jt_path_num ? r->hp : jt_path_num - 1;
             m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
             Marker_Glyph(m, GLYPH_JUMP, color_in_jump);
+            Marker_Due(m, r->hp - e - 1);
             if (r->hop == GT_FH)
                 Marker_Glyph(m, GLYPH_UP, color_white);
         }
@@ -17670,6 +17777,8 @@ static void Markers_Draw(void)
             i = r->dj < jt_path_num ? r->dj : jt_path_num - 1;
             m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
             Marker_Glyph(m, GLYPH_JUMP, color_in_jump);
+            if (!(jt_ground && gt_still))
+                Marker_Due(m, r->dj - e - 1);
             if (r->stick <= JT_UPRIGHT)
                 Marker_Glyph(m, GLYPH_UP, color_white);
             if (r->stick == JT_LEFT || r->stick == JT_UPLEFT)
@@ -17683,6 +17792,8 @@ static void Markers_Draw(void)
             m = Marker_Add(jt_path[i].X, jt_path[i].Y + jt_path_bottom[i]);
             Marker_Glyph(m, GLYPH_AERIAL, color_in_aerial);
             Marker_Glyph(m, Aerial_Glyph(r->aerial, Jump_Facing(r) > 0 ? 1 : -1), color_in_aerial);
+            if (!(jt_ground && gt_still))
+                Marker_Due(m, r->press - e - 1);
         }
         // on the side the path came from, out of its way
         Markers_Flush(jt_path[jt_path_num - 1].X >= jt_path[0].X ? -1 : 1);
@@ -17697,6 +17808,7 @@ static void Markers_Draw(void)
         int k = p->wl_first - 1; // where Falcon is as he presses it
         Marker *m = Marker_Add(p->pos[k].X, p->pos[k].Y + p->bottom[k]);
         Marker_Glyph(m, GLYPH_DODGE, color_in_dodge);
+        Marker_Due(m, c->phase == PH_WINDOW ? 0 : c->left - 1); // with the timer's count
         if (p->wl_dirs & DODGE_LEFT)
             Marker_Glyph(m, GLYPH_LEFT, color_white);
         if (p->wl_dirs & DODGE_RIGHT)
@@ -19225,6 +19337,7 @@ static void Event_ThinkFrame(GOBJ *event)
         Jump_Update(fp, TS_FALL, 1);
     else
         Jump_Update(fp, ts, tracked_air);
+    Jump_Ending(fp, sid, prev_state_id);
     Body_Flash(fp, sid);
     Slide_Update(fp);
     Pad_Record(PadGetEngine(fp->pad_index));

@@ -4150,10 +4150,10 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
     {
         .kind = OPTKIND_FUNC,
         .name = "Practice 15 GALINT",
-        .desc = {"Falcon on Battlefield: prepare a natural regrab",
-                 "and freeze on its first hang. Take over with",
-                 "D-pad down; Z steps (or your Advance Button).",
-                 "D-pad left prepares it again, even frozen."},
+        .desc = {"Falcon on Battlefield: the regrab is set up for",
+                 "you, then Assist waits for each input of the 15",
+                 "GALINT bair. Misses and landings set it up again.",
+                 "Pick it again to stop."},
         .OnSelect = Event_ReferencePractice,
     },
 };
@@ -14836,6 +14836,11 @@ void Event_ChangeScript(GOBJ *menu, int value)
             reference_saved[i] = reference_options[i]->val;
             reference_options[i]->val = 0;
         }
+        // Practice is Assist on the reference route: the game waits on
+        // the frame before each input (Stephen, 0.8.8: it should work the
+        // way Assist does, not leave him in Frame Advance)
+        if (mode == 2)
+            Options_Ledge[LOPT_ASSIST].val = 1;
         reference_mode = mode;
         Assist_Clear();
         OSReport("LLREF start mode=%d frame=%d assist=%d reset=%d inv=%d drop=%d routes=%d advance=%d\n",
@@ -14883,6 +14888,16 @@ void Event_ReferenceDemo(GOBJ *menu)
 
 void Event_ReferencePractice(GOBJ *menu)
 {
+    if (reference_mode == 2)
+    {
+        // picked again: practice off, the helpers back as they were
+        Options_Dev[DOPT_SCRIPT].val = 0;
+        Event_ChangeScript(menu, 0);
+        Toast("15 GALINT practice off");
+        if (menu)
+            event_vars->Menu_Exit(menu);
+        return;
+    }
     Reference_Play(menu, 2);
 }
 
@@ -14959,6 +14974,16 @@ typedef struct LedgeRoute
     s16 act;    // the frame GALINT is read on: the touchdown for a NIL, the end of the landing lag for an AI
     s16 ff_at;  // frame the fastfall starts, -1 none
 } LedgeRoute;
+
+// The 15 GALINT reference (Battlefield's right ledge, from a natural
+// regrab): let go away on the first frame it works, double jump in on the
+// next, bair 4 frames later, land 5 after that, and the normal landing's
+// lag is over 4 frames on. Frames from the drop, as Codex's engine trace
+// (release 1603, jump 1604, bair 1608) and dash probe (relative 63) have it.
+static const LedgeRoute ref_15galint = {
+    .valid = 1, .kind = LAND_AI, .drop = DROP_AWAY, .hold = 1, .dj_x = LR_DJ_IN,
+    .aerial = TS_AIRB, .press_w = 1, .dj = 1, .press = 5, .land = 10, .act = 14, .ff_at = -1,
+};
 
 // The routes a search found: for each order the Route Sort option can ask
 // for (GALINT, Easiest) and each kind (NIL, AI), the best LR_ROUTES in that
@@ -18370,7 +18395,17 @@ static void Ledge_Think(FighterData *fp, int sid)
         Routes_Update(hang_ledge);
         // a ledge's routes show once its first search is done, and the
         // ones of the search before keep showing while it's searched again
-        if (hang_ledge >= 0 && ledges[hang_ledge].have)
+        if (reference_mode == 2 && hang_ledge >= 0)
+        {
+            // practice: the reference route, whatever the search found
+            route_show[0] = ref_15galint;
+            route_show_num = 1;
+            route_show_rank = 0;
+            Route_Path(fp, hang_ledge, &route_show[0]);
+            Route_Text(&route_show[0], Route_Galint(&route_show[0], -1, intang), 1, 1);
+            next_kind = CUE_AI;
+        }
+        else if (hang_ledge >= 0 && ledges[hang_ledge].have)
         {
             Routes_Show();
             if (Log_Level())
@@ -18672,6 +18707,12 @@ static void Drill_Reset(void)
     drill_timer = -1;
     route_active = 0;
     Assist_Clear();
+    if (reference_mode == 2)
+    {
+        // the regrab is the setup: play its preparation again
+        Event_ChangeScript(0, Options_Dev[DOPT_SCRIPT].val);
+        return;
+    }
     if (Options_Ledge[LOPT_START].val == START_SAVED && event_vars->savestate->is_exist)
     {
         event_vars->Savestate_Load_v1(event_vars->savestate, 0);
@@ -19596,11 +19637,6 @@ static void Event_ThinkFrame(GOBJ *event)
     prev_vel = (Vec2){fp->phys.self_vel.X, fp->phys.self_vel.Y};
 
     Drill_Think();
-    // Practice keeps real intangibility while paused on the first hang.
-    // Restore helpers only once the player has taken over and left it.
-    if (reference_mode == 2 && !script_pending && script_cur < 0 &&
-        sid != ASID_CLIFFCATCH && sid != ASID_CLIFFWAIT)
-        Reference_Restore(1);
     // Finish only after the old frame's learning and landing resolution;
     // All may then reset caches for the next trial without contamination.
     if (script_trace_end_pending)

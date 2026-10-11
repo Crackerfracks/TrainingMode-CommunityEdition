@@ -24,7 +24,7 @@ The Ledge Practice menu, in menu order.
 | Keep Ledge Invincibility | Off, On | Off | Keeps the full intangibility while hanging, so the routes do not shrink while you get ready. |
 | Drop Drill | Off, On | Off | Times letting go of the ledge. A DRP row counts down to the first frame you can. The stick has to rest on the hang's first frame, then go down or away. It is graded, with how many of your last 10 hit. |
 | 15 GALINT Demo | Press A | n/a | Falcon on Battlefield only. Plays a bair AI from a natural regrab on the right ledge that leaves 15 frames of ledge intangibility at the first dash. D-pad left plays it again. |
-| Practice 15 GALINT | Press A | n/a | Sets up the same regrab and freezes on its first hang. Z (or your Advance Button) steps a frame, D-pad down plays on, D-pad left sets it up again. |
+| Practice 15 GALINT | Press A | n/a | Sets up the same regrab, then Assist waits on each input of the route: the drop, the jump and the bair. A miss or a landing sets it up again. Pick it again to stop. |
 
 ## How routes are found and ordered
 
@@ -62,7 +62,7 @@ Drop Drill drills the first possible ledge drop. A DRP row counts down to the fi
 
 ## The 15 GALINT reference
 
-Crackerfracks found this one by hand and has been insufferable about it since. From the frozen hang in Practice 15 GALINT, stepping a frame at a time:
+Crackerfracks found this one by hand and has been insufferable about it since. Practice 15 GALINT runs it through Assist; keep your hands off the stick until Falcon is back on the ledge. The inputs, a frame at a time from the first hang:
 
 1. Hold right (away from the stage) for one frame.
 2. Hold left, press jump, one frame. Let go of jump.

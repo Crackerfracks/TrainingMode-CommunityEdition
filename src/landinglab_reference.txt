@@ -1,6 +1,7 @@
 # Falcon / Battlefield, right ledge. No autorun on a playable disc.
 # Verified natural-regrab AI Bair family; Dash accepts with 15 intangibility.
-# Menu callbacks temporarily disable helpers and preserve the player's cues.
+# Menu callbacks temporarily disable helpers and preserve the player's cues;
+# Practice turns Assist on with the reference route.
 script 15 GALINT Demo
 ledge right
 3
@@ -16,9 +17,10 @@ ledge right
 40
 
 script Practice 15 GALINT
+# The setup only: it ends a few frames before the natural regrab, and
+# Assist takes the route from the hang on (hands off the stick until then).
 ledge right
 3
 1 s:0,-1
 1 X
-44
-shot First natural hang - take over
+40

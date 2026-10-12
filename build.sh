@@ -164,6 +164,7 @@ ${gc_fst} fs TM-CE.iso \
     insert TM/landinglab.dat build/landinglab.dat \
     insert TM/llscript.txt "${LLSCRIPT:-src/landinglab_reference.txt}" \
     ${LLCHARFILE:+insert TM/llchar.txt "${LLCHARFILE}"} \
+    ${LLECB:+insert TM/llecb.bin "${LLECB}"} \
     insert TM/eggs.dat build/eggs.dat \
     insert TM/techchase.dat build/techchase.dat \
     insert TM/slalom.dat build/slalom.dat \

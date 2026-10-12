@@ -151,6 +151,7 @@ int llsim_ready(int fighter_kind, int wlground)
     fighter.input.timer_lstick_tilt_y = LL_TIMER_MAX;
     wl_ground = wlground;
     Sim_Setup();
+    Sim_ForFighter(fighter_kind); // as the event does on its first frame
     Floor_BuildCache();
     return 1;
 }
@@ -210,6 +211,16 @@ static u32 Float_Bits(float f)
         u32 u;
     } v = {f};
     return v.u;
+}
+
+// A fighter's packed table (TM/llecb.bin, whole) in place of the one in
+// use, as the event loads it; the rows it took, -1 if the file has none.
+int llsim_packed(const unsigned char *file, int size, int fighter_kind)
+{
+    int offset, len;
+    if (size < LLE_DIR_BYTES || !Ecb_Find(file, fighter_kind, &offset, &len) || offset + len > size)
+        return -1;
+    return Ecb_Unpack(file + offset, len);
 }
 
 // The table in use, as the game's Ecb_Dump writes it (its LLECB and LLLEN

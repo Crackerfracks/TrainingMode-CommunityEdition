@@ -155,6 +155,15 @@ static const char *State_Name(int sid)
 }
 
 
+static int Tracked_IsUpB(int ts)
+{
+    return ts == TS_UPB || ts == TS_UPBA;
+}
+
+// Is the fighter Falcon? Another fighter's own states (341 on) aren't
+// Falcon Dive, and its table isn't his (Sim_ForFighter).
+static int sim_falcon = 1;
+
 static int Tracked_Index(int state_id)
 {
     if (state_id == ASID_FALLSPECIALF || state_id == ASID_FALLSPECIALB)
@@ -162,7 +171,7 @@ static int Tracked_Index(int state_id)
     for (int i = 0; i < TS_COUNT; i++)
     {
         if (tracked_state_ids[i] == state_id)
-            return i;
+            return Tracked_IsUpB(i) && !sim_falcon ? -1 : i;
     }
     return -1;
 }
@@ -170,11 +179,6 @@ static int Tracked_Index(int state_id)
 static int Tracked_IsAerial(int ts)
 {
     return ts >= TS_AIRN && ts <= TS_AIRLW;
-}
-
-static int Tracked_IsUpB(int ts)
-{
-    return ts == TS_UPB || ts == TS_UPBA;
 }
 
 // Nothing can be pressed out of a Falcon Dive or the helpless fall after
@@ -2891,6 +2895,106 @@ static void Lean_Index(void)
         onset_first[l->fall][l->back] = i;
         onset_levels[l->fall][l->back]++;
     }
+}
+
+// Another fighter than Falcon: none of his baked table, Falcon Dive or
+// fall leans. Its own table comes packed (Ecb_Unpack) or is learned in play.
+static void Sim_ForFighter(int kind)
+{
+    int falcon = kind == FTKIND_FALCON;
+    if (falcon == sim_falcon)
+        return;
+    sim_falcon = falcon;
+    Learned_Clear();
+    memset(lean_levels, 0, sizeof(lean_levels));
+    memset(onset_levels, 0, sizeof(onset_levels));
+    if (falcon)
+    {
+        Learned_Bake();
+        Lean_Index();
+    }
+}
+
+// The fighters' tables as tools/llsim/ecbpack.py packs them (TM/llecb.bin),
+// big-endian: "LLE1", the number of fighters, and from byte 32 a directory
+// of LLE_FIGHTERS entries (internal kind, offset, size, a pad word). A
+// fighter's block: u16 rows, u16 states, each state's s16 frames and s16
+// next state (as LLLEN), then each row: u8 state, u8 frame, u8 flags
+// (BAKED_*), a pad byte and five floats (as BakedEcb). Blocks start and
+// end on 32 bytes, as the disc reads them.
+#define LLE_FIGHTERS 32
+#define LLE_DIR_BYTES (32 + LLE_FIGHTERS * 16)
+#define LLE_ROW 24
+
+static u32 Pack_U32(const u8 *b)
+{
+    return (u32)b[0] << 24 | (u32)b[1] << 16 | (u32)b[2] << 8 | b[3];
+}
+
+static int Pack_S16(const u8 *b)
+{
+    return (s16)(b[0] << 8 | b[1]);
+}
+
+static float Pack_F32(const u8 *b)
+{
+    u32 u = Pack_U32(b);
+    float f;
+    memcpy(&f, &u, sizeof(f));
+    return f;
+}
+
+// Where kind's block is in the file, from its first LLE_DIR_BYTES; 0 if
+// it has none.
+static int Ecb_Find(const u8 *dir, int kind, int *offset, int *size)
+{
+    if (Pack_U32(dir) != 0x4C4C4531) // "LLE1"
+        return 0;
+    int n = Pack_U32(dir + 4);
+    for (int i = 0; i < n && i < LLE_FIGHTERS; i++)
+    {
+        const u8 *e = dir + 32 + i * 16;
+        if ((int)Pack_U32(e) == kind)
+        {
+            *offset = Pack_U32(e + 4);
+            *size = Pack_U32(e + 8);
+            return *size > 0;
+        }
+    }
+    return 0;
+}
+
+// A fighter's block in place of what's learned; the rows it took.
+static int Ecb_Unpack(const u8 *b, int size)
+{
+    if (size < 4)
+        return 0;
+    int rows = Pack_S16(b) & 0xFFFF, states = Pack_S16(b + 2), at = 4;
+    if (states > TS_COUNT || at + states * 4 + rows * LLE_ROW > size)
+        return 0;
+    Learned_Clear();
+    for (int ts = 0; ts < states; ts++, at += 4)
+    {
+        state_len[ts] = Pack_S16(b + at);
+        state_next[ts] = Pack_S16(b + at + 2);
+    }
+    for (int i = 0; i < rows; i++, at += LLE_ROW)
+    {
+        int ts = b[at], frame = b[at + 1], flags = b[at + 2];
+        if (ts >= TS_COUNT || frame >= LL_STATE_FRAMES)
+            continue;
+        EcbSample *e = &ecb_table[ts * LL_STATE_FRAMES + frame];
+        e->bottom = Pack_F32(b + at + 4);
+        e->top = Pack_F32(b + at + 8);
+        e->side_y = Pack_F32(b + at + 12);
+        e->front = Pack_F32(b + at + 16);
+        e->back = Pack_F32(b + at + 20);
+        e->has_bottom = (flags & BAKED_BOTTOM) != 0;
+        e->has_shape = (flags & BAKED_SHAPE) != 0;
+        e->aerial_lag = (flags & BAKED_LAG) != 0;
+        e->seen = 1;
+    }
+    return rows;
 }
 
 static int Lean_Target(FighterData *fp, float vx, float facing, float *target)

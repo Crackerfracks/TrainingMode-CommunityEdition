@@ -13,8 +13,9 @@
  *
  * The ECB table is Falcon's baked one unless -t names a capture's log
  * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it.
- * The fall leans are Falcon's measurements either way, as in game, unless
- * -nolean drops them (the plain pose for every lean).
+ * -p names a packed TM/llecb.bin (tools/llsim/ecbpack.py) to load the
+ * dump's fighter from, as the event does for every fighter but Falcon.
+ * Falcon keeps his fall leans, as in game, unless -nolean drops them.
  *
  * Build: tools/llsim/build.sh
  */
@@ -164,15 +165,37 @@ static void Table_Load(const char *path, int keep_lean)
         fprintf(stderr, "llsim: warning: %s is char %d's table, the dump is char %d's\n", path, table_char, dump_char);
 }
 
+static void Packed_Load(const char *path)
+{
+    FILE *f = fopen(path, "rb");
+    if (!f)
+    {
+        fprintf(stderr, "llsim: can't open %s\n", path);
+        exit(1);
+    }
+    static unsigned char file[1 << 20];
+    int size = (int)fread(file, 1, sizeof(file), f);
+    fclose(f);
+    int rows = llsim_packed(file, size, dump_char);
+    if (rows < 0)
+    {
+        fprintf(stderr, "llsim: %s has no table for char %d\n", path, dump_char);
+        exit(1);
+    }
+    fprintf(stderr, "llsim: char %d: %d rows from %s\n", dump_char, rows, path);
+}
+
 int main(int argc, char **argv)
 {
-    const char *table = 0;
+    const char *table = 0, *packed = 0;
     char *pos[4];
     int npos = 0, keep_lean = 1;
     for (int i = 1; i < argc; i++)
     {
         if (!strcmp(argv[i], "-t") && i + 1 < argc)
             table = argv[++i];
+        else if (!strcmp(argv[i], "-p") && i + 1 < argc)
+            packed = argv[++i];
         else if (!strcmp(argv[i], "-nolean"))
             keep_lean = 0;
         else if (npos < 4)
@@ -181,8 +204,8 @@ int main(int argc, char **argv)
     int check = npos >= 2 && !strcmp(pos[0], "check"), ecb = npos == 2 && !strcmp(pos[0], "ecb");
     if (!check && !ecb)
     {
-        fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-nolean]\n"
-                        "       llsim ecb <dump> [-t <capture>]\n");
+        fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-p <llecb.bin>] [-nolean]\n"
+                        "       llsim ecb <dump> [-t <capture>] [-p <llecb.bin>]\n");
         return 2;
     }
     Dump_Load(pos[1]);
@@ -191,6 +214,8 @@ int main(int argc, char **argv)
         fprintf(stderr, "llsim: %s has no LLDUMP begin or collision\n", pos[1]);
         return 1;
     }
+    if (packed)
+        Packed_Load(packed);
     if (table)
         Table_Load(table, keep_lean);
     if (ecb)

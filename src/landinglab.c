@@ -3056,6 +3056,37 @@ static void Log(char *buf)
     OSReport("%s", buf);
 }
 
+// A disc read into an aligned buffer of its own: the disc reads whole
+// 32-byte blocks into 32-byte aligned memory.
+static u8 *Disc_Read(int entry, int offset, int size)
+{
+    u8 *buf = (u8 *)(((u32)calloc(size + 32) + 31) & ~31);
+    DCFlushRange(buf, size);
+    File_ReadSync(entry, offset, buf, size, 0x21, 1);
+    DCInvalidateRange(buf, size);
+    return buf;
+}
+
+// Another fighter than Falcon: its own ECB table from TM/llecb.bin
+// (captured in game by src/landinglab_capture.txt, packed by
+// tools/llsim/ecbpack.py). Without one it learns in play.
+static void Ecb_LoadDisc(FighterData *fp)
+{
+    char buf[96];
+    Sim_ForFighter(fp->kind);
+    if (sim_falcon)
+        return;
+    int entry = DVDConvertPathToEntrynum("TM/llecb.bin"), offset, size, rows = 0;
+    if (entry >= 0)
+    {
+        u8 *dir = Disc_Read(entry, 0, LLE_DIR_BYTES);
+        if (Ecb_Find(dir, fp->kind, &offset, &size) && offset % 32 == 0 && size % 32 == 0)
+            rows = Ecb_Unpack(Disc_Read(entry, offset, size), size);
+    }
+    sprintf(buf, "LLECB fighter %d: %d rows from TM/llecb.bin%s\n", fp->kind, rows, entry < 0 ? " (no file)" : "");
+    Log(buf);
+}
+
 static void Log_Attributes(FighterData *fp)
 {
     char buf[200];
@@ -17194,6 +17225,7 @@ static void Event_ThinkFrame(GOBJ *event)
 
     if (!attributes_logged)
     {
+        Ecb_LoadDisc(fp);
         Log_Attributes(fp);
         attributes_logged = 1;
     }

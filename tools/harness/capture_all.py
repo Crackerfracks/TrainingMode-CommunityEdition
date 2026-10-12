@@ -116,10 +116,13 @@ def test_dolphins():
 
 
 def close_test_dolphin():
-    for p in test_dolphins():
-        try: os.kill(p, 15)
-        except OSError: pass
-    time.sleep(3)
+    for sig in (15, 9):                     # a Dolphin that lost its display can hang and ignore SIGTERM
+        for p in test_dolphins():
+            try: os.kill(p, sig)
+            except OSError: pass
+        time.sleep(3)
+        if not test_dolphins():
+            break
 
 
 def count(lines, key):
@@ -161,6 +164,8 @@ with jobboard.Job(f"TM-CE capture v{RUN}", total=len(CHARS), unit="chars", group
             continue
 
         job.update(phase=f"running test Dolphin: {c}", fields=gauges())
+        close_test_dolphin()
+        open(f"{U}/Logs/dolphin.log", "w").close()          # never read the previous fighter's log
         r = subprocess.Popen(["nice", "-n", "15", f"{U}/run_iso.sh", "cap"], stdout=open(f"{O}/run_{name}.txt", "w"),
                              stderr=subprocess.STDOUT)
         t0, aborted = time.time(), None
@@ -192,14 +197,22 @@ with jobboard.Job(f"TM-CE capture v{RUN}", total=len(CHARS), unit="chars", group
         # two characters into one log): the event's fighter line and the table header must name one kind
         kinds = {m.group(1) for l in keep for m in [re.match(r"LLECB (?:fighter|begin char) (\d+)", l)] if m}
         kind_changed = len(kinds) > 1
-        if kind_changed:
+        # guard: the run must be this fighter's (a run that never started leaves another fighter's lines)
+        m = re.match(r"LLCHAR (\d+)", llchar)
+        wrong_char = not m or int(m.group(1)) != CKIND[c]
+        if wrong_char and os.path.exists(out):
+            os.replace(out, f"{O}/{name}_bf{RUN}_wrongchar.log")
+            job.log(f"{c}: {llchar!r}, want LLCHAR {CKIND[c]}; the run did not capture this fighter (log kept as "
+                    f"{name}_bf{RUN}_wrongchar.log)", "error")
+        elif kind_changed:
             os.replace(out, f"{O}/{name}_bf{RUN}_kindchange.log")
             job.log(f"{c}: fighter kind changed during the capture ({sorted(kinds)}); log kept as "
                     f"{name}_bf{RUN}_kindchange.log and left out of packing", "error")
-        good = n["LLLEN"] > 0 and spec_end.startswith("LLSPEC end") and not crash and not aborted and not kind_changed
+        good = n["LLLEN"] > 0 and spec_end.startswith("LLSPEC end") and not crash and not aborted and not kind_changed and not wrong_char
         summary = (f"{c} {'OK' if good else 'FAIL'} lines {len(keep)} dump {n['LLDUMP']} check {n['LLCHECK']} "
                    f"ecb {n['LLECB']} len {n['LLLEN']} spec {n['LLSPEC ']} speclen {n['LLSPECLEN']} | {llchar} | {begin} | {spec_end}" + (f" | {crash}" if crash else "")
-                   + (f" | aborted: {aborted}" if aborted else "") + (f" | KIND CHANGED {sorted(kinds)}" if kind_changed else ""))
+                   + (f" | aborted: {aborted}" if aborted else "") + (f" | KIND CHANGED {sorted(kinds)}" if kind_changed else "")
+                   + (f" | WRONG FIGHTER, want LLCHAR {CKIND[c]}" if wrong_char else ""))
         log(summary)
         if good: ok += 1
         else: failed += 1

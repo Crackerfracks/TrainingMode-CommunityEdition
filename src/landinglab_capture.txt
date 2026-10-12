@@ -51,8 +51,14 @@ refill
 80
 1 c:0,-1
 80
-# the airdodge into the helpless fall, before any special: a special's
+# the airdodge into the helpless fall, from a fresh jump (Link's and Young
+# Link's dair lasts until they land), before any special: a special's
 # landing lag would eat the inputs that follow it
+hover off
+land 200
+90
+10 X
+hover 0 100
 1 L
 90
 

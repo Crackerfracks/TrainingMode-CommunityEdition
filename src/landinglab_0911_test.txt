@@ -1,0 +1,39 @@
+# 0.9.11 checks: build with LLSCRIPT=src/landinglab_0911_test.txt and start
+# the event on Battlefield. The Conveyor look of the Fixed Strip: one belt,
+# its every-fifth-frame line moving a row a frame; preloads hovering (the
+# standing hop plan, the wavedash out of a jump now) and setting down when
+# their press comes; notes on one frame sharing the row.
+autorun
+
+script Conveyor standing
+preset load Defaults
+set Dev/Debug Log = 1
+set Timers/Fixed Strip = 4
+set Timers/Wavedash = 1
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+150
+shot conveyor standing: hop plan and WD preload hovering
+1
+shot conveyor standing a frame later: the belt's heavy line a row lower
+1 X
+shot conveyor jumpsquat frame 1: WD set down (LLWDPRE: was = squat_wd + 1)
+2
+shot conveyor jumpsquat frame 3
+1 L s:1,-1
+40
+set Jump/Show = 0
+
+script Conveyor falling
+preset load Defaults
+set Dev/Debug Log = 1
+set Timers/Fixed Strip = 4
+
+air 0 70 right
+4
+shot conveyor falling onto the top platform: AI and WL rows sharing
+4
+shot conveyor falling, 4 frames on
+land 150
+set Timers/Fixed Strip = 1

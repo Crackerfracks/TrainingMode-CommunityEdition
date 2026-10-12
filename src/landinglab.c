@@ -77,7 +77,7 @@ static const char *ai_filter_names[] = {"Useful", "All"};
 static const char *ai_aerial_names[] = {"Any", "Nair", "Fair", "Bair", "Uair", "Dair"}; // after Any, in TS_AIRN order
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
 static const char *near_names[] = {"Off", "Bubble", "Halo", "Pincers", "ECB Fill", "Lights", "Old Strip"};
-static const char *strip_names[] = {"Off", "Cells", "Highway", "Dial"};
+static const char *strip_names[] = {"Off", "Cells", "Highway", "Dial", "Conveyor"};
 static const char *wl_timer_names[] = {"Off", "Ticks", "Rails", "Chevrons"};
 static const char *wd_timer_names[] = {"Off", "Cells", "Pips", "Ring"};
 enum { TRAVEL_FIXED, TRAVEL_CATCH };
@@ -134,6 +134,7 @@ enum strip_kind
     STRIP_CELLS,   // cells slide into a gate
     STRIP_HIGHWAY, // notes fall onto a line, one lane per cue
     STRIP_DIAL,    // a hand sweeps into the window's wedge
+    STRIP_CONVEYOR, // every cue on one moving belt (Stephen, 0.9.10)
 };
 
 enum wl_timer_kind
@@ -1066,7 +1067,8 @@ static EventOption Options_Timers[TOPT_COUNT] = {
         .values = strip_names,
         .desc = {"A countdown in a corner. Cells slide into a gate,",
                  "Highway drops notes into a window, Dial sweeps a",
-                 "hand into the window. Press as it arrives."},
+                 "hand in, Conveyor carries every cue on one moving",
+                 "belt. Press as it arrives."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -2918,6 +2920,8 @@ typedef struct Cue
 static Cue cue_live[CUE_NUM]; // counting down or in the window
 static Cue cue_end[CUE_NUM];  // the last one's ending
 static int squat_wd;          // in the jumpsquat: frames until a wavedash's airdodge
+static int wd_preload;        // on the ground, able to jump: where a wavedash's airdodge would be, 0 none
+static int wd_last;           // ... last frame (the log checks it against the jumpsquat's)
 static int wd_late;           // that airdodge came a frame after takeoff
 static int cue_log;           // write the timers' presses and endings to the log
 static const char *cue_names[CUE_NUM] = {"AI", "WL", "NIL"};
@@ -5087,6 +5091,7 @@ enum cell_tone
     TONE_CUE,
     TONE_MISS,
     TONE_SKIP,
+    TONE_JUMP, // a jump inside another cue's row (a wavedash's): jump yellow
 };
 
 enum glyph_kind
@@ -5126,6 +5131,8 @@ typedef struct MeterRow
     float fade;   // Auto Fade (and a lane fading out): the whole row's opacity scaled by this
     u8 gap;       // a lane kept free for a row that went, so the others stay put
     u8 span;      // cells from the gate its first window was at when it came up (Note Travel)
+    u8 parked;    // a preload: laid out from a press that hasn't happened, not moving yet
+    u8 settle;    // frames since it stopped being parked and set down, + 1 (0: none)
     char label[8];
     char info[24];
 } MeterRow;
@@ -5301,6 +5308,28 @@ static int route_dj_done;     // ... and its double jump happened
 static void Meter_AddRoutes(void);
 static void Meter_AddJump(void);
 
+// On the ground and able to jump, the wavedash out of a jump now, as a
+// preload: the jump, then the airdodge one jumpsquat later, hovering until
+// the jump comes, when the WD row's own countdown takes over in its place
+// (Stephen, 0.9.10: Fox's 3 frames to Bowser's 8).
+static void Meter_AddWdPreload(void)
+{
+    if (!wd_preload || Options_Timers[TOPT_WD].val != WDT_CELLS)
+        return;
+    if (cue_live[CUE_WL].phase != PH_OFF || cue_end[CUE_WL].phase != PH_OFF)
+        return; // a waveland or wavedash row is up already
+    MeterRow *r = Meter_Add(Cue_Color(CUE_WL), "WD");
+    if (!r)
+        return;
+    r->parked = 1;
+    r->fade = 0.85f * Fade_Factor(VG_TIMERS, CUE_WL);
+    Row_Set(r, 0, CELL_PRESS, TONE_JUMP, 1);
+    r->glyph[0] = GLYPH_JUMP;
+    for (int j = 0; j < 2; j++)
+        Row_Set(r, wd_preload - 1 + j, CELL_PRESS, TONE_CUE, 1);
+    r->glyph[wd_preload - 1] = GLYPH_DODGE;
+}
+
 static void Meter_Collect(void)
 {
     meter_rows = 0;
@@ -5315,6 +5344,7 @@ static void Meter_Collect(void)
         Meter_FromCue(CUE_AI);
     if (Cues_Waveland() || Cues_Wd())
         Meter_FromCue(CUE_WL);
+    Meter_AddWdPreload();
     if (Cues_Nil())
         Meter_FromCue(CUE_NIL);
 }
@@ -5333,6 +5363,8 @@ typedef struct Lane
     int k_prev;  // its first window's cell last frame, -1 none
     int k0;      // ... and when that window came up
     u8 used;
+    u8 parked;   // its row was a preload last frame
+    u8 settle;   // ... and the row's settle
     MeterRow last;
 } Lane;
 static Lane lanes[MT_ROWS];
@@ -5413,6 +5445,15 @@ static void Meter_Settle(void)
             L->k0 = t; // a new window (or one further out than the last)
         L->k_prev = t;
         built[i].span = t >= 0 && L->k0 < 255 ? L->k0 : 0;
+        // a preload that just set down (its press came) eases onto the belt
+        if (L->parked && !built[i].parked)
+            L->settle = 1;
+        else if (L->settle && L->settle < 8)
+            L->settle++;
+        else
+            L->settle = 0;
+        L->parked = built[i].parked;
+        built[i].settle = L->settle;
         L->last = built[i];
         L->seen = now;
         L->used = 1;
@@ -5485,6 +5526,8 @@ static float Note_At(MeterRow *r, float k, int track)
 
 static GXColor Tone_Color(MeterRow *r, int tone)
 {
+    if (tone == TONE_JUMP)
+        return color_in_jump;
     return tone == TONE_MISS ? color_miss : tone == TONE_SKIP ? color_skip : r->color;
 }
 
@@ -5904,6 +5947,12 @@ static void Strip_Place(FighterData *fp, int look, float *x, float *y, float *w,
         *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + n * HW_LANE + (n - 1) * HW_LANE_GAP;
         *h = HW_LABEL + HW_ROWS * HW_PITCH + 0.5f;
     }
+    else if (look == STRIP_CONVEYOR)
+    {
+        // a fixed width, however many cues are up (Stephen, 0.9.10)
+        *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + 2 * HW_LANE + HW_LANE_GAP;
+        *h = HW_LABEL + HW_ROWS * HW_PITCH + 0.5f + 1.3f; // and the entry's waiting room
+    }
     else
     {
         *w = 2 * STRIP_PAD + n * DL_CELL - 0.4f;
@@ -5938,7 +5987,7 @@ static void Strip_CellsAt(FighterData *fp, float *gx, float *base)
 static Box Strip_Box(FighterData *fp)
 {
     int look = Options_Timers[TOPT_STRIP].val;
-    if (look == STRIP_HIGHWAY || look == STRIP_DIAL)
+    if (look == STRIP_HIGHWAY || look == STRIP_DIAL || look == STRIP_CONVEYOR)
     {
         float x, y, w, h;
         Strip_Place(fp, look, &x, &y, &w, &h);
@@ -6297,11 +6346,9 @@ static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
 // window in gray, fading; a miss leaves it cracked in two, the halves
 // drifting apart. Lanes sit too close for side ticks, so the strikeline
 // under them all carries those (Highway_Draw).
-static void Hw_Window(MeterRow *r, float lx, float rx, float line_y)
+static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
 {
     float in = 0.15f, mid = (lx + rx) / 2;
-    float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - 0.14f, wy1 = line_y + HW_PITCH + 0.1f;
-    int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
     int ending = !r->dim && r->implode >= 0;
     float q = ending ? (float)r->implode / LL_FADE : 1.f;
     GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
@@ -6335,7 +6382,25 @@ static void Hw_Window(MeterRow *r, float lx, float rx, float line_y)
             Hud_Rect(mid - bw, y, mid + bw, y + beam / 4.f, Color_Over(Color_Mix(r->color, color_white, 0.5f), 0.5f * fade * (1.f - i / 4.f)));
         }
     }
+    if (!r->dim)
+    {
+        // the hit's ghost; the burn and beam above stand in for the burst's
+        // rays, and the window plays the fold
+        MeterRow e = *r;
+        e.burst = -1;
+        e.implode = -1;
+        Strip_Ending(&e, mid, line_y + HW_PITCH / 2, (rx - lx) / 2, HW_PITCH / 2, 1.f, 0);
+    }
+}
 
+// The window's frame, lit while r's press is due (white on its first or
+// last frame), in r's ending colors as it fades.
+static void Hw_WindowFrame(MeterRow *r, float lx, float rx, float line_y)
+{
+    float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - 0.14f, wy1 = line_y + HW_PITCH + 0.1f;
+    int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
+    int ending = !r->dim && r->implode >= 0;
+    GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
     if (hot > 0)
         Hud_Rect(wx0 - 0.2f, wy0 - 0.2f, wx1 + 0.2f, wy1 + 0.2f, Color_Fill(r->color, 0.3f));
     GXColor fc = hot >= 2 ? color_white : hot ? Color_Mix(r->color, color_white, 0.4f)
@@ -6344,15 +6409,12 @@ static void Hw_Window(MeterRow *r, float lx, float rx, float line_y)
     float t = hot >= 2 ? 0.16f : 0.1f;
     Hud_Frame(wx0, wy0, wx1, wy1, t, fc);
     Hud_Rect(wx0, wy0, wx1, wy0 + t + 0.06f, fc); // the floor of it, heavier
-    if (!r->dim)
-    {
-        // the hit's ghost; the burn and beam above stand in for the burst's
-        // rays, and the window plays the fold
-        MeterRow e = *r;
-        e.burst = -1;
-        e.implode = -1;
-        Strip_Ending(&e, mid, line_y + HW_PITCH / 2, HW_LANE / 2, HW_PITCH / 2, 1.f, 0);
-    }
+}
+
+static void Hw_Window(MeterRow *r, float lx, float rx, float line_y)
+{
+    Hw_WindowEnd(r, lx, rx, line_y);
+    Hw_WindowFrame(r, lx, rx, line_y);
 }
 
 // The highway (Fixed Strip): one vertical lane per row, notes falling onto a
@@ -6376,9 +6438,11 @@ static void Highway_Draw(FighterData *fp)
 
     vis_k = base_k * Strip_PlateK();
     Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Fill(color_plate, 0.72f));
+    // every fifth frame of the game's clock heavier, so the lines travel
+    // down a row a frame, like the conveyor's
     for (int k = 1; k <= HW_ROWS; k++)
     {
-        int five = k % 5 == 0;
+        int five = (event_vars->game_timer + k) % 5 == 0;
         float y = line_y + k * HW_PITCH, e = five ? 0.1f : 0.05f;
         Hud_Rect(lanes_l - 0.1f, y - e, lanes_r + 0.1f, y + e, Color_Over(color_white, five ? 0.3f : 0.12f));
     }
@@ -6413,6 +6477,318 @@ static void Highway_Draw(FighterData *fp)
 
         Hw_Window(r, lx, rx, line_y);
         Strip_Label(r, (lx + rx) / 2, y0 + 0.75f, HW_LANE - 0.3f);
+    }
+    vis_k = base_k;
+}
+
+// The conveyor (Fixed Strip): every cue's notes on one belt of a fixed
+// width that moves a row a frame (Stephen, 0.9.10: the highway's lanes
+// stacked too wide, and the background should show the game's time
+// passing, like a fretboard). Notes on the same frame share its row, in a
+// fixed order by kind; a lone note takes the whole row. Kinds differ by
+// shape as well as color: a jump has a raised cap, an AI is solid, a NIL
+// notched, a waveland or wavedash leans like an airdodge. A preload (a
+// plan from a press not made yet) hovers over the rows it will take, its
+// shadow on the belt, and sets down when the press comes. What's beyond the
+// belt's far end waits over its entry, lower the nearer it is.
+#define CV_W (2 * HW_LANE + HW_LANE_GAP)
+#define CV_SHELF 1.3f
+#define CV_LIFT 0.22f
+
+static int Cv_Rank(MeterRow *r)
+{
+    const char *l = r->label;
+    if (Str_Same(l, "HOP") || Str_Same(l, "JUMP"))
+        return 0;
+    if (Str_Same(l, "AI"))
+        return 1;
+    if (Str_Same(l, "NIL"))
+        return 2;
+    if (Str_Same(l, "WL") || Str_Same(l, "WD"))
+        return 3;
+    return 4;
+}
+
+// Whether a cell takes a share of its row: notes do, the frames in the air
+// and the landing lag behind them don't.
+static int Cv_Claims(int kind)
+{
+    return kind == CELL_PRESS || kind == CELL_ACT || kind == CELL_LAND || kind == CELL_TAIL;
+}
+
+// The rows to draw, in the belt's order (kind, then lane).
+static int Cv_Order(int *order)
+{
+    int n = 0;
+    for (int i = 0; i < meter_rows; i++)
+    {
+        if (meter[i].gap)
+            continue;
+        int j = n++;
+        while (j > 0 && Cv_Rank(&meter[order[j - 1]]) > Cv_Rank(&meter[i]))
+        {
+            order[j] = order[j - 1];
+            j--;
+        }
+        order[j] = i;
+    }
+    return n;
+}
+
+// How high a row's notes ride over the belt: a preload hovers, bobbing,
+// and one that set down eases onto it over three frames.
+static float Cv_Lift(MeterRow *r)
+{
+    if (r->parked)
+        return CV_LIFT + 0.05f * sin(event_vars->game_timer * 0.12f);
+    if (r->settle && r->settle <= 3)
+        return CV_LIFT * (1.f - r->settle / 3.f);
+    return 0;
+}
+
+// One note's frame k of row r in [x0, x1] by [y0, y1].
+static void Cv_Cell(MeterRow *r, int k, float x0, float y0, float x1, float y1)
+{
+    int kind = r->cell[k], tone = r->tone[k];
+    float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f);
+    GXColor col = Tone_Color(r, tone);
+    // a note's first and last frames are inset, so windows read as one
+    int below = k > 0 && r->cell[k - 1] == kind && r->tone[k - 1] == tone;
+    int above = k + 1 < r->len && r->cell[k + 1] == kind && r->tone[k + 1] == tone;
+    if (!below)
+        y0 += 0.05f;
+    if (!above)
+        y1 -= 0.05f;
+    int rank = tone == TONE_JUMP ? 0 : Cv_Rank(r);
+    switch (kind)
+    {
+    case CELL_PRESS:
+        if (rank == 0 && !above)
+        {
+            // a jump: the note's top frame peaks
+            float m = y0 + (y1 - y0) * 0.55f;
+            Hud_Rect(x0, y0, x1, m, Color_Fill(col, a));
+            Hud_Tri(x0, m, x1, m, (x0 + x1) / 2, y1 + 0.06f, Color_Fill(col, a));
+        }
+        else if (rank == 3)
+        {
+            float lean = (y1 - y0) * 0.35f;
+            Quad_Add(x0, y0, x1 - lean, y0, x1, y1, x0 + lean, y1, Color_Fill(col, a));
+        }
+        else
+        {
+            Hud_Rect(x0, y0, x1, y1, Color_Fill(col, a));
+            if (rank == 2 && !above)
+            {
+                float m = (x0 + x1) / 2;
+                Hud_Rect(m - 0.12f, y1 - 0.22f, m + 0.12f, y1, Color_Fill(color_plate, a));
+            }
+        }
+        break;
+    case CELL_ACT:
+        Hud_Rect(x0, y0, x1, y1, Color_Fill(col, a));
+        Hud_Rect(x0, y0, x1, y0 + 0.2f * HW_PITCH, Color_Fill(color_white, a * 0.9f));
+        break;
+    case CELL_LAND:
+        Hud_Rect(x0, y0, x1, y1, Color_Fill(color_plate, a * 0.6f));
+        Hud_Frame(x0, y0, x1, y1, 1.4f * PX, Color_Fill(col, a));
+        Hud_Rect(x0, y0, x1, y0 + 0.24f * HW_PITCH, Color_Fill(col, a));
+        break;
+    case CELL_TAIL:
+        Hud_Rect(x0, y0, x1, y1, Color_Fill(color_galint, a));
+        break;
+    case CELL_LAG:
+        Hud_Rect((x0 + x1) / 2 - 0.4f, y0, (x0 + x1) / 2 + 0.4f, y1, Color_Fill(col, a * 0.6f));
+        break;
+    }
+}
+
+// The first note a row has at or past frame from, or -1.
+static int Cv_FirstClaim(MeterRow *r, int from)
+{
+    for (int k = from; k < r->len && k < MT_CELLS; k++)
+        if (Cv_Claims(r->cell[k]))
+            return k;
+    return -1;
+}
+
+static void Conveyor_Draw(FighterData *fp)
+{
+    float x0, y0, w, h;
+    Strip_Place(fp, STRIP_CONVEYOR, &x0, &y0, &w, &h);
+    int right = x0 > 0;
+    float glyph = Strip_Glyphs() ? HW_GLYPH : 0;
+    float glyph_x = right ? x0 + STRIP_PAD + glyph / 2 : x0 + w - STRIP_PAD - glyph / 2;
+    float bl = x0 + STRIP_PAD + (right ? glyph : 0), br = bl + CV_W;
+    float line_y = y0 + HW_LABEL, top = line_y + HW_ROWS * HW_PITCH;
+    float base_k = vis_k;
+    int now = event_vars->game_timer;
+    int order[MT_ROWS], n = Cv_Order(order);
+
+    // the plate and belt stay up while the strip is on, so the belt's
+    // motion is always there to read the notes' speed against
+    vis_k = base_k * (Strip_PlateK() > 0.4f ? Strip_PlateK() : 0.4f);
+    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Fill(color_plate, 0.72f));
+    Hud_Rect(bl, line_y, br, top, Color_Over(color_white, 0.05f));
+    // the belt moves: a line between every two frames, a heavier one every
+    // fifth frame of the game's clock, with studs on the rails, so they
+    // travel down a row each frame
+    for (int k = 1; k <= HW_ROWS; k++)
+    {
+        float y = line_y + k * HW_PITCH;
+        if ((now + k) % 5 == 0)
+        {
+            Hud_Rect(bl, y - 0.07f, br, y + 0.07f, Color_Over(color_white, 0.28f));
+            if (k < HW_ROWS)
+            {
+                Hud_Rect(bl - 0.42f, y - 0.14f, bl - 0.16f, y + 0.14f, Color_Over(color_white, 0.5f));
+                Hud_Rect(br + 0.16f, y - 0.14f, br + 0.42f, y + 0.14f, Color_Over(color_white, 0.5f));
+            }
+        }
+        else
+            Hud_Rect(bl, y - 0.03f, br, y + 0.03f, Color_Over(color_white, 0.1f));
+    }
+    Hud_Rect(bl - 0.12f, line_y, bl - 0.06f, top, Color_Over(color_white, 0.2f));
+    Hud_Rect(br + 0.06f, line_y, br + 0.12f, top, Color_Over(color_white, 0.2f));
+    Hud_Rect(bl - 0.2f, top, br + 0.2f, top + 0.08f, Color_Over(color_white, 0.35f)); // the entry's lip
+
+    // the notes, a frame at a time: the rows with a note on it split it
+    for (int k = 0; k < HW_ROWS; k++)
+    {
+        int on[MT_ROWS], m = 0;
+        for (int j = 0; j < n; j++)
+        {
+            MeterRow *r = &meter[order[j]];
+            if (k < r->len && Cv_Claims(r->cell[k]))
+                on[m++] = order[j];
+        }
+        float y = line_y + k * HW_PITCH;
+        if (m == 0)
+        {
+            // only lag here: low bars across the belt
+            for (int j = 0; j < n; j++)
+            {
+                MeterRow *r = &meter[order[j]];
+                if (k < r->len && r->cell[k] == CELL_LAG)
+                {
+                    vis_k = base_k * r->fade;
+                    Cv_Cell(r, k, bl + 0.15f, y, br - 0.15f, y + HW_PITCH);
+                }
+            }
+            continue;
+        }
+        float share = (CV_W - 0.3f) / m;
+        for (int j = 0; j < m; j++)
+        {
+            MeterRow *r = &meter[on[j]];
+            vis_k = base_k * r->fade;
+            float sx0 = bl + 0.15f + j * share + (m > 1 ? 0.05f : 0), sx1 = sx0 + share - (m > 1 ? 0.1f : 0);
+            float lift = Cv_Lift(r);
+            if (lift > 0)
+                Hud_Rect(sx0 + 0.1f, y + 0.05f, sx1 + 0.1f, y + HW_PITCH - 0.05f, Color_Fill(color_plate, 0.55f)); // its shadow
+            if (lift > 0 && r->parked)
+                vis_k *= 0.8f;
+            Cv_Cell(r, k, sx0, y + lift, sx1, y + HW_PITCH + lift);
+            if (r->settle == 1)
+                Hud_Frame(sx0, y, sx1, y + HW_PITCH, 1.4f * PX, Color_Fill(color_white, 0.8f)); // set down
+        }
+    }
+
+    // over the entry: each row's next note past the far end, waiting
+    int wait[MT_ROWS], wk[MT_ROWS], q = 0;
+    for (int j = 0; j < n; j++)
+    {
+        MeterRow *r = &meter[order[j]];
+        int k = Cv_FirstClaim(r, HW_ROWS);
+        if (k >= 0 && Cv_FirstClaim(r, 0) == k)
+        {
+            wait[q] = order[j];
+            wk[q++] = k;
+        }
+    }
+    for (int j = 0; j < q; j++)
+    {
+        MeterRow *r = &meter[wait[j]];
+        vis_k = base_k * r->fade * 0.8f;
+        float share = (CV_W - 0.3f) / q;
+        float sx0 = bl + 0.15f + j * share + 0.1f, sx1 = sx0 + share - 0.2f;
+        int far = wk[j] - HW_ROWS;
+        float wy = top + 0.3f + (far < 20 ? far : 20) * 0.035f + 0.05f * sin(now * 0.12f + j);
+        Cv_Cell(r, wk[j], sx0, wy, sx1, wy + HW_PITCH * 0.8f);
+    }
+
+    // the input glyphs beside the belt
+    for (int j = 0; j < n; j++)
+    {
+        MeterRow *r = &meter[order[j]];
+        vis_k = base_k * r->fade;
+        float lift = Cv_Lift(r);
+        for (int k = 0; k < r->len && k < HW_ROWS; k++)
+            if (r->glyph[k])
+                Glyph_Draw(r->glyph[k], glyph_x, line_y + (k + 0.5f) * HW_PITCH + lift, 0.3f,
+                           Color_Fill(color_white, 0.95f * (r->dim ? 0.5f : 1.f)));
+    }
+
+    // the window: one across the belt, lit by the hottest row due, each
+    // row's ending in its share
+    int at[MT_ROWS], e = 0, hot = -1;
+    for (int j = 0; j < n; j++)
+    {
+        MeterRow *r = &meter[order[j]];
+        if ((r->len > 0 && Cv_Claims(r->cell[0]) && !r->parked) || (!r->dim && (r->burst >= 0 || r->implode >= 0)))
+            at[e++] = order[j];
+        int hj = r->dim || r->parked ? 0 : r->flash >= 0 ? 2 : r->hot;
+        if (hj > 0 && (hot < 0 || hj > (meter[hot].flash >= 0 ? 2 : meter[hot].hot)))
+            hot = order[j];
+    }
+    for (int j = 0; j < e; j++)
+    {
+        MeterRow *r = &meter[at[j]];
+        vis_k = base_k * r->fade;
+        float share = CV_W / e;
+        Hw_WindowEnd(r, bl + j * share, bl + (j + 1) * share, line_y);
+    }
+    vis_k = base_k;
+    MeterRow frame = {0};
+    if (hot >= 0)
+        frame = meter[hot];
+    else
+    {
+        frame.color = color_white;
+        frame.implode = -1;
+        frame.flash = -1;
+        if (e > 0)
+            frame = meter[at[0]], frame.hot = 0, frame.flash = -1;
+    }
+    Hw_WindowFrame(&frame, bl, br, line_y);
+
+    // the strikeline under it, a tick out each side that stretches on the
+    // press frame (not into the glyphs' column)
+    int press = hot >= 0 && (meter[hot].flash >= 0 || meter[hot].hot >= 2);
+    float tick = press ? 0.6f : 0.35f;
+    GXColor sc = press ? color_white : Color_Over(color_white, 0.45f);
+    float tl = glyph > 0 && right ? 0 : tick, tr = glyph > 0 && !right ? 0 : tick;
+    float my = line_y + HW_PITCH / 2;
+    Hud_Rect(bl - 0.12f - tl, line_y - 0.2f, br + 0.12f + tr, line_y - 0.12f, sc);
+    if (tl > 0)
+        Hud_Rect(bl - 0.12f - tl, my - 0.06f, bl - 0.2f, my + 0.06f, sc);
+    if (tr > 0)
+        Hud_Rect(br + 0.2f, my - 0.06f, br + 0.12f + tr, my + 0.06f, sc);
+
+    // the key: a chip per row in the belt's order, two to a line
+    for (int j = 0; j < n; j++)
+    {
+        MeterRow *r = &meter[order[j]];
+        vis_k = base_k * r->fade;
+        float cx = bl + (j % 2 ? 0.75f : 0.25f) * CV_W, cy = y0 + 1.3f - (j / 2) * 0.5f;
+        float tw = Text_Width(r->label, ST_TEXT);
+        float sx = cx - (tw + 0.55f) / 2;
+        Hud_Rect(sx, cy - 0.18f, sx + 0.36f, cy + 0.18f, Color_Fill(r->color, r->dim ? 0.5f : 1.f));
+        GXColor tc = Color_Mix(r->color, color_white, 0.35f);
+        if (r->dim)
+            tc = Color_Fill(tc, 0.6f);
+        tc.a = 255;
+        Hud_TextAligned(r->label, sx + 0.55f, Text_MidY(cy, ST_TEXT), ST_TEXT, tc, 0);
     }
     vis_k = base_k;
 }
@@ -6540,6 +6916,11 @@ static void Meter_Fixed(FighterData *fp)
     if (look == STRIP_DIAL)
     {
         Dial_Draw(fp);
+        return;
+    }
+    if (look == STRIP_CONVEYOR)
+    {
+        Conveyor_Draw(fp);
         return;
     }
     float gx, base;
@@ -14828,6 +15209,7 @@ static void Meter_AddJump(void)
         if (!row)
             return;
         row->fade = 0.85f; // parked, not moving: dimmed a little, never grayed (Stephen, 0.8.6)
+        row->parked = 1;
         if (r->hj >= 0)
         {
             for (int n = t0 + 1; n < r->dj; n++)
@@ -14841,6 +15223,7 @@ static void Meter_AddJump(void)
         if (!row)
             return;
         row->fade = 0.85f * Fade_Factor(VG_TIMERS, r->kind == LAND_AI ? CUE_AI : CUE_NIL);
+        row->parked = 1;
         Row_Jump(row, r, t0);
         return;
     }
@@ -16699,6 +17082,7 @@ static void Event_ThinkFrame(GOBJ *event)
     // window is the frame before, as for any press; on the takeoff frame a
     // jump with no airdodge yet is a frame late
     squat_wd = 0;
+    wd_preload = 0;
     if (Cues_Wd() && !disturbed)
     {
         if (sid == ASID_KNEEBEND)
@@ -16711,6 +17095,20 @@ static void Event_ThinkFrame(GOBJ *event)
         }
         else if (airborne && prev_state_id == ASID_KNEEBEND)
             squat_wd = 1;
+        else if (!airborne && Ground_CanJump(sid))
+        {
+            // a jump pressed now: its first jumpsquat frame counts from
+            // frame 1 (as squat_wd above sees it), a frame on from here
+            float left = fp->attr.jump_startup_time - 1.f;
+            int until = (int)left;
+            if (until < left)
+                until++;
+            wd_preload = (until < 1 ? 1 : until) + 1;
+        }
+        if (cue_log && sid == ASID_KNEEBEND && prev_state_id != ASID_KNEEBEND)
+            OSReport("LLWDPRE %d squat_wd %d frame %.1f was %d\n", event_vars->game_timer, squat_wd, fp->state.frame,
+                     wd_last);
+        wd_last = wd_preload;
     }
 
     galint_now = sid == ASID_CLIFFWAIT ? 0 : fp->hurt.intang_frames.ledge;

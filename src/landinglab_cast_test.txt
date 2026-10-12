@@ -1,0 +1,19 @@
+# Whole-cast checks: build with LLSCRIPT=src/landinglab_cast_test.txt
+# LLCHAR=file LLECB=<packed tables>, one ISO per fighter (LLCHARFILE).
+# The double jump held back: the trace's state_id says which double jump
+# the game played (27 JumpAerialF, 28 JumpAerialB). The event predicts the
+# forward one for a fighter whose table has no backward one.
+autorun
+
+script Back double jump
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+trace on
+10 X
+20
+1 X s:-1,0
+60
+trace off
+land 200

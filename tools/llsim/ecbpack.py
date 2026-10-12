@@ -131,10 +131,16 @@ def block(rows, lens, loops, leans):
     for (ts, frame), (flags, words) in sorted(rows.items()):
         out += struct.pack('>BBBx5I', ts, frame, flags, *words)
     if leans:
-        out += struct.pack('>Hxx', len(leans))
+        data = struct.pack('>Hxx', len(leans))
         for fall, back, k, words in leans:
-            out += struct.pack('>BBBx6I', fall, back, k, *words)
+            data += struct.pack('>BBBx6I', fall, back, k, *words)
+        out += section(b'LEAN', data)
     return pad32(out)
+
+
+def section(tag, data):
+    """A tagged section after the rows (Ecb_Unpack): tag, size, data."""
+    return tag + struct.pack('>I', len(data)) + data
 
 
 def main():

@@ -2991,13 +2991,15 @@ static void Sim_ForFighter(int kind)
 // next state (as LLLEN), the falls' loops (u8 each for Fall, FallAerial,
 // FallSpecial, then a pad byte; 0 = Falcon's), then each row: u8 state, u8
 // frame, u8 flags (BAKED_*), a pad byte and five floats (as BakedEcb). Then
-// the falls' leans, if captured: u16 rows, a pad u16, each row u8 fall, u8
+// sections, each a u32 tag, its u32 size and its data, up to a zero tag:
+// "LEAN", the falls' leans: u16 rows, a pad u16, each row u8 fall, u8
 // leaning back, u8 loop frame, a pad byte and six floats (as LeanEcb, in
 // its order). Blocks start and end on 32 bytes, as the disc reads them.
 #define LLE_FIGHTERS 32
 #define LLE_DIR_BYTES (32 + LLE_FIGHTERS * 16)
 #define LLE_ROW 24
 #define LLE_LEAN_ROW 28
+#define LLE_TAG_LEAN 0x4C45414E // "LEAN"
 
 static u32 Pack_U32(const u8 *b)
 {
@@ -3070,23 +3072,34 @@ static int Ecb_Unpack(const u8 *b, int size)
         e->aerial_lag = (flags & BAKED_LAG) != 0;
         e->seen = 1;
     }
-    // the leans, kept only whole (each blend a full loop of its fall)
-    int leans = at + 4 <= size ? Pack_S16(b + at) & 0xFFFF : 0;
-    at += 4;
-    if (sim_falcon || !lean_own || leans > LL_LEAN_MAX || at + leans * LLE_LEAN_ROW > size)
-        leans = 0;
-    for (int i = 0; i < leans; i++, at += LLE_LEAN_ROW)
+    int leans = 0;
+    while (at + 8 <= size && Pack_U32(b + at) != 0)
     {
-        LeanEcb *l = &lean_own[i];
-        l->fall = b[at] != 0;
-        l->back = b[at + 1] != 0;
-        l->k = b[at + 2];
-        l->lean = Pack_F32(b + at + 4);
-        l->bottom = Pack_F32(b + at + 8);
-        l->top = Pack_F32(b + at + 12);
-        l->side = Pack_F32(b + at + 16);
-        l->front = Pack_F32(b + at + 20);
-        l->back_x = Pack_F32(b + at + 24);
+        u32 tag = Pack_U32(b + at);
+        int len = Pack_U32(b + at + 4), data = at + 8;
+        at = data + len;
+        if (len < 0 || at > size)
+            break;
+        // the leans, whole or not at all (each blend a full loop of its fall)
+        if (tag == LLE_TAG_LEAN && len >= 4)
+        {
+            leans = Pack_S16(b + data) & 0xFFFF;
+            if (sim_falcon || !lean_own || leans > LL_LEAN_MAX || 4 + leans * LLE_LEAN_ROW > len)
+                leans = 0;
+            for (int i = 0, r = data + 4; i < leans; i++, r += LLE_LEAN_ROW)
+            {
+                LeanEcb *l = &lean_own[i];
+                l->fall = b[r] != 0;
+                l->back = b[r + 1] != 0;
+                l->k = b[r + 2];
+                l->lean = Pack_F32(b + r + 4);
+                l->bottom = Pack_F32(b + r + 8);
+                l->top = Pack_F32(b + r + 12);
+                l->side = Pack_F32(b + r + 16);
+                l->front = Pack_F32(b + r + 20);
+                l->back_x = Pack_F32(b + r + 24);
+            }
+        }
     }
     if (!sim_falcon)
     {

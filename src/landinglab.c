@@ -5918,7 +5918,7 @@ static float Meter_Pitch(void);
 #define DL_CELL 4.2f     // the room one takes, side to side
 #define DL_LABEL 1.7f
 #define STRIP_PAD 0.35f
-#define CV_KEY 4.3f // the conveyor key's column: a swatch, then "WL/WD" (2.95 wide at ST_TEXT), clear of the rail studs
+#define CV_KEY 4.3f // the conveyor key's column: a swatch, then "JUMP" or "WAVE", clear of the rail studs
 
 static int Strip_Glyphs(void)
 {
@@ -6655,7 +6655,7 @@ static void Conveyor_Draw(FighterData *fp)
     // the plate and belt stay up, solid, while the strip is on, so the
     // belt's motion is always there to read the notes' speed against
     // (0.9.12's faded with the cues, and the stage showed through it)
-    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Over(color_plate, 0.88f));
+    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Over(color_plate, 0.95f));
     Hud_Rect(bl, line_y, br, top, Color_Over(color_white, 0.07f));
     // the belt moves: a line between every two frames, a heavier one every
     // fifth frame of the game's clock, with studs on the rails, so they
@@ -6814,7 +6814,7 @@ static void Conveyor_Draw(FighterData *fp)
     // the key beside the belt: every kind in its own place, lit while
     // one is up (Stephen, 0.9.10: no time to read words under the belt;
     // the colors do the work, the key is there to learn them)
-    static const char *key_label[4] = {"JUMP", "AI", "NIL", "WL/WD"};
+    static const char *key_label[4] = {"JUMP", "AI", "NIL", "WAVE"}; // no wider than JUMP (WL/WD ran into the belt)
     static const char *key_rank[4] = {"JUMP", "AI", "NIL", "WL"};
     GXColor key_color[4] = {color_in_jump, land_kind_colors[LAND_AI], land_kind_colors[LAND_NIL],
                             land_kind_colors[LAND_PERFECT_WL]};
@@ -6828,7 +6828,7 @@ static void Conveyor_Draw(FighterData *fp)
         sw.color = key_color[i];
         strcpy(sw.label, key_rank[i]);
         float y = top - 0.6f - i * CV_KEY_PITCH; // a line of ST_TEXT apart
-        vis_k = base_k * (on ? 1.f : 0.4f);
+        vis_k = base_k * (on ? 1.f : 0.55f);
         Cv_Note(&sw, CELL_PRESS, TONE_CUE, 1.f, kx, y - 0.22f, kx + 0.55f, y + 0.22f, 0, 0);
         GXColor tc = Color_Mix(key_color[i], color_white, 0.35f);
         tc.a = 255;

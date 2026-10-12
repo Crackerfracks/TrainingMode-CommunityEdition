@@ -5651,6 +5651,18 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     float plate_x0 = labels ? gx - MT_LABEL_GAP * scale - MT_LABEL_W - 0.25f : gx - 0.32f * scale;
     Hud_Rect(plate_x0, base - 0.22f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
 
+    // the game's time going by under the rows: a tick a frame, heavier on
+    // every fifth frame of the clock, moving a cell toward the gate each
+    // frame, like the highway's and the conveyor's lines
+    int now = event_vars->game_timer;
+    for (int k = 1; k < len; k++)
+    {
+        int five = (now + k) % 5 == 0;
+        float tx = gx + k * pitch + cw / 2, e = (five ? 0.07f : 0.035f) * scale;
+        Hud_Rect(tx - e, base - 0.19f * scale, tx + e, base - (five ? 0.04f : 0.1f) * scale,
+                 Color_Over(color_white, five ? 0.45f : 0.2f));
+    }
+
     // rows from the bottom up, each in its own lane (Meter_Settle)
     for (int i = 0; i < rows; i++)
     {
@@ -5665,7 +5677,8 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         for (int k = 1; k < len; k++)
         {
             if (r->cell[k] == CELL_NONE)
-                Hud_Rect(gx + k * pitch, y0, gx + k * pitch + cw, y1, Color_Fill(color_white, 0.1f * dim));
+                Hud_Rect(gx + k * pitch, y0, gx + k * pitch + cw, y1,
+                         Color_Fill(color_white, ((now + k) % 5 == 0 ? 0.17f : 0.1f) * dim));
         }
 
         for (int k = 0; k < r->len && k < len; k++)
@@ -6884,6 +6897,20 @@ static void Dial_One(MeterRow *r, float cx, float cy)
 
     Dial_Fan(cx, cy, R + 0.35f, 0, 360, Color_Fill(color_plate, 0.8f));
     Dial_Band(cx, cy, R - 0.05f, R + 0.05f, 0, 360, Color_Over(color_white, 0.2f * dim));
+
+    // the game's clock round the rim: a tick between every two frames,
+    // heavier before every fifth. They hold still while a window waits,
+    // so the hand passes them at the game's speed, and turn a slice a
+    // frame while none does, so the time going by always shows.
+    int at = event_vars->game_timer + (a >= 0 ? a - r->spent : 0); // the wedge's frame
+    for (int d = 0; d < (int)(360.f / DL_DEG); d++)
+    {
+        int five = (at - d) % 5 == 0;
+        float deg = -d * DL_DEG, x0, y0, x1, y1;
+        Dial_Pt(cx, cy, R + 0.08f, deg, &x0, &y0);
+        Dial_Pt(cx, cy, R + (five ? 0.3f : 0.18f), deg, &x1, &y1);
+        Hud_Seg(x0, y0, x1, y1, five ? 0.1f : 0.06f, Color_Over(color_white, (five ? 0.5f : 0.22f) * dim));
+    }
 
     if (a >= 0)
     {

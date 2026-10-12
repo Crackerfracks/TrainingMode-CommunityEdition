@@ -5928,7 +5928,7 @@ static float Meter_Pitch(void);
 #define DL_CELL 4.2f     // the room one takes, side to side
 #define DL_LABEL 1.7f
 #define STRIP_PAD 0.35f
-#define CV_KEY 4.3f // the conveyor key's column: a swatch, then "JUMP" or "WAVE", clear of the rail studs
+#define CV_KEY 4.6f // the conveyor key's column: a swatch, then "JUMP" or "WAVE", clear of the rail studs and the belt
 
 static int Strip_Glyphs(void)
 {
@@ -6504,7 +6504,7 @@ static void Highway_Draw(FighterData *fp)
 // belt's far end waits over its entry, lower the nearer it is.
 #define CV_W (2 * HW_LANE + HW_LANE_GAP)
 #define CV_SHELF 1.3f
-#define CV_LIFT 0.22f
+#define CV_LIFT 0.45f // a preload's hover: two thirds of a frame (0.22 didn't read as lifted)
 #define CV_BASE 0.8f // under the window
 #define CV_KEY_PITCH 1.2f // the key's rows (0.8 overlapped)
 
@@ -6553,7 +6553,7 @@ static int Cv_Order(int *order)
 static float Cv_Lift(MeterRow *r)
 {
     if (r->parked)
-        return CV_LIFT + 0.05f * sin(event_vars->game_timer * 0.12f);
+        return CV_LIFT + 0.07f * sin(event_vars->game_timer * 0.12f);
     if (r->settle && r->settle <= 3)
         return CV_LIFT * (1.f - r->settle / 3.f);
     return 0;
@@ -6728,10 +6728,10 @@ static void Conveyor_Draw(FighterData *fp)
             int lo = k > 0 && r->cell[k - 1] == kind && r->tone[k - 1] == r->tone[k];
             int hi = e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k];
             vis_k = base_k * r->fade;
-            if (lift > 0)
-                Hud_Rect(sx0 + 0.1f, y0 + 0.05f, sx1 + 0.1f, y1 - 0.05f, Color_Fill(color_plate, 0.55f)); // its shadow
-            if (r->parked)
-                vis_k *= 0.8f;
+            // where it will set down: a light outline on the belt under it
+            // (a dark shadow was lost on the dark belt, 0.9.14 test)
+            if (lift > 0 && kind != CELL_LAG)
+                Hud_Frame(sx0, y0 + 0.05f, sx1, y1 - 0.05f, PX, Color_Over(color_white, 0.3f * (1.f - r->settle / 4.f)));
             float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f);
             Cv_Note(r, kind, r->tone[k], a, sx0, y0 + lift, sx1, y1 + lift, lo, hi);
             if (r->settle == 1 && kind != CELL_LAG)

@@ -32,11 +32,17 @@ land 120
 hover 0 100
 80
 
-# double jumps forward and back, into FallAerial
+# double jumps forward and back, into FallAerial, each from a fresh jump
+# (the back one after the forward one, refilled, never came out for the
+# Mario bros in the 2026-10-12 capture, though it does from a fresh jump)
 refill
 1 X
 80
-refill
+hover off
+land 200
+90
+10 X
+hover 0 100
 1 X s:-1,0
 80
 

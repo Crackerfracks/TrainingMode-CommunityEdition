@@ -3925,10 +3925,9 @@ static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, fl
     return until;
 }
 
-// The double jump's state for the stick (times facing). Some fighters
-// (Mario, Dr. Mario, Luigi, Yoshi, Jigglypuff, Kirby in the 2026-10-12
-// capture) never use the backward one: their table has nothing for it,
-// and the forward one plays either way.
+// The double jump's state for the stick (times facing). A fighter whose
+// table has nothing for the backward one (Yoshi: the game plays his
+// forward one either way) gets the forward one.
 static int Dj_State(float stick_x)
 {
     if (stick_x > -common_jump_back_stick)

@@ -17,7 +17,8 @@ U = os.path.expanduser("~/.local/share/tmce-landinglab-dolphin")
 ISO = f"{U}/test-navboot.iso"
 NAV = f"{C}/tools/nav/nav.py"
 FIGHTERS = [("Fox", 1), ("Mario", 0)]          # CSS name, internal kind (fp->kind)
-RELOAD_AT = {3, 8}
+HEADLESS = bool(os.environ.get("HEADLESS"))   # HEADLESS=1: run on Xvfb (hlaunch.sh)
+RELOAD_AT = set() if HEADLESS else {3, 8}
 N = int(sys.argv[1]) if len(sys.argv) > 1 else 10
 R = open(f"{O}/nav_boot_test.txt", "w", buffering=1)
 
@@ -65,13 +66,19 @@ with jobboard.Job("TM-CE nav boot test (closed-loop menus)", total=N, unit="boot
         navlog = open(f"{O}/nav_boot_{i}.txt", "w")
         nav = subprocess.Popen(["python3", NAV, "route", "Landing Lab", name], stdout=navlog, stderr=subprocess.STDOUT)
         time.sleep(1)                                   # nav binds the socket and writes Locations.txt first
-        subprocess.Popen([f"{U}/focusguard.sh", "300"])
-        ws = subprocess.run([f"{U}/pickws.py"], capture_output=True, text=True).stdout.strip()
-        subprocess.run(["hyprctl", "dispatch", f"hl.dsp.exec_cmd('{U}/launch.sh {ISO}', {{ workspace = '{ws} silent', "
-                        "float = true, no_initial_focus = true, suppress_event = 'fullscreen maximize fullscreenoutput "
-                        "activate activatefocus' })"], capture_output=True)
-        t0, reloaded = time.time(), False
+        if HEADLESS:                                    # hidden X display; Stephen's screens untouched
+            subprocess.Popen([f"{U}/hlaunch.sh", ISO])
+        else:
+            subprocess.Popen([f"{U}/focusguard.sh", "300"])
+            ws = subprocess.run([f"{U}/pickws.py"], capture_output=True, text=True).stdout.strip()
+            subprocess.run(["hyprctl", "dispatch", f"hl.dsp.exec_cmd('{U}/launch.sh {ISO}', {{ workspace = '{ws} silent', "
+                            "float = true, no_initial_focus = true, suppress_event = 'fullscreen maximize fullscreenoutput "
+                            "activate activatefocus' })"], capture_output=True)
+        t0, reloaded, seen = time.time(), False, 0
         while nav.poll() is None and time.time() - t0 < 240:
+            if HEADLESS:                                # a headless boot must never map a window on Hyprland
+                cl = subprocess.run(["hyprctl", "clients", "-j"], capture_output=True, text=True).stdout
+                seen += '"dolphin-emu"' in cl
             if i in RELOAD_AT and not reloaded and "NAV confirmed event" in open(f"{O}/nav_boot_{i}.txt").read():
                 subprocess.run(["hyprctl", "reload"], capture_output=True); reloaded = True
                 job.log(f"boot {i}: hyprctl reload mid-route", "info")
@@ -89,7 +96,9 @@ with jobboard.Job("TM-CE nav boot test (closed-loop menus)", total=N, unit="boot
         got = re.match(r"LLECB fighter (\d+)", fighter)
         ok = rc == 0 and got and int(got.group(1)) == kind
         why = "" if ok else (re.findall(r"NAV FAILED.*", navtxt) or [f"nav rc {rc}"])[0] + f" | {fighter or 'no LLECB fighter line'}"
-        line = f"boot {i} {name}{' +reload' if reloaded else ''}: {'PASS' if ok else 'FAIL'} " \
+        if seen:
+            ok, why = False, why + f" | a Dolphin window showed on Hyprland ({seen} polls)"
+        line = f"boot {i} {name}{' +reload' if reloaded else ''}{' headless' if HEADLESS else ''}: {'PASS' if ok else 'FAIL'} " \
                f"{time.time() - t0:.0f}s | {fighter} {why}"
         R.write(line + "\n")
         R.write("".join("    " + l + "\n" for l in navtxt.splitlines() if "NAV" in l))
@@ -97,6 +106,8 @@ with jobboard.Job("TM-CE nav boot test (closed-loop menus)", total=N, unit="boot
         job.advance(1, msg=line[:120]); job.log(line[:200], "ok" if ok else "error")
         job.update(fields={"passed": passed, "failed": failed})
     if os.path.exists(ISO): os.remove(ISO)
+    if HEADLESS:
+        subprocess.run([f"{U}/hlaunch.sh", "stop"])
     R.write(f"passed {passed}/{N}\n")
     if failed:
         raise RuntimeError(f"{failed} of {N} boots failed")

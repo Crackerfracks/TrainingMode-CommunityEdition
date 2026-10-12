@@ -5274,7 +5274,9 @@ static void Meter_FromCue(int kind)
     if (!live)
         return;
     int tone = c->dim == DIM_MISS ? TONE_MISS : c->dim ? TONE_SKIP : TONE_CUE;
-    float a = c->phase == PH_COUNT ? Clamp01((c->span - c->left + 1) / 2.f) : 1.f; // fades in over 2 frames
+    // fades in over 2 frames, but a wavedash's countdown takes over from its
+    // preload in place (0.9.15 test: it dimmed on the jumpsquat's first frame)
+    float a = c->phase == PH_COUNT && !c->wd ? Clamp01((c->span - c->left + 1) / 2.f) : 1.f;
     if (kind == CUE_NIL)
     {
         Row_Set(r, c->left - 2, CELL_LAND, tone, a);
@@ -5928,7 +5930,7 @@ static float Meter_Pitch(void);
 #define DL_CELL 4.2f     // the room one takes, side to side
 #define DL_LABEL 1.7f
 #define STRIP_PAD 0.35f
-#define CV_KEY 4.6f // the conveyor key's column: a swatch, then "JUMP" or "WAVE", clear of the rail studs and the belt
+#define CV_KEY 4.9f // the conveyor key's column: a swatch, then "JUMP" or "WAVE" (about 3.5 wide at ST_TEXT in game, more than Text_Width says), clear of the rail studs
 
 static int Strip_Glyphs(void)
 {
@@ -6730,10 +6732,13 @@ static void Conveyor_Draw(FighterData *fp)
             vis_k = base_k * r->fade;
             // where it will set down: a light outline on the belt under it
             // (a dark shadow was lost on the dark belt, 0.9.14 test)
+            // (0.9.15 test: right under the note it was hidden, so the note
+            // also leans left off it while it hovers)
+            float lean = -0.4f * lift;
             if (lift > 0 && kind != CELL_LAG)
-                Hud_Frame(sx0, y0 + 0.05f, sx1, y1 - 0.05f, PX, Color_Over(color_white, 0.3f * (1.f - r->settle / 4.f)));
+                Hud_Frame(sx0, y0 + 0.05f, sx1, y1 - 0.05f, 1.5f * PX, Color_Over(color_white, 0.5f * (1.f - r->settle / 4.f)));
             float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f);
-            Cv_Note(r, kind, r->tone[k], a, sx0, y0 + lift, sx1, y1 + lift, lo, hi);
+            Cv_Note(r, kind, r->tone[k], a, sx0 + lean, y0 + lift, sx1 + lean, y1 + lift, lo, hi);
             if (r->settle == 1 && kind != CELL_LAG)
                 Hud_Frame(sx0 - PX, y0 - PX, sx1 + PX, y1 + PX, 1.4f * PX, Color_Fill(color_white, 0.8f)); // set down
             k = e;
@@ -6842,7 +6847,7 @@ static void Conveyor_Draw(FighterData *fp)
         Cv_Note(&sw, CELL_PRESS, TONE_CUE, 1.f, kx, y - 0.22f, kx + 0.55f, y + 0.22f, 0, 0);
         GXColor tc = Color_Mix(key_color[i], color_white, 0.35f);
         tc.a = 255;
-        Hud_TextAligned(key_label[i], kx + 0.8f, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 0);
+        Hud_TextAligned(key_label[i], kx + 0.75f, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 0);
     }
     vis_k = base_k;
 }

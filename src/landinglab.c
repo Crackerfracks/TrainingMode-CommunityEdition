@@ -5339,7 +5339,17 @@ static void Meter_Collect(void)
     Meter_AddJump();
     Meter_AddDrop(drop_sid);
     if (route_rows_active)
-        return; // a ledge route has the meter to itself
+    {
+        // a ledge route has the meter to itself. A jump's plan keeps the
+        // wavedash out of a jump beside it (0.9.13 test: the standing hop
+        // plan hid the WD preload, and the jumpsquat's countdown with it)
+        Cue *c = &cue_live[CUE_WL], *e = &cue_end[CUE_WL];
+        if (jump_rows_active && Cues_Wd() && (c->phase != PH_OFF ? c->wd : e->phase != PH_OFF && e->wd))
+            Meter_FromCue(CUE_WL);
+        if (jump_rows_active)
+            Meter_AddWdPreload();
+        return;
+    }
     if (Cues_Ai())
         Meter_FromCue(CUE_AI);
     if (Cues_Waveland() || Cues_Wd())
@@ -10141,18 +10151,15 @@ static void Hud_GX(GOBJ *gobj, int pass)
         return;
     }
     Meter_Build();
-    vis_k = Group_K(route_rows_active ? VG_LEDGE : VG_TIMERS);
+    float strip_k = Group_K(route_rows_active ? VG_LEDGE : VG_TIMERS);
+    vis_k = strip_k;
     Spot_Draw(fp);
     int near = Options_Timers[TOPT_NEAR].val;
+    int strip = Options_Timers[TOPT_STRIP].val;
     if (meter_rows == 0)
         Pin_Idle();
-    else
-    {
-        if (near == NEAR_STRIP)
-            Meter_Above(fp);
-        if (Options_Timers[TOPT_STRIP].val != STRIP_OFF)
-            Meter_Fixed(fp);
-    }
+    else if (near == NEAR_STRIP)
+        Meter_Above(fp);
     if (near != NEAR_OFF && near != NEAR_STRIP)
         Near_Draw(fp, near);
     Wd_Draw(fp);
@@ -10163,6 +10170,13 @@ static void Hud_GX(GOBJ *gobj, int pass)
     Assist_Draw();
     vis_k = Group_K(VG_PATHS);
     Compass_Draw();
+    // the fixed strip over what's placed in the world, so an input chip or
+    // a spot's rails never cross its belt (0.9.13 test: an airdodge chip
+    // lay over it). The conveyor runs with nothing on it too, its belt
+    // always moving (Stephen, 0.9.10)
+    vis_k = strip_k;
+    if (strip != STRIP_OFF && (meter_rows > 0 || strip == STRIP_CONVEYOR))
+        Meter_Fixed(fp);
     vis_k = Group_K(VG_PAD);
     Pad_Draw(fp);
     vis_k = 1.f;

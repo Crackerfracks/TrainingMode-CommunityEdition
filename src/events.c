@@ -1209,7 +1209,10 @@ void HUD_DrawActionLogKey(char **action_names, GXColor *action_colors, int actio
 // The capture build's fighter from TM/llchar.txt: a CKIND_ number, or -1.
 static int LL_CharFromDisc(void)
 {
-    static char buf[64] __attribute__((aligned(32)));
+    // aligned by hand: the menu .dat's load doesn't keep a static's
+    // alignment, and the disc read asserts on it (0.9.17 test)
+    static char raw[96];
+    char *buf = (char *)(((u32)raw + 31) & ~31);
     int entry = DVDConvertPathToEntrynum("TM/llchar.txt");
     if (entry < 0)
         return -1;

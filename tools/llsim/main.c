@@ -5,8 +5,14 @@
  * the stage's collision), loads it where the game keeps it (sim.c), and
  * runs the same code the event runs.
  *
- *   llsim check <dump> [wlground]   the hops Sim_Check predicts in game, as
- *                                   LLCHECK lines to diff against its log
+ *   llsim check <dump> [wlground] [-t <capture>]
+ *       the hops Sim_Check predicts in game, as LLCHECK lines to diff
+ *       against its log
+ *   llsim ecb <dump> [-t <capture>]
+ *       the ECB table in use, as the game's LLECB and LLLEN lines
+ *
+ * The ECB table is Falcon's baked one unless -t names a capture's log
+ * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it.
  *
  * Build: tools/llsim/build.sh
  */
@@ -117,19 +123,76 @@ static void Dump_Load(const char *path)
     fclose(f);
 }
 
+// A capture's LLECB and LLLEN lines in place of the baked table.
+static void Table_Load(const char *path)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+    {
+        fprintf(stderr, "llsim: can't open %s\n", path);
+        exit(1);
+    }
+    char line[512];
+    int table_char = -1, rows = 0, lens = 0;
+    while (fgets(line, sizeof(line), f))
+    {
+        char *t;
+        int ts, frame, flags, len, next;
+        unsigned w[5];
+        if ((t = strstr(line, "LLECB begin char ")))
+        {
+            table_char = atoi(t + 17);
+            // the leans are Falcon's own measurements
+            llsim_table_begin(table_char == 2);
+        }
+        else if (table_char < 0)
+            continue;
+        else if ((t = strstr(line, "LLECB ")) &&
+                 sscanf(t + 6, "%d %d %d %x %x %x %x %x", &ts, &frame, &flags, &w[0], &w[1], &w[2], &w[3], &w[4]) == 8)
+            rows += llsim_ecb(ts, frame, flags, w);
+        else if ((t = strstr(line, "LLLEN ")) && sscanf(t + 6, "%d %d %d", &ts, &len, &next) == 3)
+            lens += llsim_len(ts, len, next);
+    }
+    fclose(f);
+    if (table_char < 0 || rows == 0)
+    {
+        fprintf(stderr, "llsim: %s has no LLECB table\n", path);
+        exit(1);
+    }
+    if (table_char != dump_char)
+        fprintf(stderr, "llsim: warning: %s is char %d's table, the dump is char %d's\n", path, table_char, dump_char);
+}
+
 int main(int argc, char **argv)
 {
-    if (argc < 3 || strcmp(argv[1], "check"))
+    const char *table = 0;
+    char *pos[4];
+    int npos = 0;
+    for (int i = 1; i < argc; i++)
     {
-        fprintf(stderr, "usage: llsim check <dump> [wlground]\n");
+        if (!strcmp(argv[i], "-t") && i + 1 < argc)
+            table = argv[++i];
+        else if (npos < 4)
+            pos[npos++] = argv[i];
+    }
+    int check = npos >= 2 && !strcmp(pos[0], "check"), ecb = npos == 2 && !strcmp(pos[0], "ecb");
+    if (!check && !ecb)
+    {
+        fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>]\n"
+                        "       llsim ecb <dump> [-t <capture>]\n");
         return 2;
     }
-    Dump_Load(argv[2]);
-    if (dump_stage < 0 || !llsim_ready(dump_char, argc > 3 ? atoi(argv[3]) : 1))
+    Dump_Load(pos[1]);
+    if (dump_stage < 0 || !llsim_ready(dump_char, npos > 2 ? atoi(pos[2]) : 1))
     {
-        fprintf(stderr, "llsim: %s has no LLDUMP begin or collision\n", argv[2]);
+        fprintf(stderr, "llsim: %s has no LLDUMP begin or collision\n", pos[1]);
         return 1;
     }
-    llsim_check();
+    if (table)
+        Table_Load(table);
+    if (ecb)
+        llsim_ecb_print(dump_char);
+    else
+        llsim_check();
     return 0;
 }

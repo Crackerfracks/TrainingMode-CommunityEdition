@@ -160,3 +160,75 @@ void llsim_check(void)
     static Prediction p;
     Sim_Check(&fighter, &p);
 }
+
+// A character's own ECB table (a capture's LLECB and LLLEN lines) in place
+// of Falcon's baked one. The fall leans were measured on Falcon only, so
+// another character falls in its plain pose.
+void llsim_table_begin(int keep_lean)
+{
+    memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
+    memset(state_len, 0, sizeof(state_len));
+    memset(state_next, -1, sizeof(state_next));
+    if (!keep_lean)
+    {
+        memset(lean_levels, 0, sizeof(lean_levels));
+        memset(onset_levels, 0, sizeof(onset_levels));
+    }
+}
+
+int llsim_ecb(int ts, int frame, int flags, const unsigned *w)
+{
+    if (ts < 0 || ts >= TS_COUNT || frame < 0 || frame >= LL_STATE_FRAMES)
+        return 0;
+    EcbSample *e = &ecb_table[ts * LL_STATE_FRAMES + frame];
+    e->bottom = Bits_Float(w[0]);
+    e->top = Bits_Float(w[1]);
+    e->side_y = Bits_Float(w[2]);
+    e->front = Bits_Float(w[3]);
+    e->back = Bits_Float(w[4]);
+    e->has_bottom = (flags & BAKED_BOTTOM) != 0;
+    e->has_shape = (flags & BAKED_SHAPE) != 0;
+    e->aerial_lag = (flags & BAKED_LAG) != 0;
+    e->seen = 1;
+    return 1;
+}
+
+int llsim_len(int ts, int len, int next)
+{
+    if (ts < 0 || ts >= TS_COUNT)
+        return 0;
+    state_len[ts] = len;
+    state_next[ts] = next;
+    return 1;
+}
+
+static u32 Float_Bits(float f)
+{
+    union
+    {
+        float f;
+        u32 u;
+    } v = {f};
+    return v.u;
+}
+
+// The table in use, as the game's Ecb_Dump writes it (its LLECB and LLLEN
+// lines), so a capture can be diffed against it.
+void llsim_ecb_print(int fighter_kind)
+{
+    OSReport("LLECB begin char %d\n", fighter_kind);
+    for (int ts = 0; ts < TS_COUNT; ts++)
+    {
+        for (int f = 0; f < LL_STATE_FRAMES; f++)
+        {
+            EcbSample *e = &ecb_table[ts * LL_STATE_FRAMES + f];
+            if (!e->seen)
+                continue;
+            int flags = (e->has_bottom ? BAKED_BOTTOM : 0) | (e->has_shape ? BAKED_SHAPE : 0) | (e->aerial_lag ? BAKED_LAG : 0);
+            OSReport("LLECB %d %d %d %08x %08x %08x %08x %08x\n", ts, f, flags, Float_Bits(e->bottom), Float_Bits(e->top),
+                     Float_Bits(e->side_y), Float_Bits(e->front), Float_Bits(e->back));
+        }
+        OSReport("LLLEN %d %d %d\n", ts, state_len[ts], state_next[ts]);
+    }
+    OSReport("LLECB end\n");
+}

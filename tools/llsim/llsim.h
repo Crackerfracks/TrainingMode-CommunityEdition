@@ -11,5 +11,9 @@ int llsim_line(int i, const int *v, unsigned xc, unsigned xd, unsigned xe, unsig
 int llsim_vert(int i, unsigned cx, unsigned cy, unsigned ox, unsigned oy);
 int llsim_ready(int fighter_kind, int wlground);
 void llsim_check(void);
+void llsim_table_begin(int keep_lean);
+int llsim_ecb(int ts, int frame, int flags, const unsigned *w);
+int llsim_len(int ts, int len, int next);
+void llsim_ecb_print(int fighter_kind);
 
 #endif

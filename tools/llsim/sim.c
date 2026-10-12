@@ -162,8 +162,8 @@ void llsim_check(void)
 }
 
 // A character's own ECB table (a capture's LLECB and LLLEN lines) in place
-// of Falcon's baked one. The fall leans were measured on Falcon only, so
-// another character falls in its plain pose.
+// of Falcon's baked one. The fall leans stay Falcon's, as they do in game,
+// unless keep_lean is 0.
 void llsim_table_begin(int keep_lean)
 {
     memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);

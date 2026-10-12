@@ -13,6 +13,8 @@
  *
  * The ECB table is Falcon's baked one unless -t names a capture's log
  * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it.
+ * The fall leans are Falcon's measurements either way, as in game, unless
+ * -nolean drops them (the plain pose for every lean).
  *
  * Build: tools/llsim/build.sh
  */
@@ -124,7 +126,7 @@ static void Dump_Load(const char *path)
 }
 
 // A capture's LLECB and LLLEN lines in place of the baked table.
-static void Table_Load(const char *path)
+static void Table_Load(const char *path, int keep_lean)
 {
     FILE *f = fopen(path, "r");
     if (!f)
@@ -142,8 +144,7 @@ static void Table_Load(const char *path)
         if ((t = strstr(line, "LLECB begin char ")))
         {
             table_char = atoi(t + 17);
-            // the leans are Falcon's own measurements
-            llsim_table_begin(table_char == 2);
+            llsim_table_begin(keep_lean);
         }
         else if (table_char < 0)
             continue;
@@ -167,18 +168,20 @@ int main(int argc, char **argv)
 {
     const char *table = 0;
     char *pos[4];
-    int npos = 0;
+    int npos = 0, keep_lean = 1;
     for (int i = 1; i < argc; i++)
     {
         if (!strcmp(argv[i], "-t") && i + 1 < argc)
             table = argv[++i];
+        else if (!strcmp(argv[i], "-nolean"))
+            keep_lean = 0;
         else if (npos < 4)
             pos[npos++] = argv[i];
     }
     int check = npos >= 2 && !strcmp(pos[0], "check"), ecb = npos == 2 && !strcmp(pos[0], "ecb");
     if (!check && !ecb)
     {
-        fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>]\n"
+        fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-nolean]\n"
                         "       llsim ecb <dump> [-t <capture>]\n");
         return 2;
     }
@@ -189,7 +192,7 @@ int main(int argc, char **argv)
         return 1;
     }
     if (table)
-        Table_Load(table);
+        Table_Load(table, keep_lean);
     if (ecb)
         llsim_ecb_print(dump_char);
     else

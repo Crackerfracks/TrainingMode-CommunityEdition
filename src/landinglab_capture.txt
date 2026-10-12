@@ -7,6 +7,9 @@
 # Jigglypuff's air jumps) are caught too, by state id (LLSPEC, LLSPECLEN).
 # With LLCHAR=file one build serves every character: the fighter is the
 # CKIND_ number in TM/llchar.txt (LLCHARFILE=<file> ./build.sh ...).
+# Each dump also logs the checks (LLCHECK): the first on Falcon's baked
+# table with this character's physics (llsim check <log>), the last on
+# the table just captured.
 autorun
 
 script Capture
@@ -105,5 +108,8 @@ hover 0 100
 150
 
 dumpecb
+# the checks again, now on the character's own table: llsim check <log>
+# -t <log> should give these (the second LLCHECK block) byte for byte
+dump
 hover off
 land 200

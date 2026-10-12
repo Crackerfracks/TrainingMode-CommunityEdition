@@ -16,6 +16,8 @@
  * -p names a packed TM/llecb.bin (tools/llsim/ecbpack.py) to load the
  * dump's fighter from, as the event does for every fighter but Falcon.
  * Falcon keeps his fall leans, as in game, unless -nolean drops them.
+ * -loops A,B,C sets the falls' loops (Fall, FallAerial, FallSpecial), as
+ * the event learns them from the animations (its LLFALL lines).
  *
  * Build: tools/llsim/build.sh
  */
@@ -195,13 +197,15 @@ int main(int argc, char **argv)
 {
     const char *table = 0, *packed = 0;
     char *pos[4];
-    int npos = 0, keep_lean = 1;
+    int npos = 0, keep_lean = 1, loops[3] = {0, 0, 0}, set_loops = 0;
     for (int i = 1; i < argc; i++)
     {
         if (!strcmp(argv[i], "-t") && i + 1 < argc)
             table = argv[++i];
         else if (!strcmp(argv[i], "-p") && i + 1 < argc)
             packed = argv[++i];
+        else if (!strcmp(argv[i], "-loops") && i + 1 < argc)
+            set_loops = sscanf(argv[++i], "%d,%d,%d", &loops[0], &loops[1], &loops[2]) == 3;
         else if (!strcmp(argv[i], "-nolean"))
             keep_lean = 0;
         else if (npos < 4)
@@ -210,7 +214,7 @@ int main(int argc, char **argv)
     int check = npos >= 2 && !strcmp(pos[0], "check"), ecb = npos == 2 && !strcmp(pos[0], "ecb");
     if (!check && !ecb)
     {
-        fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-p <llecb.bin>] [-nolean]\n"
+        fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-p <llecb.bin>] [-loops A,B,C] [-nolean]\n"
                         "       llsim ecb <dump> [-t <capture>] [-p <llecb.bin>]\n");
         return 2;
     }
@@ -224,6 +228,8 @@ int main(int argc, char **argv)
         Packed_Load(packed);
     if (table)
         Table_Load(table, keep_lean);
+    if (set_loops)
+        llsim_loops(loops);
     if (ecb)
         llsim_ecb_print(dump_char);
     else

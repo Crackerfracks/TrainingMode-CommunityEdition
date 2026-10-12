@@ -1,7 +1,8 @@
 # Ground guide (shelved until after 1.0)
 
 Stephen shelved this on 2026-10-10 after the 0.8.3 notes. The code stays in
-`src/landinglab.c` behind `#ifdef LL_GROUND_GUIDE`, so normal builds leave it
+Landing Lab (mostly `src/landinglab/ground_guide.c`) behind
+`#ifdef LL_GROUND_GUIDE`, so normal builds leave it
 out entirely, including its two Jump Timing toggles.
 
 ## What it is

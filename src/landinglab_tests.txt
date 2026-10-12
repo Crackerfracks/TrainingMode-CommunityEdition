@@ -1,5 +1,5 @@
 # Landing Lab test scripts, read from TM/llscript.txt on the disc.
-# The step format is in the "Test scripts" part of src/landinglab.c.
+# The step format is in the "Test scripts" part of src/landinglab/scripts.c.
 #
 # Written for Captain Falcon on Battlefield: the floor runs from x -68.4 to
 # 68.4 at y 0, the side platforms from x 20 to 57.6 (and -20 to -57.6) at

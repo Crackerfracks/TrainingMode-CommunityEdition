@@ -236,7 +236,7 @@ Found a cue that lied, or a better ledge route? Open an issue on [this repositor
 
 ## Building from source
 
-See [DEVELOPMENT.md](DEVELOPMENT.md). `./build.sh path/to/melee.iso release` builds the ISO and the release zip. Landing Lab is `src/landinglab.c`, all of it.
+See [DEVELOPMENT.md](DEVELOPMENT.md). `./build.sh path/to/melee.iso release` builds the ISO and the release zip. Landing Lab is `src/landinglab.c` and the modules it includes from `src/landinglab/` (see its README).
 
 ## Credits
 

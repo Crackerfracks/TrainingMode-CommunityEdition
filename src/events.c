@@ -1290,11 +1290,15 @@ void EventInit(int page, int eventID, MatchInit *matchData)
 
 #ifdef LL_TEST_CHAR
         // a Landing Lab data capture build's fighter, in place of the one
-        // picked (the files load at the match start, as a fixed CPU's do).
-        // Only there: most events leave playerKind 0, not -1.
+        // picked. Only there: most events leave playerKind 0, not -1.
         if (event->playerKind == LL_TEST_CHAR) {
             matchData->playerData[0].c_kind = LL_TEST_CHAR;
             matchData->playerData[0].costume = 0;
+            // preloaded in the picked fighter's place, as the lab's replay
+            // import does: loading it at the match start ran out of memory
+            preload->queued.fighters[0].kind = LL_TEST_CHAR;
+            preload->queued.fighters[0].costume = 0;
+            Preload_Update();
         }
 #endif
 

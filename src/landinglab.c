@@ -5918,6 +5918,7 @@ static float Meter_Pitch(void);
 #define DL_CELL 4.2f     // the room one takes, side to side
 #define DL_LABEL 1.7f
 #define STRIP_PAD 0.35f
+#define CV_KEY 4.3f // the conveyor key's column: a swatch, then "WL/WD" (2.95 wide at ST_TEXT), clear of the rail studs
 
 static int Strip_Glyphs(void)
 {
@@ -5950,7 +5951,7 @@ static void Strip_Place(FighterData *fp, int look, float *x, float *y, float *w,
     else if (look == STRIP_CONVEYOR)
     {
         // a fixed width, however many cues are up (Stephen, 0.9.10)
-        *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + 2 * HW_LANE + HW_LANE_GAP + 2.6f; // and the key
+        *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + 2 * HW_LANE + HW_LANE_GAP + CV_KEY;
         *h = 0.8f + HW_ROWS * HW_PITCH + 0.5f + 1.3f; // and the entry's waiting room
     }
     else
@@ -6487,15 +6488,15 @@ static void Highway_Draw(FighterData *fp)
 // passing, like a fretboard). Notes on the same frame share its row, in a
 // fixed order by kind; a lone note takes the whole row. Kinds differ by
 // shape as well as color: a jump has a raised cap, an AI is solid, a NIL
-// notched, a waveland or wavedash leans like an airdodge. A preload (a
+// notched, a waveland or wavedash hollow. A preload (a
 // plan from a press not made yet) hovers over the rows it will take, its
 // shadow on the belt, and sets down when the press comes. What's beyond the
 // belt's far end waits over its entry, lower the nearer it is.
 #define CV_W (2 * HW_LANE + HW_LANE_GAP)
 #define CV_SHELF 1.3f
 #define CV_LIFT 0.22f
-#define CV_KEY 2.6f  // the key's column: a swatch and "WL/WD" at ST_TEXT
 #define CV_BASE 0.8f // under the window
+#define CV_KEY_PITCH 1.2f // the key's rows (0.8 overlapped)
 
 static int Cv_Rank(MeterRow *r)
 {
@@ -6557,12 +6558,30 @@ static void Cv_Round(float x0, float y0, float x1, float y1, GXColor c)
     Hud_Rect(x1 - PX, y0 + PX, x1, y1 - PX, c);
 }
 
+// A note's body: a rim a pixel wide, lighter than its fill, round the
+// fill, with its corners cut. No strips overlap, so a faint note has no
+// brighter seams. An open end (the note goes on past it) has no rim.
+static void Cv_Body(float x0, float y0, float x1, float y1, GXColor col, float a, int open_lo, int open_hi)
+{
+    GXColor rim = Color_Mix(col, color_white, 0.45f);
+    rim.a = col.a;
+    float ilo = open_lo ? y0 : y0 + PX, ihi = open_hi ? y1 : y1 - PX;
+    Hud_Rect(x0 + PX, ilo, x1 - PX, ihi, Color_Fill(col, a));
+    Hud_Rect(x0, ilo, x0 + PX, ihi, Color_Fill(rim, a));
+    Hud_Rect(x1 - PX, ilo, x1, ihi, Color_Fill(rim, a));
+    if (!open_lo)
+        Hud_Rect(x0 + PX, y0, x1 - PX, y0 + PX, Color_Fill(rim, a));
+    if (!open_hi)
+        Hud_Rect(x0 + PX, y1 - PX, x1 - PX, y1, Color_Fill(rim, a));
+}
+
 // One note: kind and tone of row r, from y0 up to y1 (open_lo / open_hi:
 // the note goes on past that end, where the share of the row changed).
 // Kinds differ in shape as well as color, all square-edged (the GameCube
 // draws no smooth diagonals): a jump has a tab on its top, an AI is solid,
-// a NIL is notched, a waveland or wavedash hollow. Each has a dark rim and
-// a light top edge.
+// a NIL is notched, a waveland or wavedash hollow. Each has a rim lighter
+// than its fill (Stephen, 0.9.12: the notes looked rough round the edges;
+// a dark rim was lost on the dark belt).
 static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0, float x1, float y1, int open_lo,
                     int open_hi)
 {
@@ -6574,7 +6593,6 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
         Cv_Round(m - 0.4f, lo, m + 0.4f, hi, Color_Fill(col, a * 0.6f));
         return;
     }
-    Hud_Frame(x0 - PX, lo - (open_lo ? 0 : PX), x1 + PX, hi + (open_hi ? 0 : PX), PX, Color_Fill(color_plate, a * 0.6f));
     switch (kind)
     {
     case CELL_PRESS:
@@ -6589,14 +6607,14 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
             Hud_Rect(x0 + t, lo + t, x1 - t, hi - t, Color_Fill(col, a * 0.4f));
             return;
         }
-        Cv_Round(x0, lo, x1, hi, Color_Fill(col, a));
+        Cv_Body(x0, lo, x1, hi, col, a, open_lo, open_hi);
         if (rank == 0 && !open_hi)
             Cv_Round(m - (x1 - x0) * 0.18f, hi - PX, m + (x1 - x0) * 0.18f, hi + 0.16f, Color_Fill(col, a));
         if (rank == 2 && !open_hi)
             Hud_Rect(m - 0.13f, hi - 0.24f, m + 0.13f, hi, Color_Fill(color_plate, a * 0.9f));
         break;
     case CELL_ACT:
-        Cv_Round(x0, lo, x1, hi, Color_Fill(col, a));
+        Cv_Body(x0, lo, x1, hi, col, a, open_lo, open_hi);
         Hud_Rect(x0 + PX, lo, x1 - PX, lo + 0.2f * HW_PITCH, Color_Fill(color_white, a * 0.9f));
         break;
     case CELL_LAND:
@@ -6605,11 +6623,9 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
         Hud_Rect(x0, lo, x1, lo + 0.24f * HW_PITCH, Color_Fill(col, a));
         return;
     case CELL_TAIL:
-        Cv_Round(x0, lo, x1, hi, Color_Fill(color_galint, a));
+        Cv_Body(x0, lo, x1, hi, color_galint, a, open_lo, open_hi);
         break;
     }
-    if (!open_hi)
-        Hud_Rect(x0 + 2 * PX, hi - 1.5f * PX, x1 - 2 * PX, hi - 0.5f * PX, Color_Over(color_white, 0.35f * a));
 }
 
 // The first note a row has at or past frame from, or -1.
@@ -6636,11 +6652,11 @@ static void Conveyor_Draw(FighterData *fp)
     int now = event_vars->game_timer;
     int order[MT_ROWS], n = Cv_Order(order);
 
-    // the plate and belt stay up while the strip is on, so the belt's
-    // motion is always there to read the notes' speed against
-    vis_k = base_k * (Strip_PlateK() > 0.4f ? Strip_PlateK() : 0.4f);
-    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Fill(color_plate, 0.72f));
-    Hud_Rect(bl, line_y, br, top, Color_Over(color_white, 0.05f));
+    // the plate and belt stay up, solid, while the strip is on, so the
+    // belt's motion is always there to read the notes' speed against
+    // (0.9.12's faded with the cues, and the stage showed through it)
+    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Over(color_plate, 0.88f));
+    Hud_Rect(bl, line_y, br, top, Color_Over(color_white, 0.07f));
     // the belt moves: a line between every two frames, a heavier one every
     // fifth frame of the game's clock, with studs on the rails, so they
     // travel down a row each frame
@@ -6649,7 +6665,7 @@ static void Conveyor_Draw(FighterData *fp)
         float y = line_y + k * HW_PITCH;
         if ((now + k) % 5 == 0)
         {
-            Hud_Rect(bl, y - 0.07f, br, y + 0.07f, Color_Over(color_white, 0.28f));
+            Hud_Rect(bl, y - 0.09f, br, y + 0.09f, Color_Over(color_white, 0.42f));
             if (k < HW_ROWS)
             {
                 Hud_Rect(bl - 0.42f, y - 0.14f, bl - 0.16f, y + 0.14f, Color_Over(color_white, 0.5f));
@@ -6657,7 +6673,7 @@ static void Conveyor_Draw(FighterData *fp)
             }
         }
         else
-            Hud_Rect(bl, y - 0.03f, br, y + 0.03f, Color_Over(color_white, 0.1f));
+            Hud_Rect(bl, y - PX / 2, br, y + PX / 2, Color_Over(color_white, 0.17f));
     }
     Hud_Rect(bl - 0.12f, line_y, bl - 0.06f, top, Color_Over(color_white, 0.2f));
     Hud_Rect(br + 0.06f, line_y, br + 0.12f, top, Color_Over(color_white, 0.2f));
@@ -6811,12 +6827,12 @@ static void Conveyor_Draw(FighterData *fp)
         MeterRow sw = {0};
         sw.color = key_color[i];
         strcpy(sw.label, key_rank[i]);
-        float y = top - 0.55f - i * 0.8f;
+        float y = top - 0.6f - i * CV_KEY_PITCH; // a line of ST_TEXT apart
         vis_k = base_k * (on ? 1.f : 0.4f);
-        Cv_Note(&sw, CELL_PRESS, TONE_CUE, 1.f, kx, y - 0.2f, kx + 0.6f, y + 0.2f, 0, 0);
+        Cv_Note(&sw, CELL_PRESS, TONE_CUE, 1.f, kx, y - 0.22f, kx + 0.55f, y + 0.22f, 0, 0);
         GXColor tc = Color_Mix(key_color[i], color_white, 0.35f);
         tc.a = 255;
-        Hud_TextAligned(key_label[i], kx + 0.85f, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 0);
+        Hud_TextAligned(key_label[i], kx + 0.8f, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 0);
     }
     vis_k = base_k;
 }
@@ -17125,9 +17141,10 @@ static void Event_ThinkFrame(GOBJ *event)
             squat_wd = 1;
         else if (!airborne && Ground_CanJump(sid))
         {
-            // a jump pressed now: its first jumpsquat frame counts from
-            // frame 1 (as squat_wd above sees it), a frame on from here
-            float left = fp->attr.jump_startup_time - 1.f;
+            // a jump pressed now: its jumpsquat starts a frame on from
+            // here, at frame 0 (as squat_wd above sees it; 0.9.12 counted
+            // from frame 1 and preloaded a frame short)
+            float left = fp->attr.jump_startup_time;
             int until = (int)left;
             if (until < left)
                 until++;

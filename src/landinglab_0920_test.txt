@@ -1,0 +1,35 @@
+# 0.9.20 checks: build with LLSCRIPT=src/landinglab_0920_test.txt and start
+# the event on Battlefield as Falcon. The Conveyor's belt is twice as long
+# (36 frames, rows a bit thinner), the Highway's lanes a third longer
+# (24 frames). Look for: the whole belt on screen, clear of the percents
+# and the controller display; the window at the bottom still one row tall;
+# the standing hop plan and wavedash preload on the belt, not waiting over
+# its entry.
+autorun
+
+script Conveyor long
+preset load Defaults
+set Dev/Debug Log = 1
+set Timers/Fixed Strip = 4
+set Timers/Wavedash = 1
+set Jump/Show = 1
+set Jump/Kind = 2
+start -50 0 right
+150
+shot conveyor standing: hop plan and WD preload on the longer belt
+1 X
+3
+shot conveyor in jumpsquat: WD set down
+1 L s:1,-1
+40
+set Jump/Show = 0
+
+script Highway long
+preset load Defaults
+set Dev/Debug Log = 1
+set Timers/Fixed Strip = 2
+air 0 70 right
+4
+shot highway falling onto the top platform: 24-frame lanes
+land 150
+set Timers/Fixed Strip = 1

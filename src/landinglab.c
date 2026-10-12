@@ -5972,8 +5972,10 @@ static float Meter_Pitch(void);
 // with the hit line at the bottom; the dial is a small dial a row, side by
 // side. Both leave room under for the row's label, and the first lane for
 // the glyphs of a route's inputs.
-#define HW_ROWS 18       // frames of lead a lane shows
+#define HW_ROWS 24       // frames of lead a lane shows (18 was a little short, Stephen 0.9.19)
 #define HW_PITCH 0.68f   // one frame's height
+#define CV_ROWS 36       // ... the conveyor's: twice (18 was way too short for a preloaded wavedash, Stephen 0.9.19)
+#define CV_PITCH 0.46f   // ... in about a third more height than it had
 #define HW_LANE 2.1f
 #define HW_LANE_GAP 0.5f
 #define HW_GLYPH 1.5f
@@ -5984,10 +5986,12 @@ static float Meter_Pitch(void);
 #define STRIP_PAD 0.35f
 #define CV_KEY 4.9f // the conveyor key's column: a swatch, then "JUMP" or "WAVE" (about 3.5 wide at ST_TEXT in game, more than Text_Width says), clear of the rail studs
 
+static float hw_pitch = HW_PITCH; // a frame's height in the window the highway and conveyor share
+
 static int Strip_Glyphs(void)
 {
     for (int i = 0; i < meter_rows; i++)
-        for (int k = 0; k < meter[i].len && k < HW_ROWS; k++)
+        for (int k = 0; k < meter[i].len && k < CV_ROWS; k++)
             if (meter[i].glyph[k])
                 return 1;
     return 0;
@@ -6016,7 +6020,7 @@ static void Strip_Place(FighterData *fp, int look, float *x, float *y, float *w,
     {
         // a fixed width, however many cues are up (Stephen, 0.9.10)
         *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + 2 * HW_LANE + HW_LANE_GAP + CV_KEY;
-        *h = 0.8f + HW_ROWS * HW_PITCH + 0.5f + 1.3f; // and the entry's waiting room
+        *h = 0.8f + CV_ROWS * CV_PITCH + 0.5f + 1.3f; // and the entry's waiting room
     }
     else
     {
@@ -6422,7 +6426,7 @@ static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
     {
         // the note that was due, kept in the window
         float a = 0.9f * (1.f - q);
-        float ny0 = line_y + 0.04f, ny1 = line_y + HW_PITCH - 0.04f;
+        float ny0 = line_y + 0.04f, ny1 = line_y + hw_pitch - 0.04f;
         if (r->implode_tone == TONE_MISS)
         {
             float d = 0.45f * Ease_Out(q), h = (mid - lx - in) - 0.06f;
@@ -6439,11 +6443,11 @@ static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
     {
         // the burn: white, cooling to the row's color, and a beam up the lane
         float b = (float)r->burst / LL_BURST, fade = 1.f - b;
-        Hud_Rect(lx + 0.05f, line_y, rx - 0.05f, line_y + HW_PITCH, Color_Fill(Color_Mix(color_white, r->color, b), fade));
-        float beam = (2.f + 5.f * Ease_Out(b)) * HW_PITCH, bw = (rx - lx) * (0.5f - 0.3f * b);
+        Hud_Rect(lx + 0.05f, line_y, rx - 0.05f, line_y + hw_pitch, Color_Fill(Color_Mix(color_white, r->color, b), fade));
+        float beam = (2.f + 5.f * Ease_Out(b)) * hw_pitch, bw = (rx - lx) * (0.5f - 0.3f * b);
         for (int i = 0; i < 4; i++)
         {
-            float y = line_y + HW_PITCH + beam * i / 4.f;
+            float y = line_y + hw_pitch + beam * i / 4.f;
             Hud_Rect(mid - bw, y, mid + bw, y + beam / 4.f, Color_Over(Color_Mix(r->color, color_white, 0.5f), 0.5f * fade * (1.f - i / 4.f)));
         }
     }
@@ -6454,7 +6458,7 @@ static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
         MeterRow e = *r;
         e.burst = -1;
         e.implode = -1;
-        Strip_Ending(&e, mid, line_y + HW_PITCH / 2, (rx - lx) / 2, HW_PITCH / 2, 1.f, 0);
+        Strip_Ending(&e, mid, line_y + hw_pitch / 2, (rx - lx) / 2, hw_pitch / 2, 1.f, 0);
     }
 }
 
@@ -6462,7 +6466,7 @@ static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
 // last frame), in r's ending colors as it fades.
 static void Hw_WindowFrame(MeterRow *r, float lx, float rx, float line_y)
 {
-    float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - 0.14f, wy1 = line_y + HW_PITCH + 0.1f;
+    float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - 0.14f, wy1 = line_y + hw_pitch + 0.1f;
     int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
     int ending = !r->dim && r->implode >= 0;
     GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
@@ -6558,7 +6562,7 @@ static void Highway_Draw(FighterData *fp)
 // belt's far end waits over its entry, lower the nearer it is.
 #define CV_W (2 * HW_LANE + HW_LANE_GAP)
 #define CV_SHELF 1.3f
-#define CV_LIFT 0.45f // a preload's hover: two thirds of a frame (0.22 didn't read as lifted)
+#define CV_LIFT 0.4f // a preload's hover: most of a frame (0.22 didn't read as lifted)
 #define CV_BASE 0.8f // under the window
 #define CV_KEY_PITCH 1.2f // the key's rows (0.8 overlapped)
 
@@ -6679,12 +6683,12 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
         break;
     case CELL_ACT:
         Cv_Body(x0, lo, x1, hi, col, a, open_lo, open_hi);
-        Hud_Rect(x0 + PX, lo, x1 - PX, lo + 0.2f * HW_PITCH, Color_Fill(color_white, a * 0.9f));
+        Hud_Rect(x0 + PX, lo, x1 - PX, lo + 0.2f * CV_PITCH, Color_Fill(color_white, a * 0.9f));
         break;
     case CELL_LAND:
         Cv_Round(x0, lo, x1, hi, Color_Fill(color_plate, a * 0.6f));
         Hud_Frame(x0, lo, x1, hi, 1.4f * PX, Color_Fill(col, a));
-        Hud_Rect(x0, lo, x1, lo + 0.24f * HW_PITCH, Color_Fill(col, a));
+        Hud_Rect(x0, lo, x1, lo + 0.24f * CV_PITCH, Color_Fill(col, a));
         return;
     case CELL_TAIL:
         Cv_Body(x0, lo, x1, hi, color_galint, a, open_lo, open_hi);
@@ -6711,7 +6715,8 @@ static void Conveyor_Draw(FighterData *fp)
     // the key on the side toward the screen's edge, the glyphs toward its middle
     float bl = x0 + STRIP_PAD + (right ? glyph : CV_KEY), br = bl + CV_W;
     float kx = right ? br + 0.5f : x0 + STRIP_PAD;
-    float line_y = y0 + CV_BASE, top = line_y + HW_ROWS * HW_PITCH;
+    float line_y = y0 + CV_BASE, top = line_y + CV_ROWS * CV_PITCH;
+    hw_pitch = CV_PITCH; // the window's frame is a row of the belt
     float base_k = vis_k;
     int now = event_vars->game_timer;
     int order[MT_ROWS], n = Cv_Order(order);
@@ -6724,13 +6729,13 @@ static void Conveyor_Draw(FighterData *fp)
     // the belt moves: a line between every two frames, a heavier one every
     // fifth frame of the game's clock, with studs on the rails, so they
     // travel down a row each frame
-    for (int k = 1; k <= HW_ROWS; k++)
+    for (int k = 1; k <= CV_ROWS; k++)
     {
-        float y = line_y + k * HW_PITCH;
+        float y = line_y + k * CV_PITCH;
         if ((now + k) % 5 == 0)
         {
             Hud_Rect(bl, y - 0.09f, br, y + 0.09f, Color_Over(color_white, 0.42f));
-            if (k < HW_ROWS)
+            if (k < CV_ROWS)
             {
                 Hud_Rect(bl - 0.42f, y - 0.14f, bl - 0.16f, y + 0.14f, Color_Over(color_white, 0.5f));
                 Hud_Rect(br + 0.16f, y - 0.14f, br + 0.42f, y + 0.14f, Color_Over(color_white, 0.5f));
@@ -6745,8 +6750,8 @@ static void Conveyor_Draw(FighterData *fp)
 
     // the notes: each row's runs of frames that keep their share of the
     // belt, drawn whole, so a window reads as one note
-    int slot[MT_ROWS][HW_ROWS], cnt[HW_ROWS];
-    for (int k = 0; k < HW_ROWS; k++)
+    int slot[MT_ROWS][CV_ROWS], cnt[CV_ROWS];
+    for (int k = 0; k < CV_ROWS; k++)
     {
         cnt[k] = 0;
         for (int j = 0; j < n; j++)
@@ -6759,7 +6764,7 @@ static void Conveyor_Draw(FighterData *fp)
     {
         MeterRow *r = &meter[order[j]];
         float lift = Cv_Lift(r);
-        for (int k = 0; k < HW_ROWS && k < r->len; k++)
+        for (int k = 0; k < CV_ROWS && k < r->len; k++)
         {
             // what's drawn here: a note in its share, or lag across the
             // belt where no note is
@@ -6767,7 +6772,7 @@ static void Conveyor_Draw(FighterData *fp)
             if (slot[j][k] < 0 && !(kind == CELL_LAG && cnt[k] == 0))
                 continue;
             int e = k;
-            while (e + 1 < HW_ROWS && e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k] &&
+            while (e + 1 < CV_ROWS && e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k] &&
                    r->alpha[e + 1] == r->alpha[k] && slot[j][e + 1] == slot[j][k] &&
                    (slot[j][k] < 0 ? cnt[e + 1] == 0 : cnt[e + 1] == cnt[k]))
                 e++;
@@ -6778,7 +6783,7 @@ static void Conveyor_Draw(FighterData *fp)
                 sx0 = bl + 0.15f + slot[j][k] * share + (cnt[k] > 1 ? 0.06f : 0);
                 sx1 = sx0 + share - (cnt[k] > 1 ? 0.12f : 0);
             }
-            float y0 = line_y + k * HW_PITCH, y1 = line_y + (e + 1) * HW_PITCH;
+            float y0 = line_y + k * CV_PITCH, y1 = line_y + (e + 1) * CV_PITCH;
             int lo = k > 0 && r->cell[k - 1] == kind && r->tone[k - 1] == r->tone[k];
             int hi = e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k];
             vis_k = base_k * r->fade;
@@ -6802,7 +6807,7 @@ static void Conveyor_Draw(FighterData *fp)
     for (int j = 0; j < n; j++)
     {
         MeterRow *r = &meter[order[j]];
-        int k = Cv_FirstClaim(r, HW_ROWS);
+        int k = Cv_FirstClaim(r, CV_ROWS);
         if (k >= 0 && Cv_FirstClaim(r, 0) == k)
         {
             wait[q] = order[j];
@@ -6815,9 +6820,9 @@ static void Conveyor_Draw(FighterData *fp)
         vis_k = base_k * r->fade * 0.8f;
         float share = (CV_W - 0.3f) / q;
         float sx0 = bl + 0.15f + j * share + 0.1f, sx1 = sx0 + share - 0.2f;
-        int far = wk[j] - HW_ROWS;
+        int far = wk[j] - CV_ROWS;
         float wy = top + 0.3f + (far < 20 ? far : 20) * 0.035f + 0.05f * sin(now * 0.12f + j);
-        Cv_Note(r, r->cell[wk[j]], r->tone[wk[j]], r->alpha[wk[j]] / 255.f, sx0, wy, sx1, wy + HW_PITCH * 0.8f, 0, 0);
+        Cv_Note(r, r->cell[wk[j]], r->tone[wk[j]], r->alpha[wk[j]] / 255.f, sx0, wy, sx1, wy + 0.55f, 0, 0);
     }
 
     // the input glyphs beside the belt
@@ -6826,9 +6831,9 @@ static void Conveyor_Draw(FighterData *fp)
         MeterRow *r = &meter[order[j]];
         vis_k = base_k * r->fade;
         float lift = Cv_Lift(r);
-        for (int k = 0; k < r->len && k < HW_ROWS; k++)
+        for (int k = 0; k < r->len && k < CV_ROWS; k++)
             if (r->glyph[k])
-                Glyph_Draw(r->glyph[k], glyph_x, line_y + (k + 0.5f) * HW_PITCH + lift, 0.3f,
+                Glyph_Draw(r->glyph[k], glyph_x, line_y + (k + 0.5f) * CV_PITCH + lift, 0.3f,
                            Color_Fill(color_white, 0.95f * (r->dim ? 0.5f : 1.f)));
     }
 
@@ -6871,7 +6876,7 @@ static void Conveyor_Draw(FighterData *fp)
     float tick = press ? 0.6f : 0.35f;
     GXColor sc = press ? color_white : Color_Over(color_white, 0.45f);
     float tl = glyph > 0 && right ? 0 : tick, tr = glyph > 0 && !right ? 0 : tick;
-    float my = line_y + HW_PITCH / 2;
+    float my = line_y + CV_PITCH / 2;
     Hud_Rect(bl - 0.12f - tl, line_y - 0.2f, br + 0.12f + tr, line_y - 0.12f, sc);
     if (tl > 0)
         Hud_Rect(bl - 0.12f - tl, my - 0.06f, bl - 0.2f, my + 0.06f, sc);
@@ -6902,6 +6907,7 @@ static void Conveyor_Draw(FighterData *fp)
         Hud_TextAligned(key_label[i], kx + 0.75f, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 0);
     }
     vis_k = base_k;
+    hw_pitch = HW_PITCH;
 }
 
 static int Dial_Target(int kind)

@@ -59,6 +59,11 @@
 //   view name <1-8> <word>     name a saved view
 //   view shift 1 <dx> <dy>     slide the Advanced camera
 //   fadereset                  Intensity > Reset Fade
+//   notfor <kind> ...          leave the steps after it out for these
+//                              fighters (by kind, e.g. 7 19 for Sheik and
+//                              Zelda), up to the next notfor line; a bare
+//                              notfor ends it. Logs LLSKIP for each step left
+//                              out
 // Inputs: A B X Y Z L R (L and R fully pressed), s:x,y (stick), c:x,y
 // (C-stick), lt:v (light press, no click), with x, y, v from -1 to 1. A
 // stick value is round(80 v), pulled back onto the rim if it's past it.
@@ -118,6 +123,7 @@ typedef struct ScriptOp
     ScriptInput in;
     float x, y, vx, vy;
     char *label;
+    u32 not_for; // fighter kinds (bits) that leave this step out (notfor)
 } ScriptOp;
 
 typedef struct Script
@@ -303,6 +309,7 @@ static void Script_Error(int line, char *what)
 static void Script_Parse(void)
 {
     char *t = script_text;
+    u32 not_for = 0;
     for (int line = 1; *t; line++)
     {
         // cut the line off, and its comment
@@ -334,6 +341,7 @@ static void Script_Parse(void)
             scripts[script_num].first = script_op_num;
             scripts[script_num].num = 0;
             script_num++;
+            not_for = 0;
             continue;
         }
         if (Script_Is(w, "autorun"))
@@ -346,8 +354,16 @@ static void Script_Parse(void)
             Script_Error(line, "step before the first script line");
             continue;
         }
+        if (Script_Is(w, "notfor"))
+        {
+            not_for = 0;
+            for (char *k; (k = Script_Word(&rest));)
+                not_for |= 1u << ((int)Script_Number(&k) & 31);
+            continue;
+        }
         ScriptOp *op = &script_ops[script_op_num];
         memset(op, 0, sizeof(*op));
+        op->not_for = not_for;
         int ok = 1;
         int inputs = 0;
         if (Script_Is(w, "start"))
@@ -871,6 +887,15 @@ static void Script_End(void)
 static ScriptOp *Script_Op(void)
 {
     Script *sc = &scripts[script_cur];
+    FighterData *fp = Fighter_GetGObj(0)->userdata;
+    u32 kind = 1u << (fp->kind & 31);
+    while (script_pc < sc->num && script_ops[sc->first + script_pc].not_for & kind)
+    {
+        char buf[64];
+        sprintf(buf, "LLSKIP step %d for kind %d\n", script_pc + 1, fp->kind);
+        Log(buf);
+        script_pc++;
+    }
     return script_pc < sc->num ? &script_ops[sc->first + script_pc] : 0;
 }
 

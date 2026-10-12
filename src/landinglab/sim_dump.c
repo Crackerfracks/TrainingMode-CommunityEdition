@@ -123,6 +123,11 @@ static void Lean_Log(FighterData *fp, int ts, int frame)
     OSReport("LLLEANECB %d %d %d %d %d %d %08x %08x %08x %08x %08x %08x\n", ts, tag, frame, fp->state_var.state_var1, side,
              e.has_bottom, Float_Bits(Lean_FromFighter(fp, ts)), Float_Bits(e.bottom), Float_Bits(e.top),
              Float_Bits(e.side_y), Float_Bits(e.front), Float_Bits(e.back));
+    // and where its animation really is (LLFALLANIM state, frame in the
+    // state, action state, then as bits the animation frame, its rate and
+    // blend), to check that the fall's pose follows the frame in the state
+    OSReport("LLFALLANIM %d %d %d %08x %08x %08x\n", ts, frame, fp->state_id, Float_Bits(fp->state.frame),
+             Float_Bits(fp->state.rate), Float_Bits(fp->state.blend));
 }
 
 // A capture's double jump frame, for the double-jump-cancel fighters'

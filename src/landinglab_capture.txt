@@ -108,6 +108,7 @@ land 200
 hover 0 100
 1 B s:-1,0
 150
+notfor 7 19 # Sheik and Zelda: their down-B transforms them into each other
 hover off
 land 200
 90
@@ -115,6 +116,7 @@ land 200
 hover 0 100
 1 B s:0,-1
 150
+notfor
 hover off
 land 200
 90

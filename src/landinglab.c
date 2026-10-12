@@ -11035,6 +11035,7 @@ static void Script_End(void);
 // Capturing a character's ECB (script commands hover, capture, dumpecb).
 static int hover_on, capture_on;
 static float hover_x, hover_y;
+static float hover_lean; // a fall's lean target to hold there (signed: < 0 leans back), 0 = still
 
 // ... and every state of the character's own (its specials, Kirby's and
 // Jigglypuff's air jumps: state ids from 341 on) seen in the air while
@@ -11161,6 +11162,7 @@ static void Script_End(void)
     script_trace = 0;
     script_trace_end_pending = 0;
     hover_on = 0;
+    hover_lean = 0;
     capture_on = 0;
     Script *sc = &scripts[script_cur];
     sprintf(buf, "LLSCRIPT end %s at %d, last landing: %s\n", sc->name, event_vars->game_timer, text_last);
@@ -11313,16 +11315,45 @@ static void Sim_Dump(FighterData *fp)
     Sim_Check(fp, pred_route); // the route's own prediction, redone next time it's needed
 }
 
-// Each frame after the learning: held at the hover spot.
+// The drift speed that leans a fall toward target t (Lean_Target backward):
+// past the deadzone, t of the way to the drift max, forward if t > 0.
+static float Hover_LeanSpeed(FighterData *fp, float t)
+{
+    if (t == 0)
+        return 0;
+    float frac = common_fall_lean_deadzone + fabs(t) * (1.f - common_fall_lean_deadzone);
+    return (t > 0 ? frac : -frac) * fp->attr.aerial_drift_max * fp->facing_direction;
+}
+
+// Each frame after the learning: held at the hover spot, still or at the
+// drift speed of a lean.
 static void Hover_Think(FighterData *fp)
 {
     if (!hover_on)
         return;
     fp->phys.pos.X = hover_x;
     fp->phys.pos.Y = hover_y;
-    fp->phys.self_vel.X = 0;
+    fp->phys.self_vel.X = Hover_LeanSpeed(fp, hover_lean);
     fp->phys.self_vel.Y = 0;
     fp->coll_data.u.ecb_bot_lock_frames = 0;
+}
+
+// A capture's fall frame with its lean, for the fighter's lean grid
+// (tools/llsim/ecbpack.py): LLLEANECB state, the hover's lean target in
+// thousandths (9999 falling free), frame in the state, the game's own lean
+// side (sm), the sim's (Lean_Target on the speed the animation saw), the
+// bottom's flag, then the blend and the ECB (bottom top side front back) as
+// bits. Falling free, the frames check the grid against the real fall.
+static void Lean_Log(FighterData *fp, int ts, int frame)
+{
+    EcbSample e = {0};
+    float target;
+    Ecb_Fill(fp, &e);
+    int side = Lean_Target(fp, prev_vel.X, fp->facing_direction, &target);
+    int tag = hover_on ? (int)(hover_lean * 1000.f + (hover_lean < 0 ? -0.5f : 0.5f)) : 9999;
+    OSReport("LLLEANECB %d %d %d %d %d %d %08x %08x %08x %08x %08x %08x\n", ts, tag, frame, fp->state_var.state_var1, side,
+             e.has_bottom, Float_Bits(Lean_FromFighter(fp, ts)), Float_Bits(e.bottom), Float_Bits(e.top),
+             Float_Bits(e.side_y), Float_Bits(e.front), Float_Bits(e.back));
 }
 
 // Script command "dumpecb": the learned ECB of every tracked state, frame by
@@ -11567,18 +11598,22 @@ static void Script_Cmd(ScriptOp *op)
         break;
     case SCMD_HOVER:
     {
-        // hover x y: held there from now on (still, no bottom lock), so
-        // whole animations play in the air; hover off lets go
+        // hover x y [lean T]: held there from now on (still, no bottom
+        // lock), so whole animations play in the air; with a lean, moving
+        // at the drift speed that leans a fall toward T (< 0: back). hover
+        // off lets go
         char *a = Script_Word(&rest), *b = Script_Word(&rest);
+        char *l = Script_Word(&rest), *t = Script_Word(&rest);
         if (a && Script_Is(a, "off"))
             hover_on = 0;
         else
         {
-            ok = a && b;
+            ok = a && b && (!l || (Script_Is(l, "lean") && t));
             if (ok)
             {
                 hover_x = Script_Number(&a);
                 hover_y = Script_Number(&b);
+                hover_lean = l ? Script_Number(&t) : 0;
                 hover_on = 1;
             }
         }
@@ -11588,6 +11623,8 @@ static void Script_Cmd(ScriptOp *op)
         // forget everything, baked data too: what's learned from here on is
         // this character's own
         Learned_Clear();
+        if (!sim_falcon)
+            Lean_Drop(); // a packed file's leans too: the second check is on the capture alone
         Spec_Clear();
         capture_on = 1;
         break;
@@ -17355,6 +17392,8 @@ static void Event_ThinkFrame(GOBJ *event)
             Fall_Learn(fp, ts);
         if (Lean_IsPlain(fp, ts, prev_vel.X))
             Ecb_Record(fp, ts, frame_in_state);
+        if (capture_on && Is_Fall(ts))
+            Lean_Log(fp, ts, frame_in_state);
         if (Tracked_IsUpB(ts))
             Upb_Record(fp, ts, frame_in_state);
         if (logging)
@@ -17457,7 +17496,7 @@ static void Event_ThinkFrame(GOBJ *event)
     Spec_Think(fp, sid, frame_in_state);
     Hover_Think(fp);
     if (hover_on)
-        prev_vel = (Vec2){0, 0};
+        prev_vel = (Vec2){fp->phys.self_vel.X, 0};
 
     Drill_Think();
     // Finish only after the old frame's learning and landing resolution;

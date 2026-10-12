@@ -2902,6 +2902,15 @@ static const LeanEcb lean_onset[] = {
     // END generated onset data
 };
 
+// The steady grid in use: Falcon's above, or another fighter's own from
+// TM/llecb.bin (lean_own, as many blends but a frame per frame of its own
+// fall's loop). Each fall and direction's rows run blend by blend, a row
+// per loop frame in each.
+#define LL_LEAN_MAX 2048
+static const LeanEcb *lean_rows = lean_ecb;
+static int lean_count = countof(lean_ecb);
+static LeanEcb *lean_own; // [LL_LEAN_MAX]
+
 static int lean_first[2][2]; // first row of each fall and direction
 static int lean_levels[2][2]; // blends measured for it
 static int onset_first[2][2];
@@ -2909,19 +2918,30 @@ static int onset_levels[2][2];
 
 static void Lean_Index(void)
 {
-    for (int i = (int)countof(lean_ecb) - 1; i >= 0; i--)
+    memset(lean_levels, 0, sizeof(lean_levels));
+    memset(onset_levels, 0, sizeof(onset_levels));
+    for (int i = lean_count - 1; i >= 0; i--)
     {
-        const LeanEcb *l = &lean_ecb[i];
+        const LeanEcb *l = &lean_rows[i];
         lean_first[l->fall][l->back] = i;
         if (l->k == 0)
             lean_levels[l->fall][l->back]++;
     }
+    if (lean_rows != lean_ecb)
+        return; // the first frame's own measurements are Falcon's only
     for (int i = (int)countof(lean_onset) - 1; i >= 0; i--)
     {
         const LeanEcb *l = &lean_onset[i];
         onset_first[l->fall][l->back] = i;
         onset_levels[l->fall][l->back]++;
     }
+}
+
+// No leans at all: falls keep their plain pose.
+static void Lean_Drop(void)
+{
+    lean_count = 0;
+    Lean_Index();
 }
 
 // The fighter's own packed table, kept to start over from (Learned_Reset).
@@ -2944,7 +2964,8 @@ static void Learned_Reset(void)
 }
 
 // Another fighter than Falcon: none of his baked table, Falcon Dive or
-// fall leans. Its own table comes packed (Ecb_Unpack) or is learned in play.
+// fall leans. Its own table and leans come packed (Ecb_Unpack), or the
+// table is learned in play (and its falls don't lean).
 static void Sim_ForFighter(int kind)
 {
     int falcon = kind == FTKIND_FALCON;
@@ -2953,13 +2974,14 @@ static void Sim_ForFighter(int kind)
     sim_falcon = falcon;
     fall_loop[0] = fall_loop[1] = fall_loop[2] = LL_FALL_LOOP;
     Learned_Clear();
-    memset(lean_levels, 0, sizeof(lean_levels));
-    memset(onset_levels, 0, sizeof(onset_levels));
+    lean_rows = falcon ? lean_ecb : lean_own;
+    lean_count = 0;
     if (falcon)
     {
         Learned_Bake();
-        Lean_Index();
+        lean_count = countof(lean_ecb);
     }
+    Lean_Index();
 }
 
 // The fighters' tables as tools/llsim/ecbpack.py packs them (TM/llecb.bin),
@@ -2968,11 +2990,14 @@ static void Sim_ForFighter(int kind)
 // fighter's block: u16 rows, u16 states, each state's s16 frames and s16
 // next state (as LLLEN), the falls' loops (u8 each for Fall, FallAerial,
 // FallSpecial, then a pad byte; 0 = Falcon's), then each row: u8 state, u8
-// frame, u8 flags (BAKED_*), a pad byte and five floats (as BakedEcb). Blocks start and
-// end on 32 bytes, as the disc reads them.
+// frame, u8 flags (BAKED_*), a pad byte and five floats (as BakedEcb). Then
+// the falls' leans, if captured: u16 rows, a pad u16, each row u8 fall, u8
+// leaning back, u8 loop frame, a pad byte and six floats (as LeanEcb, in
+// its order). Blocks start and end on 32 bytes, as the disc reads them.
 #define LLE_FIGHTERS 32
 #define LLE_DIR_BYTES (32 + LLE_FIGHTERS * 16)
 #define LLE_ROW 24
+#define LLE_LEAN_ROW 28
 
 static u32 Pack_U32(const u8 *b)
 {
@@ -3045,6 +3070,29 @@ static int Ecb_Unpack(const u8 *b, int size)
         e->aerial_lag = (flags & BAKED_LAG) != 0;
         e->seen = 1;
     }
+    // the leans, kept only whole (each blend a full loop of its fall)
+    int leans = at + 4 <= size ? Pack_S16(b + at) & 0xFFFF : 0;
+    at += 4;
+    if (sim_falcon || !lean_own || leans > LL_LEAN_MAX || at + leans * LLE_LEAN_ROW > size)
+        leans = 0;
+    for (int i = 0; i < leans; i++, at += LLE_LEAN_ROW)
+    {
+        LeanEcb *l = &lean_own[i];
+        l->fall = b[at] != 0;
+        l->back = b[at + 1] != 0;
+        l->k = b[at + 2];
+        l->lean = Pack_F32(b + at + 4);
+        l->bottom = Pack_F32(b + at + 8);
+        l->top = Pack_F32(b + at + 12);
+        l->side = Pack_F32(b + at + 16);
+        l->front = Pack_F32(b + at + 20);
+        l->back_x = Pack_F32(b + at + 24);
+    }
+    if (!sim_falcon)
+    {
+        lean_count = leans;
+        Lean_Index();
+    }
     return rows;
 }
 
@@ -3107,8 +3155,8 @@ static EcbSample *Lean_Ecb(EcbSample *plain, int ts, int side, int frame, float 
         return Lean_Mix(plain, &lean_onset[onset_first[fall][back]], onset_levels[fall][back], 1, lean, out);
     if (lean_levels[fall][back] == 0)
         return plain;
-    int k = frame % LL_FALL_LOOP;
-    return Lean_Mix(plain, &lean_ecb[lean_first[fall][back] + k], lean_levels[fall][back], LL_FALL_LOOP, lean, out);
+    int loop = fall_loop[fall];
+    return Lean_Mix(plain, &lean_rows[lean_first[fall][back] + frame % loop], lean_levels[fall][back], loop, lean, out);
 }
 
 static int Is_Fall(int ts)
@@ -4026,6 +4074,7 @@ static void Sim_Setup(void)
 
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     upb_table = calloc(sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
+    lean_own = calloc(sizeof(LeanEcb) * LL_LEAN_MAX);
     Learned_Clear();
     Learned_Bake();
     Lean_Index();

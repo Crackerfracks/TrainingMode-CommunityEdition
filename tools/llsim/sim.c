@@ -163,18 +163,21 @@ void llsim_check(void)
 }
 
 // A character's own ECB table (a capture's LLECB and LLLEN lines) in place
-// of Falcon's baked one. The fall leans stay Falcon's, as they do in game,
-// unless keep_lean is 0.
+// of the one in use. The fall leans stay as they are (Falcon's for him,
+// none for another fighter, as in a capture) unless keep_lean is 0.
 void llsim_table_begin(int keep_lean)
 {
     memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     memset(state_len, 0, sizeof(state_len));
     memset(state_next, -1, sizeof(state_next));
     if (!keep_lean)
-    {
-        memset(lean_levels, 0, sizeof(lean_levels));
-        memset(onset_levels, 0, sizeof(onset_levels));
-    }
+        Lean_Drop();
+}
+
+// Falls keep their plain pose (-nolean).
+void llsim_nolean(void)
+{
+    Lean_Drop();
 }
 
 int llsim_ecb(int ts, int frame, int flags, const unsigned *w)
@@ -250,5 +253,12 @@ void llsim_ecb_print(int fighter_kind)
         OSReport("LLLEN %d %d %d\n", ts, state_len[ts], state_next[ts]);
     }
     OSReport("LLLOOP %d %d %d\n", fall_loop[0], fall_loop[1], fall_loop[2]);
+    if (lean_rows == lean_own) // another fighter's leans, as packed
+        for (int i = 0; i < lean_count; i++)
+        {
+            const LeanEcb *l = &lean_rows[i];
+            OSReport("LLLEANGRID %d %d %d %08x %08x %08x %08x %08x %08x\n", l->fall, l->back, l->k, Float_Bits(l->lean),
+                     Float_Bits(l->bottom), Float_Bits(l->top), Float_Bits(l->side), Float_Bits(l->front), Float_Bits(l->back_x));
+        }
     OSReport("LLECB end\n");
 }

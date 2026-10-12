@@ -12,6 +12,7 @@ int llsim_vert(int i, unsigned cx, unsigned cy, unsigned ox, unsigned oy);
 int llsim_ready(int fighter_kind, int wlground);
 void llsim_check(void);
 void llsim_table_begin(int keep_lean);
+void llsim_nolean(void);
 int llsim_ecb(int ts, int frame, int flags, const unsigned *w);
 int llsim_len(int ts, int len, int next);
 void llsim_loops(const int *loops);

@@ -15,7 +15,8 @@
  * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it.
  * -p names a packed TM/llecb.bin (tools/llsim/ecbpack.py) to load the
  * dump's fighter from, as the event does for every fighter but Falcon.
- * Falcon keeps his fall leans, as in game, unless -nolean drops them.
+ * The fall leans in use (Falcon's, or a packed fighter's own) stay, as in
+ * game, unless -nolean drops them.
  * -loops A,B,C sets the falls' loops (Fall, FallAerial, FallSpecial), as
  * the event learns them from the animations (its LLFALL lines).
  *
@@ -230,6 +231,8 @@ int main(int argc, char **argv)
         Table_Load(table, keep_lean);
     if (set_loops)
         llsim_loops(loops);
+    if (!keep_lean)
+        llsim_nolean();
     if (ecb)
         llsim_ecb_print(dump_char);
     else

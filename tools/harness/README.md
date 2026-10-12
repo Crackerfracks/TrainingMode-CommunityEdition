@@ -11,7 +11,7 @@ them elsewhere.
 | `pickws.py` | picks the workspace for the test window (laptop panel, unless a fullscreen window of Stephen's is there) |
 | `pad.py` | one-shot pipe-controller inputs (`A`, `stick X Y S`, `wait S`, hotkeys) |
 | `run_tests.py TAG SCRIPT name:ckind ...` | one test build per fighter (LLCHAR=file), run, log to `llsim-capture/TAG_name.log` |
-| `capture_all8.py` | the 26-fighter table capture (`*_bf8.log`) |
+| `RUN=9 capture_all.py [CHAR ...]` | the table capture for all 26 fighters or the ones named (`*_bfRUN.log`); a log whose fighter changes mid-capture is failed and set aside |
 | `nav_boot_test.py [N]` | N boots into Landing Lab with nav (Fox/Mario, `hyprctl reload` on boots 3 and 8); passed 10/10 on 2026-10-12 |
 
 Long runs go detached (`systemd-run --user --collect`), post to the job board, and wait while Stephen's own

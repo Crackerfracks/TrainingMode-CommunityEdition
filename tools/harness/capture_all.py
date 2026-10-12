@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """capture_all.py: Battlefield ECB/dump capture for every character, one build + run at a time.
 
-Posts to the job board ("TM-CE capture v8 (bottom-lock fix, all 26)") and keeps the "TM-CE plan" card's "waiting on" current.
+Logs go to llsim-capture/<char>_bf<RUN>.log; RUN (default 9) is the capture's version, set in the
+environment: RUN=10 python3 capture_all.py MARIO FOX. Posts to the job board ("TM-CE capture vRUN") and keeps the "TM-CE plan" card's "waiting on" current.
 Waits between characters while Stephen's own Slippi/Dolphin is open, the 5-minute load average is
 above LOAD_MAX, or the 2-minute average CPU package temp is above TEMP_MAX. Mid-run it only aborts
 a character if the 2-minute average passes TEMP_ABORT. Characters whose log has LLLEN lines are skipped.
@@ -16,13 +17,14 @@ O = f"{W}/TM-CE_Claude_Landing_Trainer/llsim-capture"
 V = f"{W}/Base Melee/Super Smash Bros. Melee v1-2.iso"
 U = os.path.expanduser("~/.local/share/tmce-landinglab-dolphin")
 ISO = f"{U}/test-cap.iso"
-TAG = "_bf8.log"
+RUN = os.environ.get("RUN", "9")
+TAG = f"_bf{RUN}.log"
 PLAN = "tm-ce-plan-1012-165457-89fc"
 ALL = ("FALCON DK FOX GAW KIRBY BOWSER LINK LUIGI MARIO MARTH MEWTWO NESS PEACH PIKACHU ICECLIMBERS "
        "JIGGLYPUFF SAMUS YOSHI ZELDA SHEIK FALCO YOUNGLINK DRMARIO ROY PICHU GANONDORF").split()
 CKIND = {c: i for i, c in enumerate(ALL)}
 CHARS = sys.argv[1:] or ALL
-# a rerun names the run it replaces (its open issues close as superseded): REPLACES="TM-CE capture v8" python3 ...
+# a rerun names the run it replaces (its open issues close as superseded): REPLACES="TM-CE capture v9" RUN=10 python3 ...
 REPLACES = os.environ.get("REPLACES") or None
 CAP = os.path.expanduser("~/.local/share/tmce-landinglab-dolphin/capall")
 BUILD_FILES = ["eventMenu", "lab", "labCSS", "lcancel", "ledgedash", "wavedash", "powershield", "dthrowknee",
@@ -51,7 +53,7 @@ _G = _json.load(open(os.path.expanduser("~/.local/share/tmce-landinglab-dolphin/
 LOAD_MAX = float(_G.get("load5_max", 14))  # shared gate config (Stephen: the laptop can take more)
 TEMP_MAX, TEMP_ABORT = 90.0, 95.0
 RUN_TIMEOUT = 1200
-LOG = f"{O}/capture_all8.log"
+LOG = f"{O}/capture_all{RUN}.log"
 NICE = ["nice", "-n", "15", "ionice", "-c3"]
 
 
@@ -127,9 +129,9 @@ def count(lines, key):
 threading.Thread(target=sample_temps, daemon=True).start()
 time.sleep(1)
 
-with jobboard.Job("TM-CE capture v8 (bottom-lock fix, all 26)", total=len(CHARS), unit="chars", group="TM-CE", stale_after=300, owner_label="Landing trainer research", replaces=REPLACES,
+with jobboard.Job(f"TM-CE capture v{RUN}", total=len(CHARS), unit="chars", group="TM-CE", stale_after=300, owner_label="Landing trainer research", replaces=REPLACES,
                   description="Builds a capture ISO per character, plays its jump/aerial/airdodge animations "
-                              "on Battlefield, logs ECB + specials per frame to llsim-capture/<char>_bf2.log (one build, character swapped via TM/llchar.txt)",
+                              "on Battlefield, logs ECB + specials per frame to llsim-capture/<char>_bf{RUN}.log (one build, character swapped via TM/llchar.txt)",
                   fields={"char": "-", "ok": 0, "failed": 0, **gauges()}) as job:
     log(f"start (py; load5 limit {LOAD_MAX:.0f}, temp avg limit {TEMP_MAX:.0f}, abort {TEMP_ABORT:.0f})")
     ok = failed = 0
@@ -178,7 +180,7 @@ with jobboard.Job("TM-CE capture v8 (bottom-lock fix, all 26)", total=len(CHARS)
         full = [re.sub(r"^.*N\[OSREPORT\]: ", "", l) for l in raw]
         os.makedirs(f"{U}/cap", exist_ok=True)
         open(f"{U}/cap/full.log", "w").write("\n".join(full) + "\n")
-        keep = [l for l in full if l.startswith(("LLCHAR", "LLDUMP", "LLCHECK", "LLECB", "LLLEN", "LLSPEC", "LLFALL", "LLLOOP", "LLLEAN", "LLDJ", "LLE1"))]
+        keep = [l for l in full if l.startswith(("LLCHAR", "LLDUMP", "LLCHECK", "LLECB", "LLLEN", "LLSPEC", "LLFALL", "LLLOOP", "LLLEAN", "LLDJ", "LLE1", "LLSKIP"))]
         open(out, "w").write("\n".join(keep) + ("\n" if keep else ""))
         crash = next((l for l in full if "assertion" in l), "")
         if crash: shutil.copy(f"{U}/cap/full.log", f"{O}/{name}_bf_crash.log")
@@ -186,10 +188,18 @@ with jobboard.Job("TM-CE capture v8 (bottom-lock fix, all 26)", total=len(CHARS)
         n = {k: count(keep, k) for k in ("LLDUMP", "LLCHECK", "LLECB", "LLLEN", "LLSPEC ", "LLSPECLEN")}
         spec_end = next((l for l in keep if l.startswith("LLSPEC end")), "no LLSPEC end")
         llchar = next((l for l in keep if l.startswith("LLCHAR")), "no LLCHAR line")
-        good = n["LLLEN"] > 0 and spec_end.startswith("LLSPEC end") and not crash and not aborted
+        # guard: the fighter must not change during the capture (Zelda/Sheik transformed in bf8 and mixed
+        # two characters into one log): the event's fighter line and the table header must name one kind
+        kinds = {m.group(1) for l in keep for m in [re.match(r"LLECB (?:fighter|begin char) (\d+)", l)] if m}
+        kind_changed = len(kinds) > 1
+        if kind_changed:
+            os.replace(out, f"{O}/{name}_bf{RUN}_kindchange.log")
+            job.log(f"{c}: fighter kind changed during the capture ({sorted(kinds)}); log kept as "
+                    f"{name}_bf{RUN}_kindchange.log and left out of packing", "error")
+        good = n["LLLEN"] > 0 and spec_end.startswith("LLSPEC end") and not crash and not aborted and not kind_changed
         summary = (f"{c} {'OK' if good else 'FAIL'} lines {len(keep)} dump {n['LLDUMP']} check {n['LLCHECK']} "
                    f"ecb {n['LLECB']} len {n['LLLEN']} spec {n['LLSPEC ']} speclen {n['LLSPECLEN']} | {llchar} | {begin} | {spec_end}" + (f" | {crash}" if crash else "")
-                   + (f" | aborted: {aborted}" if aborted else ""))
+                   + (f" | aborted: {aborted}" if aborted else "") + (f" | KIND CHANGED {sorted(kinds)}" if kind_changed else ""))
         log(summary)
         if good: ok += 1
         else: failed += 1
@@ -205,4 +215,4 @@ with jobboard.Job("TM-CE capture v8 (bottom-lock fix, all 26)", total=len(CHARS)
     log("end")
     plan_waiting("nothing; capture finished")
     if failed:
-        raise RuntimeError(f"{failed} of {len(CHARS)} characters failed; see capture_all8.log")
+        raise RuntimeError(f"{failed} of {len(CHARS)} characters failed; see capture_all{RUN}.log")

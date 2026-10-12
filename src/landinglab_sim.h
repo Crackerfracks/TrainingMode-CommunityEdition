@@ -981,12 +981,9 @@ static float Aerial_LandingLag(FighterData *fp, int ts)
     }
 }
 
-static void Ecb_Record(FighterData *fp, int ts, int frame)
+// The ECB this frame into s (the capture's character states use it too).
+static void Ecb_Fill(FighterData *fp, EcbSample *s)
 {
-    if (frame >= LL_STATE_FRAMES)
-        return;
-
-    EcbSample *s = Ecb_Slot(ts, frame);
     CollData *cd = &fp->coll_data;
 
     // While the bottom is locked the game keeps the old bottom, so only the
@@ -1013,6 +1010,13 @@ static void Ecb_Record(FighterData *fp, int ts, int frame)
     s->aerial_lag = fp->ftcmd_var.flag0 != 0;
     if (s->seen < 255)
         s->seen++;
+}
+
+static void Ecb_Record(FighterData *fp, int ts, int frame)
+{
+    if (frame >= LL_STATE_FRAMES)
+        return;
+    Ecb_Fill(fp, Ecb_Slot(ts, frame));
 }
 
 // Falcon Dive moves by its animation (ft_80085134) plus a drift speed of its

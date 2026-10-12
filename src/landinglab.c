@@ -10970,6 +10970,59 @@ static void Script_End(void);
 static int hover_on, capture_on;
 static float hover_x, hover_y;
 
+// ... and every state of the character's own (its specials, Kirby's and
+// Jigglypuff's air jumps: state ids from 341 on) seen in the air while
+// capturing, in slots taken as they come (Stephen, 0.9.16: specials too)
+#define SPEC_SLOTS 40
+#define ASID_CHAR_FIRST 341
+static EcbSample *spec_table;       // [SPEC_SLOTS][LL_STATE_FRAMES]
+static s16 spec_sid[SPEC_SLOTS];    // the state in each slot
+static s16 spec_len[SPEC_SLOTS];    // frames it last ran before changing state, 0 = still on
+static s16 spec_next[SPEC_SLOTS];   // the state it changed to, -1 = not seen
+static int spec_n, spec_cur = -1;   // slots used, the slot of the state now
+
+static void Spec_Clear(void)
+{
+    if (!spec_table)
+        spec_table = calloc(sizeof(EcbSample) * SPEC_SLOTS * LL_STATE_FRAMES);
+    memset(spec_table, 0, sizeof(EcbSample) * SPEC_SLOTS * LL_STATE_FRAMES);
+    spec_n = 0;
+    spec_cur = -1;
+}
+
+// Each frame while capturing: the character's own states, in the air.
+static void Spec_Think(FighterData *fp, int sid, int frame)
+{
+    if (!capture_on || !spec_table)
+        return;
+    int slot = -1;
+    if (sid >= ASID_CHAR_FIRST && fp->phys.air_state == 1)
+    {
+        for (int i = 0; i < spec_n; i++)
+            if (spec_sid[i] == sid)
+                slot = i;
+        if (slot < 0 && spec_n < SPEC_SLOTS)
+        {
+            slot = spec_n++;
+            spec_sid[slot] = sid;
+            spec_len[slot] = 0;
+            spec_next[slot] = -1;
+        }
+    }
+    if (spec_cur >= 0 && spec_sid[spec_cur] != sid)
+    {
+        spec_next[spec_cur] = sid; // what it went into, and after how long
+        spec_cur = -1;
+    }
+    if (slot < 0)
+        return;
+    spec_cur = slot;
+    if (frame + 1 > spec_len[slot])
+        spec_len[slot] = frame + 1;
+    if (frame < LL_STATE_FRAMES)
+        Ecb_Fill(fp, &spec_table[slot * LL_STATE_FRAMES + frame]);
+}
+
 // Post-collision snapshot at event priority 15, before event overrides. Three
 // bounded physical records form one logical FRAME. Never indexes tracked data.
 static void Script_TraceFrame(FighterData *fp)
@@ -11229,6 +11282,23 @@ static void Ecb_Dump(FighterData *fp)
         }
         OSReport("LLLEN %d %d %d\n", ts, state_len[ts], state_next[ts]);
     }
+    // the character's own states (LLSPEC sid frame flags ..., as LLECB;
+    // LLSPECLEN sid frames-seen next-state)
+    for (int i = 0; i < spec_n && spec_table; i++)
+    {
+        for (int f = 0; f < LL_STATE_FRAMES; f++)
+        {
+            EcbSample *e = &spec_table[i * LL_STATE_FRAMES + f];
+            if (!e->seen)
+                continue;
+            int flags = (e->has_bottom ? BAKED_BOTTOM : 0) | (e->has_shape ? BAKED_SHAPE : 0) | (e->aerial_lag ? BAKED_LAG : 0);
+            sprintf(buf, "LLSPEC %d %d %d %08x %08x %08x %08x %08x\n", spec_sid[i], f, flags, Float_Bits(e->bottom),
+                    Float_Bits(e->top), Float_Bits(e->side_y), Float_Bits(e->front), Float_Bits(e->back));
+            OSReport("%s", buf);
+        }
+        OSReport("LLSPECLEN %d %d %d\n", spec_sid[i], spec_len[i], spec_next[i]);
+    }
+    OSReport("LLSPEC end %d states\n", spec_n);
     OSReport("LLECB end\n");
 }
 
@@ -11452,6 +11522,7 @@ static void Script_Cmd(ScriptOp *op)
         // forget everything, baked data too: what's learned from here on is
         // this character's own
         Learned_Clear();
+        Spec_Clear();
         capture_on = 1;
         break;
     case SCMD_DUMPECB:
@@ -17314,6 +17385,7 @@ static void Event_ThinkFrame(GOBJ *event)
     prev_lock = fp->coll_data.u.ecb_bot_lock_frames;
     prev_wl_late = live_visible && Cues_Waveland() && pred_live->wl_late && pred_live->wl_first == 1;
     prev_vel = (Vec2){fp->phys.self_vel.X, fp->phys.self_vel.Y};
+    Spec_Think(fp, sid, frame_in_state);
     Hover_Think(fp);
     if (hover_on)
         prev_vel = (Vec2){0, 0};

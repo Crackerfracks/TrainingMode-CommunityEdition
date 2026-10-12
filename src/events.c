@@ -1205,6 +1205,26 @@ void HUD_DrawActionLogKey(char **action_names, GXColor *action_colors, int actio
 /// Event Functions ///
 ///////////////////////
 
+#ifdef LL_TEST_CHAR_FILE
+// The capture build's fighter from TM/llchar.txt: a CKIND_ number, or -1.
+static int LL_CharFromDisc(void)
+{
+    static char buf[64] __attribute__((aligned(32)));
+    int entry = DVDConvertPathToEntrynum("TM/llchar.txt");
+    if (entry < 0)
+        return -1;
+    // the disc reads whole 32-byte blocks
+    DCFlushRange(buf, 32);
+    File_ReadSync(entry, 0, buf, 32, 0x21, 1);
+    DCInvalidateRange(buf, 32);
+    int kind = 0, digits = 0;
+    for (int i = 0; i < 31 && buf[i] >= '0' && buf[i] <= '9'; i++, digits++)
+        kind = kind * 10 + buf[i] - '0';
+    OSReport("LLCHAR %d from TM/llchar.txt\n", digits ? kind : -1);
+    return digits ? kind : -1;
+}
+#endif
+
 void EventInit(int page, int eventID, MatchInit *matchData)
 {
 
@@ -1290,15 +1310,24 @@ void EventInit(int page, int eventID, MatchInit *matchData)
 
 #ifdef LL_TEST_CHAR
         // a Landing Lab data capture build's fighter, in place of the one
-        // picked. Only there: most events leave playerKind 0, not -1.
+        // picked: built in (LLCHAR=CKIND_...), or, built with LLCHAR=file,
+        // read from TM/llchar.txt at each start, so one build captures every
+        // character with only that file swapped between runs. Only there:
+        // most events leave playerKind 0, not -1.
         if (event->playerKind == LL_TEST_CHAR) {
-            matchData->playerData[0].c_kind = LL_TEST_CHAR;
-            matchData->playerData[0].costume = 0;
-            // preloaded in the picked fighter's place, as the lab's replay
-            // import does: loading it at the match start ran out of memory
-            preload->queued.fighters[0].kind = LL_TEST_CHAR;
-            preload->queued.fighters[0].costume = 0;
-            Preload_Update();
+            int ll_kind = LL_TEST_CHAR;
+#ifdef LL_TEST_CHAR_FILE
+            ll_kind = LL_CharFromDisc();
+#endif
+            if (ll_kind >= 0) {
+                matchData->playerData[0].c_kind = ll_kind;
+                matchData->playerData[0].costume = 0;
+                // preloaded in the picked fighter's place, as the lab's replay
+                // import does: loading it at the match start ran out of memory
+                preload->queued.fighters[0].kind = ll_kind;
+                preload->queued.fighters[0].costume = 0;
+                Preload_Update();
+            }
         }
 #endif
 

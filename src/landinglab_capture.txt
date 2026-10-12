@@ -3,7 +3,10 @@
 # and start the event. It dumps the fighter and stage (LLDUMP), then plays
 # each tracked animation whole while held in the air, learning its ECB
 # frame by frame from a clean slate, and writes the table (LLECB, LLLEN).
-# Kirby and Jigglypuff's air jumps are their own states and aren't caught.
+# The character's own states seen in the air (its specials, Kirby's and
+# Jigglypuff's air jumps) are caught too, by state id (LLSPEC, LLSPECLEN).
+# With LLCHAR=file one build serves every character: the fighter is the
+# CKIND_ number in TM/llchar.txt (LLCHARFILE=<file> ./build.sh ...).
 autorun
 
 script Capture
@@ -34,7 +37,7 @@ refill
 1 X s:-1,0
 80
 
-# the aerials, each whole, then the airdodge into the helpless fall
+# the aerials, each whole
 1 A
 80
 1 c:1,0
@@ -45,6 +48,59 @@ refill
 80
 1 c:0,-1
 80
+
+# more air jumps (only Kirby and Jigglypuff have them)
+refill
+1 X
+40
+1 X
+40
+1 X
+40
+
+# the specials, each from a fresh jump: neutral, side both ways, down, up
+hover off
+land 120
+20
+10 X
+hover 0 100
+1 B
+150
+hover off
+land 150
+20
+10 X
+hover 0 100
+1 B s:1,0
+150
+hover off
+land 150
+20
+10 X
+hover 0 100
+1 B s:-1,0
+150
+hover off
+land 150
+20
+10 X
+hover 0 100
+1 B s:0,-1
+150
+hover off
+land 150
+20
+10 X
+hover 0 100
+1 B s:0,1
+150
+
+# last, from a fresh jump: the airdodge into the helpless fall
+hover off
+land 200
+20
+10 X
+hover 0 100
 1 L
 90
 dumpecb

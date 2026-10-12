@@ -96,7 +96,10 @@ mex_build() {
         # LLSTAGE picks another stage (a GRKINDEXT_ name), LLCHAR another
         # fighter (a CKIND_ name), for the data dumps (tools/llsim)
         if [ -n "${LLSTAGE}" ]; then opt="${opt} -DLL_TEST_STAGE_ID=${LLSTAGE}"; fi
-        if [ -n "${LLCHAR}" ]; then opt="${opt} -DLL_TEST_CHAR=${LLCHAR}"; fi
+        # LLCHAR=file: the fighter from TM/llchar.txt (LLCHARFILE, a CKIND_
+        # number), so one build serves every character
+        if [ "${LLCHAR}" = "file" ]; then opt="${opt} -DLL_TEST_CHAR=99 -DLL_TEST_CHAR_FILE" # 99: no event has it by default
+        elif [ -n "${LLCHAR}" ]; then opt="${opt} -DLL_TEST_CHAR=${LLCHAR}"; fi
     fi
 
     warn="-Wall -Wextra -Wno-char-subscripts -Wno-builtin-declaration-mismatch -Wno-unused-parameter"
@@ -160,6 +163,7 @@ ${gc_fst} fs TM-CE.iso \
     insert TM/laserland.dat build/laserland.dat \
     insert TM/landinglab.dat build/landinglab.dat \
     insert TM/llscript.txt "${LLSCRIPT:-src/landinglab_reference.txt}" \
+    ${LLCHARFILE:+insert TM/llchar.txt "${LLCHARFILE}"} \
     insert TM/eggs.dat build/eggs.dat \
     insert TM/techchase.dat build/techchase.dat \
     insert TM/slalom.dat build/slalom.dat \

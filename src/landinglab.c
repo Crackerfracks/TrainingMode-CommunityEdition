@@ -5950,8 +5950,8 @@ static void Strip_Place(FighterData *fp, int look, float *x, float *y, float *w,
     else if (look == STRIP_CONVEYOR)
     {
         // a fixed width, however many cues are up (Stephen, 0.9.10)
-        *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + 2 * HW_LANE + HW_LANE_GAP;
-        *h = HW_LABEL + HW_ROWS * HW_PITCH + 0.5f + 1.3f; // and the entry's waiting room
+        *w = 2 * STRIP_PAD + (Strip_Glyphs() ? HW_GLYPH : 0) + 2 * HW_LANE + HW_LANE_GAP + 2.6f; // and the key
+        *h = 0.8f + HW_ROWS * HW_PITCH + 0.5f + 1.3f; // and the entry's waiting room
     }
     else
     {
@@ -6494,6 +6494,8 @@ static void Highway_Draw(FighterData *fp)
 #define CV_W (2 * HW_LANE + HW_LANE_GAP)
 #define CV_SHELF 1.3f
 #define CV_LIFT 0.22f
+#define CV_KEY 2.6f  // the key's column: a swatch and "WL/WD" at ST_TEXT
+#define CV_BASE 0.8f // under the window
 
 static int Cv_Rank(MeterRow *r)
 {
@@ -6546,61 +6548,68 @@ static float Cv_Lift(MeterRow *r)
     return 0;
 }
 
-// One note's frame k of row r in [x0, x1] by [y0, y1].
-static void Cv_Cell(MeterRow *r, int k, float x0, float y0, float x1, float y1)
+// A rect with its corners cut a pixel, so notes read rounded. The three
+// strips don't overlap, so a faint note has no brighter cross.
+static void Cv_Round(float x0, float y0, float x1, float y1, GXColor c)
 {
-    int kind = r->cell[k], tone = r->tone[k];
-    float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f);
+    Hud_Rect(x0 + PX, y0, x1 - PX, y1, c);
+    Hud_Rect(x0, y0 + PX, x0 + PX, y1 - PX, c);
+    Hud_Rect(x1 - PX, y0 + PX, x1, y1 - PX, c);
+}
+
+// One note: kind and tone of row r, from y0 up to y1 (open_lo / open_hi:
+// the note goes on past that end, where the share of the row changed).
+// Kinds differ in shape as well as color, all square-edged (the GameCube
+// draws no smooth diagonals): a jump has a tab on its top, an AI is solid,
+// a NIL is notched, a waveland or wavedash hollow. Each has a dark rim and
+// a light top edge.
+static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0, float x1, float y1, int open_lo,
+                    int open_hi)
+{
     GXColor col = Tone_Color(r, tone);
-    // a note's first and last frames are inset, so windows read as one
-    int below = k > 0 && r->cell[k - 1] == kind && r->tone[k - 1] == tone;
-    int above = k + 1 < r->len && r->cell[k + 1] == kind && r->tone[k + 1] == tone;
-    if (!below)
-        y0 += 0.05f;
-    if (!above)
-        y1 -= 0.05f;
     int rank = tone == TONE_JUMP ? 0 : Cv_Rank(r);
+    float lo = open_lo ? y0 : y0 + 0.05f, hi = open_hi ? y1 : y1 - 0.05f, m = (x0 + x1) / 2;
+    if (kind == CELL_LAG)
+    {
+        Cv_Round(m - 0.4f, lo, m + 0.4f, hi, Color_Fill(col, a * 0.6f));
+        return;
+    }
+    Hud_Frame(x0 - PX, lo - (open_lo ? 0 : PX), x1 + PX, hi + (open_hi ? 0 : PX), PX, Color_Fill(color_plate, a * 0.6f));
     switch (kind)
     {
     case CELL_PRESS:
-        if (rank == 0 && !above)
+        if (rank == 3 && tone != TONE_MISS && tone != TONE_SKIP)
         {
-            // a jump: the note's top frame peaks
-            float m = y0 + (y1 - y0) * 0.55f;
-            Hud_Rect(x0, y0, x1, m, Color_Fill(col, a));
-            Hud_Tri(x0, m, x1, m, (x0 + x1) / 2, y1 + 0.06f, Color_Fill(col, a));
+            // hollow: a thick rim round a faint core
+            float t = 2 * PX;
+            Hud_Rect(x0, lo, x1, lo + t, Color_Fill(col, a));
+            Hud_Rect(x0, hi - t, x1, hi, Color_Fill(col, a));
+            Hud_Rect(x0, lo + t, x0 + t, hi - t, Color_Fill(col, a));
+            Hud_Rect(x1 - t, lo + t, x1, hi - t, Color_Fill(col, a));
+            Hud_Rect(x0 + t, lo + t, x1 - t, hi - t, Color_Fill(col, a * 0.4f));
+            return;
         }
-        else if (rank == 3)
-        {
-            float lean = (y1 - y0) * 0.35f;
-            Quad_Add(x0, y0, x1 - lean, y0, x1, y1, x0 + lean, y1, Color_Fill(col, a));
-        }
-        else
-        {
-            Hud_Rect(x0, y0, x1, y1, Color_Fill(col, a));
-            if (rank == 2 && !above)
-            {
-                float m = (x0 + x1) / 2;
-                Hud_Rect(m - 0.12f, y1 - 0.22f, m + 0.12f, y1, Color_Fill(color_plate, a));
-            }
-        }
+        Cv_Round(x0, lo, x1, hi, Color_Fill(col, a));
+        if (rank == 0 && !open_hi)
+            Cv_Round(m - (x1 - x0) * 0.18f, hi - PX, m + (x1 - x0) * 0.18f, hi + 0.16f, Color_Fill(col, a));
+        if (rank == 2 && !open_hi)
+            Hud_Rect(m - 0.13f, hi - 0.24f, m + 0.13f, hi, Color_Fill(color_plate, a * 0.9f));
         break;
     case CELL_ACT:
-        Hud_Rect(x0, y0, x1, y1, Color_Fill(col, a));
-        Hud_Rect(x0, y0, x1, y0 + 0.2f * HW_PITCH, Color_Fill(color_white, a * 0.9f));
+        Cv_Round(x0, lo, x1, hi, Color_Fill(col, a));
+        Hud_Rect(x0 + PX, lo, x1 - PX, lo + 0.2f * HW_PITCH, Color_Fill(color_white, a * 0.9f));
         break;
     case CELL_LAND:
-        Hud_Rect(x0, y0, x1, y1, Color_Fill(color_plate, a * 0.6f));
-        Hud_Frame(x0, y0, x1, y1, 1.4f * PX, Color_Fill(col, a));
-        Hud_Rect(x0, y0, x1, y0 + 0.24f * HW_PITCH, Color_Fill(col, a));
-        break;
+        Cv_Round(x0, lo, x1, hi, Color_Fill(color_plate, a * 0.6f));
+        Hud_Frame(x0, lo, x1, hi, 1.4f * PX, Color_Fill(col, a));
+        Hud_Rect(x0, lo, x1, lo + 0.24f * HW_PITCH, Color_Fill(col, a));
+        return;
     case CELL_TAIL:
-        Hud_Rect(x0, y0, x1, y1, Color_Fill(color_galint, a));
-        break;
-    case CELL_LAG:
-        Hud_Rect((x0 + x1) / 2 - 0.4f, y0, (x0 + x1) / 2 + 0.4f, y1, Color_Fill(col, a * 0.6f));
+        Cv_Round(x0, lo, x1, hi, Color_Fill(color_galint, a));
         break;
     }
+    if (!open_hi)
+        Hud_Rect(x0 + 2 * PX, hi - 1.5f * PX, x1 - 2 * PX, hi - 0.5f * PX, Color_Over(color_white, 0.35f * a));
 }
 
 // The first note a row has at or past frame from, or -1.
@@ -6619,8 +6628,10 @@ static void Conveyor_Draw(FighterData *fp)
     int right = x0 > 0;
     float glyph = Strip_Glyphs() ? HW_GLYPH : 0;
     float glyph_x = right ? x0 + STRIP_PAD + glyph / 2 : x0 + w - STRIP_PAD - glyph / 2;
-    float bl = x0 + STRIP_PAD + (right ? glyph : 0), br = bl + CV_W;
-    float line_y = y0 + HW_LABEL, top = line_y + HW_ROWS * HW_PITCH;
+    // the key on the side toward the screen's edge, the glyphs toward its middle
+    float bl = x0 + STRIP_PAD + (right ? glyph : CV_KEY), br = bl + CV_W;
+    float kx = right ? br + 0.5f : x0 + STRIP_PAD;
+    float line_y = y0 + CV_BASE, top = line_y + HW_ROWS * HW_PITCH;
     float base_k = vis_k;
     int now = event_vars->game_timer;
     int order[MT_ROWS], n = Cv_Order(order);
@@ -6652,45 +6663,54 @@ static void Conveyor_Draw(FighterData *fp)
     Hud_Rect(br + 0.06f, line_y, br + 0.12f, top, Color_Over(color_white, 0.2f));
     Hud_Rect(bl - 0.2f, top, br + 0.2f, top + 0.08f, Color_Over(color_white, 0.35f)); // the entry's lip
 
-    // the notes, a frame at a time: the rows with a note on it split it
+    // the notes: each row's runs of frames that keep their share of the
+    // belt, drawn whole, so a window reads as one note
+    int slot[MT_ROWS][HW_ROWS], cnt[HW_ROWS];
     for (int k = 0; k < HW_ROWS; k++)
     {
-        int on[MT_ROWS], m = 0;
+        cnt[k] = 0;
         for (int j = 0; j < n; j++)
         {
             MeterRow *r = &meter[order[j]];
-            if (k < r->len && Cv_Claims(r->cell[k]))
-                on[m++] = order[j];
+            slot[j][k] = k < r->len && Cv_Claims(r->cell[k]) ? cnt[k]++ : -1;
         }
-        float y = line_y + k * HW_PITCH;
-        if (m == 0)
+    }
+    for (int j = 0; j < n; j++)
+    {
+        MeterRow *r = &meter[order[j]];
+        float lift = Cv_Lift(r);
+        for (int k = 0; k < HW_ROWS && k < r->len; k++)
         {
-            // only lag here: low bars across the belt
-            for (int j = 0; j < n; j++)
+            // what's drawn here: a note in its share, or lag across the
+            // belt where no note is
+            int kind = r->cell[k];
+            if (slot[j][k] < 0 && !(kind == CELL_LAG && cnt[k] == 0))
+                continue;
+            int e = k;
+            while (e + 1 < HW_ROWS && e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k] &&
+                   r->alpha[e + 1] == r->alpha[k] && slot[j][e + 1] == slot[j][k] &&
+                   (slot[j][k] < 0 ? cnt[e + 1] == 0 : cnt[e + 1] == cnt[k]))
+                e++;
+            float sx0 = bl + 0.15f, sx1 = br - 0.15f;
+            if (slot[j][k] >= 0)
             {
-                MeterRow *r = &meter[order[j]];
-                if (k < r->len && r->cell[k] == CELL_LAG)
-                {
-                    vis_k = base_k * r->fade;
-                    Cv_Cell(r, k, bl + 0.15f, y, br - 0.15f, y + HW_PITCH);
-                }
+                float share = (CV_W - 0.3f) / cnt[k];
+                sx0 = bl + 0.15f + slot[j][k] * share + (cnt[k] > 1 ? 0.06f : 0);
+                sx1 = sx0 + share - (cnt[k] > 1 ? 0.12f : 0);
             }
-            continue;
-        }
-        float share = (CV_W - 0.3f) / m;
-        for (int j = 0; j < m; j++)
-        {
-            MeterRow *r = &meter[on[j]];
+            float y0 = line_y + k * HW_PITCH, y1 = line_y + (e + 1) * HW_PITCH;
+            int lo = k > 0 && r->cell[k - 1] == kind && r->tone[k - 1] == r->tone[k];
+            int hi = e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k];
             vis_k = base_k * r->fade;
-            float sx0 = bl + 0.15f + j * share + (m > 1 ? 0.05f : 0), sx1 = sx0 + share - (m > 1 ? 0.1f : 0);
-            float lift = Cv_Lift(r);
             if (lift > 0)
-                Hud_Rect(sx0 + 0.1f, y + 0.05f, sx1 + 0.1f, y + HW_PITCH - 0.05f, Color_Fill(color_plate, 0.55f)); // its shadow
-            if (lift > 0 && r->parked)
+                Hud_Rect(sx0 + 0.1f, y0 + 0.05f, sx1 + 0.1f, y1 - 0.05f, Color_Fill(color_plate, 0.55f)); // its shadow
+            if (r->parked)
                 vis_k *= 0.8f;
-            Cv_Cell(r, k, sx0, y + lift, sx1, y + HW_PITCH + lift);
-            if (r->settle == 1)
-                Hud_Frame(sx0, y, sx1, y + HW_PITCH, 1.4f * PX, Color_Fill(color_white, 0.8f)); // set down
+            float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f);
+            Cv_Note(r, kind, r->tone[k], a, sx0, y0 + lift, sx1, y1 + lift, lo, hi);
+            if (r->settle == 1 && kind != CELL_LAG)
+                Hud_Frame(sx0 - PX, y0 - PX, sx1 + PX, y1 + PX, 1.4f * PX, Color_Fill(color_white, 0.8f)); // set down
+            k = e;
         }
     }
 
@@ -6714,7 +6734,7 @@ static void Conveyor_Draw(FighterData *fp)
         float sx0 = bl + 0.15f + j * share + 0.1f, sx1 = sx0 + share - 0.2f;
         int far = wk[j] - HW_ROWS;
         float wy = top + 0.3f + (far < 20 ? far : 20) * 0.035f + 0.05f * sin(now * 0.12f + j);
-        Cv_Cell(r, wk[j], sx0, wy, sx1, wy + HW_PITCH * 0.8f);
+        Cv_Note(r, r->cell[wk[j]], r->tone[wk[j]], r->alpha[wk[j]] / 255.f, sx0, wy, sx1, wy + HW_PITCH * 0.8f, 0, 0);
     }
 
     // the input glyphs beside the belt
@@ -6775,20 +6795,28 @@ static void Conveyor_Draw(FighterData *fp)
     if (tr > 0)
         Hud_Rect(br + 0.2f, my - 0.06f, br + 0.12f + tr, my + 0.06f, sc);
 
-    // the key: a chip per row in the belt's order, two to a line
-    for (int j = 0; j < n; j++)
+    // the key beside the belt: every kind in its own place, lit while
+    // one is up (Stephen, 0.9.10: no time to read words under the belt;
+    // the colors do the work, the key is there to learn them)
+    static const char *key_label[4] = {"JUMP", "AI", "NIL", "WL/WD"};
+    static const char *key_rank[4] = {"JUMP", "AI", "NIL", "WL"};
+    GXColor key_color[4] = {color_in_jump, land_kind_colors[LAND_AI], land_kind_colors[LAND_NIL],
+                            land_kind_colors[LAND_PERFECT_WL]};
+    for (int i = 0; i < 4; i++)
     {
-        MeterRow *r = &meter[order[j]];
-        vis_k = base_k * r->fade;
-        float cx = bl + (j % 2 ? 0.75f : 0.25f) * CV_W, cy = y0 + 1.3f - (j / 2) * 0.5f;
-        float tw = Text_Width(r->label, ST_TEXT);
-        float sx = cx - (tw + 0.55f) / 2;
-        Hud_Rect(sx, cy - 0.18f, sx + 0.36f, cy + 0.18f, Color_Fill(r->color, r->dim ? 0.5f : 1.f));
-        GXColor tc = Color_Mix(r->color, color_white, 0.35f);
-        if (r->dim)
-            tc = Color_Fill(tc, 0.6f);
+        int on = 0;
+        for (int j = 0; j < n; j++)
+            if (Cv_Rank(&meter[order[j]]) == i)
+                on = 1;
+        MeterRow sw = {0};
+        sw.color = key_color[i];
+        strcpy(sw.label, key_rank[i]);
+        float y = top - 0.55f - i * 0.8f;
+        vis_k = base_k * (on ? 1.f : 0.4f);
+        Cv_Note(&sw, CELL_PRESS, TONE_CUE, 1.f, kx, y - 0.2f, kx + 0.6f, y + 0.2f, 0, 0);
+        GXColor tc = Color_Mix(key_color[i], color_white, 0.35f);
         tc.a = 255;
-        Hud_TextAligned(r->label, sx + 0.55f, Text_MidY(cy, ST_TEXT), ST_TEXT, tc, 0);
+        Hud_TextAligned(key_label[i], kx + 0.85f, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 0);
     }
     vis_k = base_k;
 }

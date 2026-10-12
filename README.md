@@ -38,7 +38,7 @@ The full glossary, with GIFs, is in [the guide](docs/guide/glossary.md).
 
 ## Install
 
-You bring the Melee. We bring a patch file and a batch script whose name is in all caps. The patch adds one event, and that event is 19,791 lines of C, about half of all the C in this repository. TM-CE's entire Training Lab is 7,167 lines. The wavedash event is 714. All 19,791 lines exist to tell you when to press A.
+You bring the Melee. We bring a patch file and a batch script whose name is in all caps. The patch adds one event, and that event is 23,339 lines of C, nearly half of all the C in this repository. TM-CE's entire Training Lab is 7,167 lines. The wavedash event is 714. All 23,339 lines exist to tell you when to press A.
 
 You need your own **Super Smash Bros. Melee NTSC 1.02** ISO. Nothing from the game is included.
 
@@ -218,6 +218,8 @@ Things that went wrong on the way here, all true.
 - Version 0.6.5 turned every effect on at once: paths, dots, rings, strips, glows, ticks and a controller, all moving at the same time. A friend saw the GIFs and said "busy." 0.8.4 starts with a lot fewer.
 - The AI built a jump planner for the ground. It thought for two seconds, flickered through a few routes, and then sent you to the very edge of the platform. Every time. It now lives behind an `#ifdef` until after 1.0, thinking about what it did.
 - While testing 0.8.4, the AI pressed D-pad down every five seconds, which toggles Frame Advance. It froze its own game, then filed the freeze as a bug.
+- For most of its life the event was one file, 18,370 lines long. Crackerfracks asked if anyone would ever want to touch it. The AI split it into 50 files, and the compiled game code came out byte for byte identical, which proves nothing changed. It's still 18,370 lines. They're just in folders now.
+- The test bot used to work the menus by pressing buttons on a timer, eyes closed. When the laptop got busy, one press went missing, and it opened Float Cancelling Training and waited there for a test that was never coming. Crackerfracks had to point out that it could look where the cursor is first.
 - The jump arc preview is one of the oldest features in Landing Lab. Crackerfracks has turned it on zero times.
 - Designed by Crackerfracks, a Falcon **main**, who asked us not to use his replays as reference footage. Request granted.
 - Crackerfracks's playtest notes for 0.6.5 ran 3,206 words. This README is shorter. Barely.

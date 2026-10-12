@@ -1,0 +1,92 @@
+# Menu map for closed-loop navigation (tools/nav/nav.py).
+#
+# Every menu says how to recognise it (the scene), where its cursor lives in
+# memory, and where each named item is. nav.py reads these values from Slippi
+# Dolphin's MemoryWatcher once per frame and steers until the cursor is on the
+# item, so nothing here is a timing.
+#
+# Memory entries are MemoryWatcher "Locations.txt" lines: hex offsets chased as
+# pointers (one offset = the u32 at that address; "A B" = u32 at (*A)+B).
+# Addresses are NTSC 1.02 with TM-CE; sources are noted on each line.
+
+[memory]
+# scene bytes: current major, pending major, previous major, current minor
+# (ASM/Globals.s, SceneController 0x80479D30)
+scene      = "80479D30"
+# event select: lbz cursor, 0(*(*(r13-0x4A40)+0x2C)); lwz scroll, 4(...)
+# (Custom ESS Button Actions.asm, r13 = 0x804DB6A0)
+ess_cursor = "804D6C60 2C 0"
+ess_scroll = "804D6C60 2C 4"
+# TM-CE event page: u8 at memcard + 0x1F29 = 0x8045C5E9 (MexTK memcard.h,
+# stc_memcard 0x8045A6C0); read as the aligned word at 0x8045C5E8, byte 1
+ess_page   = "8045C5E8"
+# CSS cursor of player 1 (MexTK css.h: stc_css_cursors 0x804A0BC0, CSSCursor)
+css_state  = "804A0BC0 4"    # (v >> 16) & 0xff: 0 pointing, 1 holding a puck, 2 open hand
+css_x      = "804A0BC0 C"    # float
+css_y      = "804A0BC0 10"   # float
+
+# ---------------------------------------------------------------------------
+# Event select (TM-CE's event list). Moves are discrete: right/left change the
+# page, up/down move the row. An item is a page plus an index on that page.
+[menu.event]
+# calibrated 2026-10-12: the event list runs as major 0x01 (main menu), minor 0;
+# the boot passes through 0x2B first. Rows read 0..7 as the cursor moves down.
+scene       = [0x01, 0x00]
+kind        = "list"
+page        = "ess_page"       # byte 1; persists on the memory card (calibration booted on page 2)
+row         = "ess_cursor"      # top byte
+scroll      = "ess_scroll"      # index = row + scroll
+# pages (src/events.c EventPages): 0 Minigames, 1 General, 2 Character-specific
+[menu.event.items]
+"Float Cancelling Training" = { page = 2, index = 6 }
+"Landing Lab"               = { page = 2, index = 7 }
+
+# ---------------------------------------------------------------------------
+# Character select. The cursor moves freely; each portrait is a box in the
+# cursor's coordinates (left, right, top, bottom). Taken from the game's own
+# table, MnSlChrData.icons at 0x803F0A48 + 0xDC (MexTK css.h), read from
+# Start.dol. Sheik has no portrait: pick Zelda and hold A (not used here).
+[menu.css]
+# calibrated: the CSS is major 0x2B (event match) minor 0; the match is minor 1.
+# The cursor appears at (-31, -2.5); after A its state goes 1 -> 2.
+scene       = [0x2B, 0x00]
+kind        = "pointer"
+x           = "css_x"
+y           = "css_y"
+[menu.css.items]
+"Dr. Mario"     = [-30.0, -24.4, 20.0, 13.0]
+"Mario"         = [-24.4, -17.4, 20.0, 13.0]
+"Luigi"         = [-17.4, -10.4, 20.0, 13.0]
+"Bowser"        = [-10.4,  -3.4, 20.0, 13.0]
+"Peach"         = [ -3.4,   3.6, 20.0, 13.0]
+"Yoshi"         = [  3.6,  10.6, 20.0, 13.0]
+"DK"            = [ 10.6,  17.6, 20.0, 13.0]
+"Falcon"        = [ 17.6,  24.4, 20.0, 13.0]
+"Ganondorf"     = [ 24.4,  30.2, 20.0, 13.0]
+"Falco"         = [-30.0, -24.4, 13.0,  6.0]
+"Fox"           = [-24.4, -17.4, 13.0,  6.0]
+"Ness"          = [-17.4, -10.4, 13.0,  6.0]
+"Ice Climbers"  = [-10.4,  -3.4, 13.0,  6.0]
+"Kirby"         = [ -3.4,   3.6, 13.0,  6.0]
+"Samus"         = [  3.6,  10.6, 13.0,  6.0]
+"Zelda"         = [ 10.6,  17.6, 13.0,  6.0]
+"Link"          = [ 17.6,  24.4, 13.0,  6.0]
+"Young Link"    = [ 24.4,  30.2, 13.0,  6.0]
+"Pichu"         = [-23.4, -17.4,  6.0, -1.0]
+"Pikachu"       = [-17.4, -10.4,  6.0, -1.0]
+"Jigglypuff"    = [-10.4,  -3.4,  6.0, -1.0]
+"Mewtwo"        = [ -3.4,   3.6,  6.0, -1.0]
+"Game & Watch"  = [  3.6,  10.6,  6.0, -1.0]
+"Marth"         = [ 10.6,  17.6,  6.0, -1.0]
+"Roy"           = [ 17.6,  23.6,  6.0, -1.0]
+
+# ---------------------------------------------------------------------------
+# Steering for pointer menus: stick offset = gain * distance, clamped to
+# max_push; inside dead_zone of the target centre the stick is released.
+[steer]
+gain      = 0.04
+min_push  = 0.12
+max_push  = 0.5
+dead_zone = 1.2
+# seconds a step may take before nav gives up and reports it
+step_limit = 20

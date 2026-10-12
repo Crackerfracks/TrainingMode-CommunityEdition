@@ -9,7 +9,8 @@ each, the fall's ECB is worked out as the event does (Lean_Ecb: the plain
 loop frame, or its mix toward the grid's blends) and compared with the
 game's, next to what the plain pose alone would give. Prints the worst
 bottom and top error per fall and how many frames were off by more than
-0.01 unit.
+0.01 unit; -v also lists those frames (state, frame, sm, side, lean, real
+and grid bottom and top).
 """
 import sys
 
@@ -31,7 +32,7 @@ def mix(plain, levels, lean):
     return tuple(a + (b - a) * t for a, b in zip(lo, hi[1:]))
 
 
-def check(path):
+def check(path, verbose=False):
     kind, rows, lens, loops, _, _ = read_table(path)
     loops = [l or 8 for l in loops]
     grid = {}
@@ -60,7 +61,11 @@ def check(path):
                 w = worst[name]
                 w[0] = max(w[0], abs(g[0] - real[0]))
                 w[1] = max(w[1], abs(g[1] - real[1]))
-                w[2] += abs(g[0] - real[0]) > 0.01 or abs(g[1] - real[1]) > 0.01
+                off = abs(g[0] - real[0]) > 0.01 or abs(g[1] - real[1]) > 0.01
+                w[2] += off
+                if verbose and off and name == 'grid':
+                    print('    off: %d %3d sm %d side %d lean %.4f real %.4f %.4f grid %.4f %.4f' %
+                          (ts, frame, game_side, side, lean, real[0], real[1], g[0], g[1]))
         if not n:
             print('  state %d: no free frames' % ts)
             continue
@@ -73,8 +78,10 @@ def check(path):
 def main():
     if len(sys.argv) < 2:
         sys.exit(__doc__)
+    verbose = '-v' in sys.argv
     for path in sys.argv[1:]:
-        check(path)
+        if path != '-v':
+            check(path, verbose)
 
 
 if __name__ == '__main__':

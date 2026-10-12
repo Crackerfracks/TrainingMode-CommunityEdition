@@ -11321,6 +11321,8 @@ static void Sim_Dump(FighterData *fp)
     Sim_Check(fp, pred_route); // the route's own prediction, redone next time it's needed
 }
 
+#define COLL_ECB_LOCKED 0x10 // CollData x130: the ECB bottom stays where it was (CollData_X130_Locked)
+
 // The drift speed that leans a fall toward target t (Lean_Target backward):
 // past the deadzone, t of the way to the drift max, forward if t > 0.
 static float Hover_LeanSpeed(FighterData *fp, float t)
@@ -11341,7 +11343,11 @@ static void Hover_Think(FighterData *fp)
     fp->phys.pos.Y = hover_y;
     fp->phys.self_vel.X = Hover_LeanSpeed(fp, hover_lean);
     fp->phys.self_vel.Y = 0;
+    // no bottom lock: the count and the flag both (ftCommon_UnlockECB). The
+    // count alone kept the takeoff's bottom, at the feet, for good, and
+    // every capture before 0.9.20 learned that instead of the bones' bottom
     fp->coll_data.u.ecb_bot_lock_frames = 0;
+    fp->coll_data.flags &= ~COLL_ECB_LOCKED;
 }
 
 // A capture's fall frame with its lean, for the fighter's lean grid

@@ -8,7 +8,7 @@
 
 #define LL_SIM_FRAMES 240   // how far ahead to simulate
 #define LL_STATE_FRAMES 128 // frames learned per state
-#define LL_FALL_LOOP 8       // Falcon's Fall and FallAerial animations loop every 8 frames
+#define LL_FALL_LOOP 8       // Falcon's Fall and FallAerial animations loop every 8 frames (fall_loop: another fighter's)
 #define LL_TIMER_MAX 0xFE   // input timers stop counting here
 
 // ftCommonData values. MexTK declares this struct with the wrong types for
@@ -313,11 +313,22 @@ static void Learned_Clear(void)
     memset(state_next, -1, sizeof(state_next));
 }
 
+// How many frames each fall's animation takes to loop (Fall, FallAerial,
+// FallSpecial): Falcon's are 8, another fighter's its own (Fall_Learn,
+// or its packed table).
+static u8 fall_loop[3] = {LL_FALL_LOOP, LL_FALL_LOOP, LL_FALL_LOOP};
+
+static int Fall_Index(int ts)
+{
+    return ts == TS_FALL ? 0 : ts == TS_FALLAERIAL ? 1 : ts == TS_FALLSPECIAL ? 2 : -1;
+}
+
 // Where a frame is learned.
 static EcbSample *Ecb_Slot(int ts, int frame)
 {
-    if (ts == TS_FALL || ts == TS_FALLAERIAL || ts == TS_FALLSPECIAL)
-        frame %= LL_FALL_LOOP; // the fall animations loop
+    int fi = Fall_Index(ts);
+    if (fi >= 0)
+        frame %= fall_loop[fi]; // the fall animations loop
     if (frame >= LL_STATE_FRAMES)
         frame = LL_STATE_FRAMES - 1;
     return &ecb_table[ts * LL_STATE_FRAMES + frame];
@@ -1014,6 +1025,22 @@ static void Ecb_Fill(FighterData *fp, EcbSample *s)
     s->aerial_lag = fp->ftcmd_var.flag0 != 0;
     if (s->seen < 255)
         s->seen++;
+}
+
+// Another fighter's fall loops as long as its animation (from its first
+// frame in each, before anything's learned there).
+static void Fall_Learn(FighterData *fp, int ts)
+{
+    static u8 logged[3];
+    int fi = Fall_Index(ts);
+    if (fi < 0 || !fp->figatree_curr)
+        return;
+    int n = (int)(fp->figatree_curr->frame_num + 0.5f);
+    if (!logged[fi])
+        OSReport("LLFALL %d anim %d\n", ts, n); // Falcon's should say 8
+    logged[fi] = 1;
+    if (!sim_falcon)
+        fall_loop[fi] = n < 1 ? 1 : n > LL_STATE_FRAMES ? LL_STATE_FRAMES : n;
 }
 
 static void Ecb_Record(FighterData *fp, int ts, int frame)
@@ -2905,6 +2932,7 @@ static void Sim_ForFighter(int kind)
     if (falcon == sim_falcon)
         return;
     sim_falcon = falcon;
+    fall_loop[0] = fall_loop[1] = fall_loop[2] = LL_FALL_LOOP;
     Learned_Clear();
     memset(lean_levels, 0, sizeof(lean_levels));
     memset(onset_levels, 0, sizeof(onset_levels));
@@ -2919,8 +2947,9 @@ static void Sim_ForFighter(int kind)
 // big-endian: "LLE1", the number of fighters, and from byte 32 a directory
 // of LLE_FIGHTERS entries (internal kind, offset, size, a pad word). A
 // fighter's block: u16 rows, u16 states, each state's s16 frames and s16
-// next state (as LLLEN), then each row: u8 state, u8 frame, u8 flags
-// (BAKED_*), a pad byte and five floats (as BakedEcb). Blocks start and
+// next state (as LLLEN), the falls' loops (u8 each for Fall, FallAerial,
+// FallSpecial, then a pad byte; 0 = Falcon's), then each row: u8 state, u8
+// frame, u8 flags (BAKED_*), a pad byte and five floats (as BakedEcb). Blocks start and
 // end on 32 bytes, as the disc reads them.
 #define LLE_FIGHTERS 32
 #define LLE_DIR_BYTES (32 + LLE_FIGHTERS * 16)
@@ -2970,7 +2999,7 @@ static int Ecb_Unpack(const u8 *b, int size)
     if (size < 4)
         return 0;
     int rows = Pack_S16(b) & 0xFFFF, states = Pack_S16(b + 2), at = 4;
-    if (states > TS_COUNT || at + states * 4 + rows * LLE_ROW > size)
+    if (states > TS_COUNT || at + states * 4 + 4 + rows * LLE_ROW > size)
         return 0;
     Learned_Clear();
     for (int ts = 0; ts < states; ts++, at += 4)
@@ -2978,6 +3007,9 @@ static int Ecb_Unpack(const u8 *b, int size)
         state_len[ts] = Pack_S16(b + at);
         state_next[ts] = Pack_S16(b + at + 2);
     }
+    for (int i = 0; i < 3; i++)
+        fall_loop[i] = b[at + i] ? b[at + i] : LL_FALL_LOOP;
+    at += 4;
     for (int i = 0; i < rows; i++, at += LLE_ROW)
     {
         int ts = b[at], frame = b[at + 1], flags = b[at + 2];

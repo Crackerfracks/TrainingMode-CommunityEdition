@@ -154,6 +154,12 @@ static void Table_Load(const char *path, int keep_lean)
             rows += llsim_ecb(ts, frame, flags, w);
         else if ((t = strstr(line, "LLLEN ")) && sscanf(t + 6, "%d %d %d", &ts, &len, &next) == 3)
             lens += llsim_len(ts, len, next);
+        else if ((t = strstr(line, "LLLOOP ")))
+        {
+            int loops[3];
+            if (sscanf(t + 7, "%d %d %d", &loops[0], &loops[1], &loops[2]) == 3)
+                llsim_loops(loops);
+        }
     }
     fclose(f);
     if (table_char < 0 || rows == 0)

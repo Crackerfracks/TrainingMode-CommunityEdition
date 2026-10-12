@@ -194,6 +194,12 @@ int llsim_ecb(int ts, int frame, int flags, const unsigned *w)
     return 1;
 }
 
+void llsim_loops(const int *loops)
+{
+    for (int i = 0; i < 3; i++)
+        fall_loop[i] = loops[i] > 0 && loops[i] <= LL_STATE_FRAMES ? loops[i] : LL_FALL_LOOP;
+}
+
 int llsim_len(int ts, int len, int next)
 {
     if (ts < 0 || ts >= TS_COUNT)
@@ -241,5 +247,6 @@ void llsim_ecb_print(int fighter_kind)
         }
         OSReport("LLLEN %d %d %d\n", ts, state_len[ts], state_next[ts]);
     }
+    OSReport("LLLOOP %d %d %d\n", fall_loop[0], fall_loop[1], fall_loop[2]);
     OSReport("LLECB end\n");
 }

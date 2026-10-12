@@ -14,6 +14,7 @@ void llsim_check(void);
 void llsim_table_begin(int keep_lean);
 int llsim_ecb(int ts, int frame, int flags, const unsigned *w);
 int llsim_len(int ts, int len, int next);
+void llsim_loops(const int *loops);
 void llsim_ecb_print(int fighter_kind);
 int llsim_packed(const unsigned char *file, int size, int fighter_kind);
 

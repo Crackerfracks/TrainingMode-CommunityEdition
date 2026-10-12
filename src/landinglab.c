@@ -11357,6 +11357,7 @@ static void Ecb_Dump(FighterData *fp)
         OSReport("LLSPECLEN %d %d %d\n", spec_sid[i], spec_len[i], spec_next[i]);
     }
     OSReport("LLSPEC end %d states\n", spec_n);
+    OSReport("LLLOOP %d %d %d\n", fall_loop[0], fall_loop[1], fall_loop[2]); // the falls' loops
     OSReport("LLECB end\n");
 }
 
@@ -17343,6 +17344,8 @@ static void Event_ThinkFrame(GOBJ *event)
 
     if (tracked_air)
     {
+        if (frame_in_state == 0)
+            Fall_Learn(fp, ts);
         if (Lean_IsPlain(fp, ts, prev_vel.X))
             Ecb_Record(fp, ts, frame_in_state);
         if (Tracked_IsUpB(ts))

@@ -5,7 +5,8 @@ for every fighter but Falcon (src/landinglab_sim.h, Ecb_Find/Ecb_Unpack).
     ecbpack.py <out.bin> <capture log> ...
 
 Each log is a run of src/landinglab_capture.txt: its LLECB begin line
-names the fighter (internal kind), its LLECB and LLLEN lines the table.
+names the fighter (internal kind), its LLECB, LLLEN and LLLOOP lines the
+table.
 Falcon Dive's slots (13, 14) are Falcon's own, so another fighter's are
 left out. Insert the result with LLECB=<out.bin> ./build.sh.
 """
@@ -21,16 +22,17 @@ DIR_BYTES = 32 + FIGHTERS * 16
 
 ECB = re.compile(r'LLECB (\d+) (\d+) (\d+) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8})\s*$')
 LEN = re.compile(r'LLLEN (\d+) (-?\d+) (-?\d+)\s*$')
+LOOP = re.compile(r'LLLOOP (\d+) (\d+) (\d+)\s*$')
 BEGIN = re.compile(r'LLECB begin char (\d+)')
 
 
 def read_table(path):
-    kind, rows, lens = None, {}, {}
+    kind, rows, lens, loops = None, {}, {}, (0, 0, 0)
     for line in open(path, errors='replace'):
         m = BEGIN.search(line)
         if m:
             # the last table in the log wins
-            kind, rows, lens = int(m.group(1)), {}, {}
+            kind, rows, lens, loops = int(m.group(1)), {}, {}, (0, 0, 0)
             continue
         if kind is None:
             continue
@@ -43,24 +45,31 @@ def read_table(path):
         if m:
             ts, n, nxt = (int(g) for g in m.groups())
             lens[ts] = (n, nxt)
+            continue
+        m = LOOP.search(line)
+        if m:
+            loops = tuple(int(g) for g in m.groups())
     if kind is None or not rows:
         sys.exit('ecbpack: %s has no LLECB table' % path)
     if kind != FALCON:
         rows = {k: v for k, v in rows.items() if k[0] not in (TS_UPB, TS_UPBA)}
         for ts in (TS_UPB, TS_UPBA):
             lens[ts] = (0, -1)
-    return kind, rows, lens
+    if kind != FALCON and loops == (0, 0, 0):
+        print('ecbpack: %s has no LLLOOP line: its falls loop as Falcon\'s (8)' % path)
+    return kind, rows, lens, loops
 
 
 def pad32(b):
     return b + b'\0' * (-len(b) % 32)
 
 
-def block(rows, lens):
+def block(rows, lens, loops):
     out = struct.pack('>HH', len(rows), TS_COUNT)
     for ts in range(TS_COUNT):
         n, nxt = lens.get(ts, (0, -1))
         out += struct.pack('>hh', n, nxt)
+    out += struct.pack('>3Bx', *loops)
     for (ts, frame), (flags, words) in sorted(rows.items()):
         out += struct.pack('>BBBx5I', ts, frame, flags, *words)
     return pad32(out)
@@ -71,21 +80,21 @@ def main():
         sys.exit(__doc__)
     tables = {}
     for path in sys.argv[2:]:
-        kind, rows, lens = read_table(path)
+        kind, rows, lens, loops = read_table(path)
         if kind in tables:
             print('ecbpack: %s replaces an earlier table for kind %d' % (path, kind))
-        tables[kind] = (rows, lens, path)
+        tables[kind] = (rows, lens, loops, path)
     if len(tables) > FIGHTERS:
         sys.exit('ecbpack: more than %d fighters' % FIGHTERS)
     blocks, directory, at = b'', b'', DIR_BYTES
     for kind in sorted(tables):
-        rows, lens, path = tables[kind]
-        b = block(rows, lens)
+        rows, lens, loops, path = tables[kind]
+        b = block(rows, lens, loops)
         directory += struct.pack('>4I', kind, at, len(b), 0)
         blocks += b
         at += len(b)
         filled = sum(1 for ts in range(TS_COUNT) if any(k[0] == ts for k in rows))
-        print('kind %2d: %4d rows, %2d of %d states, %s' % (kind, len(rows), filled, TS_COUNT, path))
+        print('kind %2d: %4d rows, %2d of %d states, falls loop %s, %s' % (kind, len(rows), filled, TS_COUNT, loops, path))
     header = pad32(b'LLE1' + struct.pack('>I', len(tables)))
     directory += b'\0' * (FIGHTERS * 16 - len(directory))
     with open(sys.argv[1], 'wb') as f:

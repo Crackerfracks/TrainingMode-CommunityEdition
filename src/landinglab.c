@@ -14968,7 +14968,7 @@ static void Gl_DjPaths(FighterData *fp)
     for (int st = 0; st < GT_STILL_STICKS; st++)
     {
         float dj_x = jt_stick_xy[st][0];
-        int ts = dj_x * fp->facing_direction > -common_jump_back_stick ? TS_JUMPAERIALF : TS_JUMPAERIALB;
+        int ts = Dj_State(dj_x * fp->facing_direction);
         int len = state_len[ts] ? state_len[ts] : LL_GUESS_JUMP_LEN;
         // Gt_Variant holds the x of a sideways double jump, lets go of an up one
         Gl_Steps(fp, 0, dj_x * fp->attr.air_jump_h_multiplier, ts, -1, len, dj_x, st != JT_UP ? dj_x : 0,

@@ -3925,6 +3925,19 @@ static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, fl
     return until;
 }
 
+// The double jump's state for the stick (times facing). Some fighters
+// (Mario, Dr. Mario, Luigi, Yoshi, Jigglypuff, Kirby in the 2026-10-12
+// capture) never use the backward one: their table has nothing for it,
+// and the forward one plays either way.
+static int Dj_State(float stick_x)
+{
+    if (stick_x > -common_jump_back_stick)
+        return TS_JUMPAERIALF;
+    if (!sim_falcon && !state_len[TS_JUMPAERIALB] && !Ecb_Slot(TS_JUMPAERIALB, 0)->seen)
+        return TS_JUMPAERIALF;
+    return TS_JUMPAERIALB;
+}
+
 // A double jump pressed on this frame from a jump or fall
 // (ftCo_JumpAerial_Enter_Basic): its speed replaces the old one, the ECB
 // bottom stays where it was for 10 frames (ftCommon_8007D5D4) and the stick
@@ -3932,7 +3945,7 @@ static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, fl
 // start's stick is the one held on this frame.
 static void Sim_DoubleJump(FighterData *fp, SimStart *start, SimState *s, SimStep *out)
 {
-    int ts = start->stick_x * start->facing > -common_jump_back_stick ? TS_JUMPAERIALF : TS_JUMPAERIALB;
+    int ts = Dj_State(start->stick_x * start->facing);
     s->ts = ts;
     s->frame = -1;
     s->len = state_len[ts];

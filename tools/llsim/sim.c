@@ -226,7 +226,9 @@ int llsim_packed(const unsigned char *file, int size, int fighter_kind)
     int offset, len;
     if (size < LLE_DIR_BYTES || !Ecb_Find(file, fighter_kind, &offset, &len) || offset + len > size)
         return -1;
-    return Ecb_Unpack(file + offset, len);
+    own_table = file + offset;
+    own_size = len;
+    return Ecb_Unpack(own_table, own_size);
 }
 
 // The table in use, as the game's Ecb_Dump writes it (its LLECB and LLLEN

@@ -3081,7 +3081,11 @@ static void Ecb_LoadDisc(FighterData *fp)
     {
         u8 *dir = Disc_Read(entry, 0, LLE_DIR_BYTES);
         if (Ecb_Find(dir, fp->kind, &offset, &size) && offset % 32 == 0 && size % 32 == 0)
-            rows = Ecb_Unpack(Disc_Read(entry, offset, size), size);
+        {
+            own_table = Disc_Read(entry, offset, size);
+            own_size = size;
+            rows = Ecb_Unpack(own_table, own_size);
+        }
     }
     sprintf(buf, "LLECB fighter %d: %d rows from TM/llecb.bin%s\n", fp->kind, rows, entry < 0 ? " (no file)" : "");
     Log(buf);
@@ -11133,8 +11137,7 @@ static void Script_Begin(int index)
     script_pc = -1;
     Script_Next();
     memset(&script_last, 0, sizeof(script_last));
-    Learned_Clear();
-    Learned_Bake();
+    Learned_Reset();
     sprintf(text_last, "-");
     sprintf(buf, "LLRUN %d %s at %d\n", index + 1, scripts[index].name, event_vars->game_timer);
     Log(buf);
@@ -18279,8 +18282,7 @@ void Event_ChangeCollDisplay(GOBJ *menu, int value)
 
 void Event_ClearLearned(GOBJ *menu)
 {
-    Learned_Clear();
-    Learned_Bake();
+    Learned_Reset();
     stat_total = 0;
     stat_exact = 0;
     sprintf(text_exact, "-");

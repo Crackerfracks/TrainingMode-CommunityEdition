@@ -2924,6 +2924,25 @@ static void Lean_Index(void)
     }
 }
 
+// The fighter's own packed table, kept to start over from (Learned_Reset).
+static const u8 *own_table;
+static int own_size;
+
+static int Ecb_Unpack(const u8 *b, int size);
+
+// What's known before anything's learned: Falcon's baked table, another
+// fighter's packed one, or nothing.
+static void Learned_Reset(void)
+{
+    if (sim_falcon)
+    {
+        Learned_Clear();
+        Learned_Bake();
+    }
+    else if (!own_table || !Ecb_Unpack(own_table, own_size))
+        Learned_Clear();
+}
+
 // Another fighter than Falcon: none of his baked table, Falcon Dive or
 // fall leans. Its own table comes packed (Ecb_Unpack) or is learned in play.
 static void Sim_ForFighter(int kind)

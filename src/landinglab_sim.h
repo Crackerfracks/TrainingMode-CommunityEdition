@@ -3158,7 +3158,9 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     if (Tracked_NaturalNext(ts) >= 0)
     {
         s->len = state_len[ts];
-        if (s->len == 0)
+        // a state the fighter's table has but never saw end (Link's and
+        // Young Link's dair) lasts until it lands
+        if (s->len == 0 && !(own_table && Ecb_Slot(ts, 0)->seen))
         {
             s->len = State_EstimateLength(fp, frame);
             s->len_estimated = 1;

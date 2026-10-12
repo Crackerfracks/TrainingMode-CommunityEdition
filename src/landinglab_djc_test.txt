@@ -1,0 +1,58 @@
+# Double-jump-cancel checks (Ness, Peach, Yoshi, Mewtwo): build with
+# LLSCRIPT=src/landinglab_djc_test.txt LLCHAR=file LLECB=<packed tables
+# with their DJMV movement>, one ISO per fighter (LLCHARFILE). The event
+# predicts from the live state every frame, so a double jump it moves
+# wrongly shows as "LandingLab drift at +N" lines while it rises; none
+# should appear before the landing. Each landing line says what was
+# predicted against what happened.
+autorun
+
+script DJC rise
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 120 right
+2
+1 X
+80
+land 200
+90
+
+script DJC back
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 120 right
+2
+1 X s:-1,0
+80
+land 200
+90
+
+script DJC nair early
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 120 right
+2
+1 X
+5
+1 A
+land 200
+90
+
+script DJC drift fair
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air -30 110 right
+2
+1 X s:1,0
+12 s:1,0
+1 c:1,0
+land 200
+90

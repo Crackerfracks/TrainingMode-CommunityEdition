@@ -260,5 +260,12 @@ void llsim_ecb_print(int fighter_kind)
             OSReport("LLLEANGRID %d %d %d %08x %08x %08x %08x %08x %08x\n", l->fall, l->back, l->k, Float_Bits(l->lean),
                      Float_Bits(l->bottom), Float_Bits(l->top), Float_Bits(l->side), Float_Bits(l->front), Float_Bits(l->back_x));
         }
+    for (int d = 0; d < 2; d++) // a double-jump-cancel fighter's double jump, as packed
+        for (int f = 0; f < LL_STATE_FRAMES; f++)
+        {
+            DjMove *m = Dj_Get(TS_JUMPAERIALF + d, f);
+            if (m->seen)
+                OSReport("LLDJMOVE %d %d %08x %08x\n", TS_JUMPAERIALF + d, f, Float_Bits(m->x), Float_Bits(m->y));
+        }
     OSReport("LLECB end\n");
 }

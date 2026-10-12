@@ -32,7 +32,7 @@ def mix(plain, levels, lean):
 
 
 def check(path):
-    kind, rows, lens, loops, _ = read_table(path)
+    kind, rows, lens, loops, _, _ = read_table(path)
     loops = [l or 8 for l in loops]
     grid = {}
     for fall, back, k, words in read_leans(path, loops):

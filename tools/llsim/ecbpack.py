@@ -8,7 +8,9 @@ Each log is a run of src/landinglab_capture.txt: its LLECB begin line
 names the fighter (internal kind), its LLECB, LLLEN and LLLOOP lines the
 table, and its LLLEANECB lines the falls' leans: each fall held at a
 steady lean (the capture's hover lean T), of which the last whole loop is
-kept as one blend of the grid (LeanEcb in src/landinglab_sim.h).
+kept as one blend of the grid (LeanEcb in src/landinglab_sim.h). For the
+double-jump-cancel fighters, the LLDJMV lines give their double jump's
+movement frame by frame (DjMove), from the first jump of each kind.
 Falcon Dive's slots (13, 14) are Falcon's own, so another fighter's are
 left out, as are his leans (baked in the event). Insert the result with
 LLECB=<out.bin> ./build.sh.
@@ -20,6 +22,9 @@ import sys
 TS_COUNT = 15
 TS_FALL, TS_FALLAERIAL = 4, 5
 FREE = 9999  # LLLEANECB's tag for a fall that isn't held
+TS_JUMPAERIALF, TS_JUMPAERIALB = 2, 3
+DJC = {8: 'Ness', 9: 'Peach', 14: 'Yoshi', 16: 'Mewtwo'}  # internal kinds (Djc_Kind)
+NESS = 8
 TS_UPB, TS_UPBA = 13, 14
 FALCON = 2
 FIGHTERS = 32
@@ -47,6 +52,38 @@ def read_lean_frames(path):
             g = m.groups()
             out.append(tuple(int(x) for x in g[:6]) + ([int(x, 16) for x in g[6:]],))
     return out
+
+
+DJMV = re.compile(r'LLDJMV (\d+) (\d+) (-?\d+) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8})\s*$')
+
+
+def read_dj(path, kind):
+    """The double jump's movement, forward and backward: lists of (x, y)
+    words per frame from frame 0, each from the first jump of its kind
+    seen. x is the animation's part as if facing right (Ness's speed less
+    his own drift speed), y the vertical speed."""
+    jumps, last = {}, None
+    for line in open(path, errors='replace'):
+        m = DJMV.search(line)
+        if not m:
+            continue
+        ts, frame, face = int(m.group(1)), int(m.group(2)), int(m.group(3))
+        vx, vy, hvel = (bits_float(int(g, 16)) for g in m.groups()[3:])
+        if frame == 0:
+            if ts in jumps:
+                last = None  # a later jump of the same kind: the first one stands
+                continue
+            jumps[ts] = []
+            last = ts
+        if last != ts or len(jumps[ts]) != frame:
+            continue
+        x = (vx - hvel if kind == NESS else vx) * face
+        jumps[ts].append((float_bits(x), int(m.group(5), 16)))
+    return [jumps.get(TS_JUMPAERIALF, []), jumps.get(TS_JUMPAERIALB, [])]
+
+
+def float_bits(f):
+    return struct.unpack('>I', struct.pack('>f', f))[0]
 
 
 def read_leans(path, loops):
@@ -115,14 +152,15 @@ def read_table(path):
     if kind != FALCON and loops == (0, 0, 0):
         print('ecbpack: %s has no LLLOOP line: its falls loop as Falcon\'s (8)' % path)
     leans = read_leans(path, [l or 8 for l in loops]) if kind != FALCON else []
-    return kind, rows, lens, loops, leans
+    dj = read_dj(path, kind) if kind in DJC else [[], []]
+    return kind, rows, lens, loops, leans, dj
 
 
 def pad32(b):
     return b + b'\0' * (-len(b) % 32)
 
 
-def block(rows, lens, loops, leans):
+def block(rows, lens, loops, leans, dj):
     out = struct.pack('>HH', len(rows), TS_COUNT)
     for ts in range(TS_COUNT):
         n, nxt = lens.get(ts, (0, -1))
@@ -135,6 +173,11 @@ def block(rows, lens, loops, leans):
         for fall, back, k, words in leans:
             data += struct.pack('>BBBx6I', fall, back, k, *words)
         out += section(b'LEAN', data)
+    if dj[0] or dj[1]:
+        data = struct.pack('>HH', len(dj[0]), len(dj[1]))
+        for x, y in dj[0] + dj[1]:
+            data += struct.pack('>II', x, y)
+        out += section(b'DJMV', data)
     return pad32(out)
 
 
@@ -148,23 +191,26 @@ def main():
         sys.exit(__doc__)
     tables = {}
     for path in sys.argv[2:]:
-        kind, rows, lens, loops, leans = read_table(path)
+        kind, rows, lens, loops, leans, dj = read_table(path)
         if kind in tables:
             print('ecbpack: %s replaces an earlier table for kind %d' % (path, kind))
-        tables[kind] = (rows, lens, loops, leans, path)
+        if kind in DJC and not dj[0]:
+            print('ecbpack: %s has no LLDJMV double jump: %s\'s double jump falls back to the usual physics' % (path, DJC[kind]))
+        tables[kind] = (rows, lens, loops, leans, dj, path)
     if len(tables) > FIGHTERS:
         sys.exit('ecbpack: more than %d fighters' % FIGHTERS)
     blocks, directory, at = b'', b'', DIR_BYTES
     for kind in sorted(tables):
-        rows, lens, loops, leans, path = tables[kind]
+        rows, lens, loops, leans, dj, path = tables[kind]
         if len(leans) > LEAN_MAX:
             sys.exit('ecbpack: %s has %d lean rows, more than the event keeps (%d)' % (path, len(leans), LEAN_MAX))
-        b = block(rows, lens, loops, leans)
+        b = block(rows, lens, loops, leans, dj)
         directory += struct.pack('>4I', kind, at, len(b), 0)
         blocks += b
         at += len(b)
         filled = sum(1 for ts in range(TS_COUNT) if any(k[0] == ts for k in rows))
-        print('kind %2d: %4d rows, %2d of %d states, falls loop %s, %4d lean rows, %s' % (kind, len(rows), filled, TS_COUNT, loops, len(leans), path))
+        dj_note = ', double jump %d/%d frames' % (len(dj[0]), len(dj[1])) if kind in DJC else ''
+        print('kind %2d: %4d rows, %2d of %d states, falls loop %s, %4d lean rows%s, %s' % (kind, len(rows), filled, TS_COUNT, loops, len(leans), dj_note, path))
     header = pad32(b'LLE1' + struct.pack('>I', len(tables)))
     directory += b'\0' * (FIGHTERS * 16 - len(directory))
     with open(sys.argv[1], 'wb') as f:

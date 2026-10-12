@@ -11356,6 +11356,17 @@ static void Lean_Log(FighterData *fp, int ts, int frame)
              Float_Bits(e.side_y), Float_Bits(e.front), Float_Bits(e.back));
 }
 
+// A capture's double jump frame, for the double-jump-cancel fighters'
+// movement (tools/llsim/ecbpack.py, DJMV): LLDJMV state, frame in the
+// state, facing, then as bits the speed after this frame's physics (held
+// still by the hover only after it) and Ness's own drift speed
+// (mv.co.jumpaerial.init_h_vel).
+static void Dj_Log(FighterData *fp, int ts, int frame)
+{
+    OSReport("LLDJMV %d %d %d %08x %08x %08x\n", ts, frame, fp->facing_direction > 0 ? 1 : -1,
+             Float_Bits(fp->phys.self_vel.X), Float_Bits(fp->phys.self_vel.Y), fp->state_var.state_var2);
+}
+
 // Script command "dumpecb": the learned ECB of every tracked state, frame by
 // frame (LLECB ts frame flags bottom top side front back, the floats as
 // bits; flags as in BakedEcb), and how long each state ran before ending by
@@ -17394,6 +17405,8 @@ static void Event_ThinkFrame(GOBJ *event)
             Ecb_Record(fp, ts, frame_in_state);
         if (capture_on && Is_Fall(ts))
             Lean_Log(fp, ts, frame_in_state);
+        if (capture_on && Is_DoubleJump(ts))
+            Dj_Log(fp, ts, frame_in_state);
         if (Tracked_IsUpB(ts))
             Upb_Record(fp, ts, frame_in_state);
         if (logging)

@@ -304,10 +304,12 @@ static int Tracked_Next(int ts)
 
 static void Upb_Clear(void);
 static void Upb_Bake(void);
+static void Dj_Clear(void);
 
 static void Learned_Clear(void)
 {
     Upb_Clear();
+    Dj_Clear();
     memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     memset(state_len, 0, sizeof(state_len));
     memset(state_next, -1, sizeof(state_next));
@@ -1099,6 +1101,83 @@ static void Upb_Clear(void)
 {
     memset(upb_table, 0, sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
     upb_turn[0] = upb_turn[1] = -1;
+}
+
+// The double-jump-cancel fighters (Ness, Peach, Yoshi, Mewtwo): their
+// double jump starts with no vertical speed, and its animation sets their
+// vertical speed frame by frame, with no gravity (ft_800851D0, the
+// ftCo_JumpAerial_Phys_Cb they get). An aerial or airdodge cuts it short
+// with the speed of the frame before, then gravity as usual. Ness's
+// sideways speed is the animation's too, plus a drift speed of its own
+// that starts at the jump's (ftNs_JumpAerial_Phys_Cb). Yoshi has no
+// backward double jump: held back, his forward one turns him around,
+// switching sides halfway through the turn (ftYs_JumpAerial_Enter,
+// ft_800CB6EC). The movement comes from the fighter's packed table.
+#define DJC_NONE 0
+#define DJC_PLAIN 1 // Peach, Mewtwo
+#define DJC_NESS 2
+#define DJC_YOSHI 3
+#define YS_TURN_FRAMES 0x0 // int: the turn's length (ftYoshiAttributes x0)
+#define YS_TURN_STICK 0x4  // float: stick x back past this turns him
+
+typedef struct DjMove
+{
+    float x, y; // the animation's speed, as if facing right
+    u8 seen;
+} DjMove;
+
+static DjMove *dj_move; // [2][LL_STATE_FRAMES], forward then backward
+static int sim_djc;
+
+static int Djc_Kind(int kind)
+{
+    switch (kind)
+    {
+    case FTKIND_NESS:
+        return DJC_NESS;
+    case FTKIND_YOSHI:
+        return DJC_YOSHI;
+    case FTKIND_PEACH:
+    case FTKIND_MEWTWO:
+        return DJC_PLAIN;
+    }
+    return DJC_NONE;
+}
+
+static int Is_DoubleJump(int ts)
+{
+    return ts == TS_JUMPAERIALF || ts == TS_JUMPAERIALB;
+}
+
+static DjMove *Dj_Get(int ts, int frame)
+{
+    if (frame >= LL_STATE_FRAMES)
+        frame = LL_STATE_FRAMES - 1;
+    return &dj_move[(ts - TS_JUMPAERIALF) * LL_STATE_FRAMES + frame];
+}
+
+// Whether the double jump moves by its animation here: a double-jump-cancel
+// fighter whose movement is known (without it, the usual physics stand in).
+static int Dj_Animated(int ts)
+{
+    return sim_djc && Is_DoubleJump(ts) && Dj_Get(ts, 0)->seen;
+}
+
+static void Dj_Clear(void)
+{
+    memset(dj_move, 0, sizeof(DjMove) * 2 * LL_STATE_FRAMES);
+}
+
+// Yoshi's turn, counted down each frame of the jump; he switches sides
+// when it's halfway done. The jump's first frame counts too.
+static void Dj_Turn(FighterData *fp, int *turn, float *face)
+{
+    if (*turn <= 0)
+        return;
+    int frames = *(int *)((u8 *)fp->special_attributes + YS_TURN_FRAMES);
+    (*turn)--;
+    if (*turn == frames / 2)
+        *face = -*face;
 }
 
 static void Upb_Record(FighterData *fp, int ts, int frame)
@@ -2288,6 +2367,7 @@ typedef struct SimStart
     Vec2 drift;          // Falcon Dive's own drift speed (mv.ca.specialhi.vel)
     float special_lag;   // the helpless fall's landing lag (mv.co.fallspecial.landing_lag)
     int dodge_late;      // an airdodge's first frame, pressed in a late window
+    int dj_turn;         // Yoshi's double jump: turn frames left (mv.co.jumpaerial.x0)
 } SimStart;
 
 // The simulated fighter between two frames.
@@ -2313,9 +2393,10 @@ typedef struct SimState
     int lean_side;   // LEAN_FORWARD, LEAN_BACK or LEAN_NONE
     float locked_bottom; // bottom kept while the lock lasts
     float face;          // facing: Falcon Dive can turn him around
-    Vec2 drift;          // Falcon Dive's drift speed
+    Vec2 drift;          // Falcon Dive's drift speed (x: Ness's double jump's)
     float special_lag;   // landing lag once helpless
     int dodge_late;      // landing on the airdodge's second frame is perfect too
+    int dj_turn;         // Yoshi's double jump: turn frames left
 } SimState;
 
 // What happened on one simulated frame.
@@ -2969,6 +3050,7 @@ static void Learned_Reset(void)
 static void Sim_ForFighter(int kind)
 {
     int falcon = kind == FTKIND_FALCON;
+    sim_djc = Djc_Kind(kind);
     if (falcon == sim_falcon)
         return;
     sim_falcon = falcon;
@@ -2994,12 +3076,16 @@ static void Sim_ForFighter(int kind)
 // sections, each a u32 tag, its u32 size and its data, up to a zero tag:
 // "LEAN", the falls' leans: u16 rows, a pad u16, each row u8 fall, u8
 // leaning back, u8 loop frame, a pad byte and six floats (as LeanEcb, in
-// its order). Blocks start and end on 32 bytes, as the disc reads them.
+// its order). "DJMV", a double-jump-cancel fighter's double jump movement:
+// u16 frames forward, u16 backward, then each frame's two floats (DjMove x
+// and y), forward ones first. Blocks start and end on 32 bytes, as the disc
+// reads them.
 #define LLE_FIGHTERS 32
 #define LLE_DIR_BYTES (32 + LLE_FIGHTERS * 16)
 #define LLE_ROW 24
 #define LLE_LEAN_ROW 28
 #define LLE_TAG_LEAN 0x4C45414E // "LEAN"
+#define LLE_TAG_DJMV 0x444A4D56 // "DJMV"
 
 static u32 Pack_U32(const u8 *b)
 {
@@ -3099,6 +3185,22 @@ static int Ecb_Unpack(const u8 *b, int size)
                 l->front = Pack_F32(b + r + 20);
                 l->back_x = Pack_F32(b + r + 24);
             }
+        }
+        else if (tag == LLE_TAG_DJMV && len >= 4)
+        {
+            int n[2] = {Pack_S16(b + data) & 0xFFFF, Pack_S16(b + data + 2) & 0xFFFF};
+            if (4 + (n[0] + n[1]) * 8 > len)
+                continue;
+            for (int d = 0, r = data + 4; d < 2; d++)
+                for (int f = 0; f < n[d]; f++, r += 8)
+                {
+                    if (f >= LL_STATE_FRAMES)
+                        continue;
+                    DjMove *m = Dj_Get(TS_JUMPAERIALF + d, f);
+                    m->x = Pack_F32(b + r);
+                    m->y = Pack_F32(b + r + 4);
+                    m->seen = 1;
+                }
         }
     }
     if (!sim_falcon)
@@ -3236,8 +3338,17 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
     s->dodge_late = 0;
+    s->dj_turn = 0;
     if (Tracked_IsUpB(ts))
         s->drift = Upb_Drift(fp);
+    else if (Dj_Animated(ts))
+    {
+        // mv.co.jumpaerial: Yoshi's turn count, then Ness's drift speed
+        if (sim_djc == DJC_YOSHI)
+            s->dj_turn = fp->state_var.state_var1;
+        else if (sim_djc == DJC_NESS)
+            memcpy(&s->drift.X, &fp->state_var.state_var2, sizeof(float));
+    }
     else if (ts == TS_FALLSPECIAL)
         memcpy(&s->special_lag, (u8 *)&fp->state_var + FALLSPECIAL_LAG, sizeof(float));
 }
@@ -3276,6 +3387,7 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->drift = start->drift;
     s->special_lag = start->special_lag;
     s->dodge_late = start->dodge_late;
+    s->dj_turn = start->dj_turn;
 }
 
 // One frame, in the game's order: animation (the state can end), interrupt
@@ -3332,6 +3444,11 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
         s->len_estimated = 0;
         s->ecb_pending = 0;
     }
+
+    // Yoshi's double jump turning him around (its animation callback, so
+    // before an interrupt)
+    if (sim_djc == DJC_YOSHI && Dj_Animated(s->ts) && s->frame > 0)
+        Dj_Turn(fp, &s->dj_turn, &s->face);
 
     // interrupt: ftCo_AttackAir_EnterFromMsid keeps the fastfall and starts
     // the aerial's animation on this frame, before physics and collision.
@@ -3406,6 +3523,21 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
         s->drift.X += Upb_DriftAccel(fp, s->drift.X, start->stick_x);
         s->vx = a->x * s->face + s->drift.X;
         s->vy = a->y + s->drift.Y;
+    }
+    else if (Dj_Animated(s->ts))
+    {
+        // the double jump's own physics: drift, and the animation's speed
+        DjMove *a = Dj_Get(s->ts, s->frame);
+        if (!a->seen)
+            out->unlearned = 1;
+        if (sim_djc == DJC_NESS)
+        {
+            s->drift.X += Drift_Accel(fp, s->drift.X, start->stick_x);
+            s->vx = a->x * s->face + s->drift.X;
+        }
+        else
+            s->vx += Drift_Accel(fp, s->vx, start->stick_x);
+        s->vy = a->y;
     }
     else
     {
@@ -3985,6 +4117,7 @@ static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, fl
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
     s->dodge_late = 0;
+    s->dj_turn = 0;
     return until;
 }
 
@@ -4019,6 +4152,21 @@ static void Sim_DoubleJump(FighterData *fp, SimStart *start, SimState *s, SimSte
     }
     s->vx = start->stick_x * fp->attr.air_jump_h_multiplier;
     s->vy = fp->attr.jump_v_initial_velocity * fp->attr.air_jump_v_multiplier;
+    s->dj_turn = 0;
+    if (Dj_Animated(ts))
+    {
+        s->vy = 0;
+        if (sim_djc == DJC_NESS)
+        {
+            s->drift.X = s->vx;
+            s->vx = 0;
+        }
+        else if (sim_djc == DJC_YOSHI && start->stick_x * start->facing < -Captain_Attr(fp, YS_TURN_STICK))
+        {
+            s->dj_turn = *(int *)((u8 *)fp->special_attributes + YS_TURN_FRAMES);
+            Dj_Turn(fp, &s->dj_turn, &s->face); // ftYs_JumpAerial_Enter counts the first frame
+        }
+    }
     s->fastfall = 0;
     s->tilt_timer = LL_TIMER_MAX;
     s->lock = 10;
@@ -4052,6 +4200,7 @@ static void Sim_ToStart(SimState *s, SimStart *start, SimStart *out)
     out->drift = s->drift;
     out->special_lag = s->special_lag;
     out->dodge_late = 0;
+    out->dj_turn = s->dj_turn;
 }
 
 // The common numbers, the tables and the stage caches' room, once at the
@@ -4088,6 +4237,7 @@ static void Sim_Setup(void)
     ecb_table = calloc(sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     upb_table = calloc(sizeof(UpbFrame) * 2 * LL_STATE_FRAMES);
     lean_own = calloc(sizeof(LeanEcb) * LL_LEAN_MAX);
+    dj_move = calloc(sizeof(DjMove) * 2 * LL_STATE_FRAMES);
     Learned_Clear();
     Learned_Bake();
     Lean_Index();

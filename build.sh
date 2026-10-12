@@ -144,6 +144,11 @@ ${xdelta} -dfs build/ISOStart.dol "Build TM Start.dol/${patch}" build/Start.dol
 # copy iso over
 if [ ! -f TM-CE.iso ]; then cp "${iso}" TM-CE.iso; fi
 
+# Landing Lab's per-fighter ECB tables (game data, kept out of git):
+# LLECB=<file>, or build/llecb.bin when it's there
+if [ -z "${LLECB}" ] && [ -f build/llecb.bin ]; then LLECB=build/llecb.bin; fi
+if [ -z "${LLECB}" ]; then echo "note: no build/llecb.bin, so Landing Lab's other fighters learn in play"; fi
+
 # add TM files to iso
 ${gc_fst} fs TM-CE.iso \
     delete MvHowto.mth \

@@ -237,7 +237,7 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Show Routes",
         .val = 1,
-        .desc = {"While Falcon hangs, show the fastest ways from",
+        .desc = {"While you hang, show the fastest ways from",
                  "the ledge to the stage in the timer, with the",
                  "ledge intangibility (GALINT) each one keeps.",
                  "The chosen route is on top, the next ones under."},
@@ -299,7 +299,7 @@ static EventOption Options_Ledge[LOPT_COUNT] = {
         .name = "Starting Position",
         .value_num = countof(start_names),
         .values = start_names,
-        .desc = {"Where Reset puts Falcon after an attempt: on a",
+        .desc = {"Where Reset puts you after an attempt: on a",
                  "ledge, or where you saved with D-pad right."},
         .OnChange = Event_ChangeLedgeStart,
     },
@@ -412,7 +412,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Show",
-        .desc = {"While Falcon falls with his double jump left,",
+        .desc = {"While you fall with your double jump left,",
                  "show when to jump, with which stick, and which",
                  "aerial to press when, to land as an aerial",
                  "interrupt or a NIL on a platform or the floor."},
@@ -425,7 +425,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
         .values = route_kind_names,
         .desc = {"NIL: land with no landing lag.",
                  "AI: land with an aerial interrupt.",
-                 "Both: whichever lets Falcon act sooner."},
+                 "Both: whichever lets you act sooner."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -433,7 +433,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
         .value_num = countof(jump_target_names),
         .values = jump_target_names,
         .desc = {"Where the jump should land. Any shows the one",
-                 "that lets Falcon act soonest, wherever it is.",
+                 "that lets you act soonest, wherever it is.",
                  "Top is the highest platform; left and right",
                  "are either side of the stage's middle."},
     },
@@ -451,7 +451,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Path",
         .desc = {"Draw the shown jump's path in its color, with a",
-                 "yellow bar where Falcon is on the jump's frame",
+                 "yellow bar where you are on the jump's frame",
                  "and a pink one on the aerial's."},
     },
     {
@@ -556,12 +556,12 @@ static EventOption Options_Controls[] = {
     {
         .kind = OPTKIND_INFO,
         .name = "Save Position",
-        .desc = {"Hold D-pad right to save where Falcon is."},
+        .desc = {"Hold D-pad right to save where you are."},
     },
     {
         .kind = OPTKIND_INFO,
         .name = "Load Position",
-        .desc = {"D-pad left puts Falcon back where you saved.",
+        .desc = {"D-pad left puts you back where you saved.",
                  "When Reset starts from the ledge, it starts a",
                  "new attempt instead, and with a test script",
                  "chosen it plays the script again."},
@@ -633,8 +633,8 @@ static EventOption Options_Dev[DOPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Collision Display",
-        .desc = {"Show stage collision, Falcon's ECB, hitboxes and",
-                 "hurtboxes, and hide his model so it doesn't",
+        .desc = {"Show stage collision, your ECB, hitboxes and",
+                 "hurtboxes, and hide your model so it doesn't",
                  "cover them."},
         .OnChange = Event_ChangeCollDisplay,
     },
@@ -661,9 +661,10 @@ static EventOption Options_Dev[DOPT_COUNT] = {
     {
         .kind = OPTKIND_FUNC,
         .name = "Forget Learned ECBs",
-        .desc = {"Falcon's jumps, falls, aerials and airdodge are",
-                 "built in. This forgets what was learned while",
-                 "playing and goes back to the built-in data."},
+        .desc = {"Every fighter's jumps, falls, aerials and",
+                 "airdodge are built in. This forgets what was",
+                 "learned while playing and goes back to the",
+                 "built-in data."},
         .OnSelect = Event_ClearLearned,
     },
     {
@@ -775,7 +776,7 @@ static EventOption Options_Intensity[IOPT_COUNT] = {
         .val = 2,
         .value_num = countof(group_offset_names),
         .values = group_offset_names,
-        .desc = {"Every timer: the strip, near Falcon, the landing",
+        .desc = {"Every timer: the strip, near you, the landing",
                  "spot, waveland and wavedash, against the",
                  "Intensity level."},
     },
@@ -871,7 +872,7 @@ static EventOption Options_Cues[COPT_COUNT] = {
         .value_num = countof(ai_filter_names),
         .values = ai_filter_names,
         .desc = {"Useful shows only aerial interrupts that land",
-                 "while Falcon is still rising and save 4 frames or",
+                 "while you're still rising and save 4 frames or",
                  "more without aerial lag. All shows them all."},
     },
     {
@@ -888,9 +889,10 @@ static EventOption Options_Cues[COPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Body Flash",
         .val = 1,
-        .desc = {"Flash Falcon in the cue's color on the first",
-                 "frame he can act after a hit, and tint him",
-                 "periwinkle while he keeps ledge intangibility."},
+        .desc = {"Flash your fighter in the cue's color on the",
+                 "first frame you can act after a hit, and tint",
+                 "it periwinkle while it keeps ledge",
+                 "intangibility."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -952,21 +954,21 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Landing Path",
-        .desc = {"Draw where Falcon's ECB bottom goes if you keep",
+        .desc = {"Draw where your ECB bottom goes if you keep",
                  "holding the stick and press nothing, in the",
                  "landing's color when its cue is on."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Body Path",
-        .desc = {"Also draw a dotted line through Falcon's body,",
+        .desc = {"Also draw a dotted line through your body,",
                  "which is easier to follow than the ECB bottom."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Ledge Route",
         .val = 1,
-        .desc = {"While Falcon hangs on a ledge and on the way",
+        .desc = {"While you hang on a ledge and on the way",
                  "back, draw the chosen route's path. Shown with",
                  "Show Routes or Assist on in Ledge Practice.",
                  "Jump Timing's path has its own toggle there."},
@@ -1013,7 +1015,7 @@ static EventOption Options_Paths[POPT_COUNT] = {
         .kind = OPTKIND_TOGGLE,
         .name = "Slide-off Line",
         .desc = {"When a waveland or wavedash would slide off the",
-                 "edge, draw where Falcon goes: full stick that way",
+                 "edge, draw where you go: full stick that way",
                  "until it starts, then your real stick."},
     },
     {
@@ -1051,13 +1053,13 @@ enum options_timers
 static EventOption Options_Timers[TOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
-        .name = "Near Falcon",
+        .name = "Near You",
         .value_num = countof(near_names),
         .values = near_names,
-        .desc = {"A countdown that rides with Falcon. Bubble: a",
-                 "ring closes on where his body will be. Halo: a",
+        .desc = {"A countdown that rides with you. Bubble: a",
+                 "ring closes on where your body will be. Halo: a",
                  "bead runs into a notch. Pincers, ECB Fill and",
-                 "Lights close, fill or count in on him."},
+                 "Lights close, fill or count in on you."},
     },
     {
         .kind = OPTKIND_STRING,
@@ -1102,7 +1104,7 @@ static EventOption Options_Timers[TOPT_COUNT] = {
         .value_num = countof(wd_timer_names),
         .values = wd_timer_names,
         .desc = {"Out of the jumpsquat: a row in the strips, a pip",
-                 "a frame under Falcon's feet, or a ring on the",
+                 "a frame under your feet, or a ring on the",
                  "floor that closes on the airdodge frame. Works",
                  "with the waveland cues off."},
     },
@@ -1195,7 +1197,7 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .val = 1,
         .desc = {"Shade the stick angles that drop through a",
                  "platform out of shield, in the stick's gate.",
-                 "Shown while Falcon is on a platform."},
+                 "Shown while you're on a platform."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -1210,7 +1212,7 @@ static EventOption Options_Hud[HOPT_COUNT] = {
         .value_num = countof(panel_side_names),
         .values = panel_side_names,
         .desc = {"Where the info panel goes. Auto keeps it on the",
-                 "side of the screen Falcon isn't on."},
+                 "side of the screen you aren't on."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -1523,7 +1525,7 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_MENU,
         .name = "Timers",
         .menu = &Menu_Timers,
-        .desc = {"The countdowns to each input: near Falcon, in a",
+        .desc = {"The countdowns to each input: near you, in a",
                  "corner, at the landing spot, and for wavelands",
                  "and wavedashes."},
     },
@@ -1937,7 +1939,7 @@ static void Preset_Describe(int which)
     t = preset_desc[1];
     t += sprintf(t, "Timers: %s strip", strip ? strip_names[strip] : "no");
     if (near != NEAR_OFF)
-        sprintf(t, ", %s by Falcon", near_names[near]);
+        sprintf(t, ", %s near you", near_names[near]);
 
     int path = Preset_Value(s, &Options_Paths[POPT_PATH]), body = Preset_Value(s, &Options_Paths[POPT_BODY]);
     int route = Preset_Value(s, &Options_Paths[POPT_ROUTE]), pad = Preset_Value(s, &Options_Hud[HOPT_STICK]);
@@ -17648,7 +17650,7 @@ static DeckRow deck_rows[] = {
     {&Options_Cues[COPT_AI], "AI cues"},
     {&Options_Cues[COPT_NIL], "NIL cues"},
     {&Options_Cues[COPT_WL], "Waveland cues"},
-    {&Options_Timers[TOPT_NEAR], "Timer near Falcon"},
+    {&Options_Timers[TOPT_NEAR], "Timer near you"},
     {&Options_Timers[TOPT_STRIP], "Fixed strip"},
     {&Options_Timers[TOPT_SPOT], "Landing spot"},
     {&Options_Timers[TOPT_WL], "Waveland timer"},

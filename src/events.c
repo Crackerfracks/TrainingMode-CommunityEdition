@@ -297,12 +297,19 @@ static EventMatchData LandingLab_MatchData = {
 };
 EventDesc LandingLab = {
     .eventName = "Landing Lab\n",
-    .eventDescription = "See where Falcon lands if you keep holding:\nNIL, aerial interrupt or landing lag.",
+    .eventDescription = "See where you land if you keep holding:\nNIL, aerial interrupt or landing lag.",
     .eventFile = "landinglab",
     .jumpTableIndex = -1,
     .CSSType = SLCHRKIND_EVENT,
+    // the fighters whose air movement works like Falcon's: one double jump
+    // the physics drives, aerials in the common states (not yet: Ness,
+    // Yoshi, Peach and Mewtwo's double-jump cancel, Kirby's and Puff's
+    // extra jumps, Game & Watch's own aerials)
     .allowed_characters = {
-        .hmn = CSSID_CAPTAIN_FALCON,
+        .hmn = CSSID_CAPTAIN_FALCON | CSSID_DOCTOR_MARIO | CSSID_MARIO | CSSID_LUIGI | CSSID_BOWSER |
+               CSSID_DONKEY_KONG | CSSID_GANONDORF | CSSID_FALCO | CSSID_FOX | CSSID_ICE_CLIMBERS |
+               CSSID_SAMUS | CSSID_ZELDA | CSSID_LINK | CSSID_YOUNG_LINK | CSSID_PICHU | CSSID_PIKACHU |
+               CSSID_MARTH | CSSID_ROY,
         .cpu = -1,
     },
 #ifdef LL_TEST_CHAR

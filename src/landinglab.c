@@ -5680,18 +5680,20 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     // (with labels, it reaches over their column too: one panel, no plate
     // per label to overlap the next row's)
     float plate_x0 = labels ? gx - MT_LABEL_GAP * scale - MT_LABEL_W - 0.25f : gx - 0.32f * scale;
-    Hud_Rect(plate_x0, base - 0.22f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
+    // (deeper under the rows than over them: the time ticks go there)
+    Hud_Rect(plate_x0, base - 0.5f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
 
-    // the game's time going by under the rows: a tick a frame, heavier on
-    // every fifth frame of the clock, moving a cell toward the gate each
-    // frame, like the highway's and the conveyor's lines
+    // the game's time going by under the rows: a tick a frame, longer and
+    // brighter on every fifth frame of the clock, moving a cell toward the
+    // gate each frame, like the highway's and the conveyor's lines (0.9.17's
+    // were under a pixel and didn't show)
     int now = event_vars->game_timer;
     for (int k = 1; k < len; k++)
     {
         int five = (now + k) % 5 == 0;
-        float tx = gx + k * pitch + cw / 2, e = (five ? 0.07f : 0.035f) * scale;
-        Hud_Rect(tx - e, base - 0.19f * scale, tx + e, base - (five ? 0.04f : 0.1f) * scale,
-                 Color_Over(color_white, five ? 0.45f : 0.2f));
+        float tx = gx + k * pitch + cw / 2, e = (five ? 1.4f : 0.8f) * PX;
+        Hud_Rect(tx - e, base - (five ? 0.44f : 0.34f) * scale, tx + e, base - (five ? 0.08f : 0.14f) * scale,
+                 Color_Over(color_white, five ? 0.6f : 0.25f));
     }
 
     // rows from the bottom up, each in its own lane (Meter_Settle)
@@ -5708,8 +5710,8 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         for (int k = 1; k < len; k++)
         {
             if (r->cell[k] == CELL_NONE)
-                Hud_Rect(gx + k * pitch, y0, gx + k * pitch + cw, y1,
-                         Color_Fill(color_white, ((now + k) % 5 == 0 ? 0.17f : 0.1f) * dim));
+                Hud_Rect(gx + k * pitch, y0, gx + k * pitch + cw, y1, (now + k) % 5 == 0 ? Color_Over(color_white, 0.16f * dim)
+                                                                                    : Color_Fill(color_white, 0.1f * dim));
         }
 
         for (int k = 0; k < r->len && k < len; k++)

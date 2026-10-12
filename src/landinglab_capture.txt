@@ -48,8 +48,17 @@ refill
 80
 1 c:0,-1
 80
+# the airdodge into the helpless fall, before any special: a special's
+# landing lag would eat the inputs that follow it
+1 L
+90
 
-# more air jumps (only Kirby and Jigglypuff have them)
+# more air jumps, from a fresh jump (only Kirby and Jigglypuff have them)
+hover off
+land 200
+90
+10 X
+hover 0 100
 refill
 1 X
 40
@@ -60,49 +69,41 @@ refill
 
 # the specials, each from a fresh jump: neutral, side both ways, down, up
 hover off
-land 120
-20
+land 200
+90
 10 X
 hover 0 100
 1 B
 150
 hover off
-land 150
-20
+land 200
+90
 10 X
 hover 0 100
 1 B s:1,0
 150
 hover off
-land 150
-20
+land 200
+90
 10 X
 hover 0 100
 1 B s:-1,0
 150
 hover off
-land 150
-20
+land 200
+90
 10 X
 hover 0 100
 1 B s:0,-1
 150
 hover off
-land 150
-20
+land 200
+90
 10 X
 hover 0 100
 1 B s:0,1
 150
 
-# last, from a fresh jump: the airdodge into the helpless fall
-hover off
-land 200
-20
-10 X
-hover 0 100
-1 L
-90
 dumpecb
 hover off
-land 120
+land 200

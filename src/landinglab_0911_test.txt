@@ -37,3 +37,26 @@ shot conveyor falling onto the top platform: AI and WL rows sharing
 shot conveyor falling, 4 frames on
 land 150
 set Timers/Fixed Strip = 1
+
+# 0.9.17: the Cells and the Dial keep time too. Cells: a tick under each
+# frame, the fifth-frame ones (and their empty cells) a cell nearer the
+# gate a frame later. Dial: rim ticks still while the window waits, the
+# hand a slice further on.
+script Cells and Dial
+preset load Defaults
+set Dev/Debug Log = 1
+set Timers/Fixed Strip = 1
+air 0 70 right
+4
+shot cells falling onto the top platform: fifth-frame ticks
+1
+shot cells a frame later: the heavy ticks a cell nearer the gate
+land 150
+set Timers/Fixed Strip = 3
+air 0 70 right
+4
+shot dial falling onto the top platform: rim ticks
+1
+shot dial a frame later: ticks still, the hand a slice on
+land 150
+set Timers/Fixed Strip = 1

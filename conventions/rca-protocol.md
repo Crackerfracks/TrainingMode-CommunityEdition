@@ -48,3 +48,7 @@ Each entry has: the correction (what to think instead), the faulty pattern it re
 6. Anything that needs Stephen (a decision, a permission, an environment change), or "nothing".
 
 Then `kb rca mark --prepared`, `kb index`, `kb lint`, `kb sync`, and a short reply in the kb thread with the verdict and a link to the report.
+
+## If it ever runs on the laptop
+
+A laptop fallback (a `systemd` timer running `claude -p` headless, or a long `kb sync`) is a long-running job and follows `~/.claude/skills/jobboard/SKILL.md`: launched with `jb launch`, a plain headline, `needs_you` only for things only Stephen can do, `jb stop` instead of kill, Eastern times in messages, never a critical notification for a routine report. The cloud Routine needs none of this.

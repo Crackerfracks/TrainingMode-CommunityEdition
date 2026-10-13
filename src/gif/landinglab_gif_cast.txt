@@ -16,7 +16,7 @@ mark clip cast-side in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip cast-side out
 trace off
 
@@ -32,7 +32,7 @@ mark clip cast-top in
 1 X
 ai 0 A
 land 120
-40
+20
 mark clip cast-top out
 trace off
 

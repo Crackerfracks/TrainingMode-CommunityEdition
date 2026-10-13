@@ -454,11 +454,12 @@ static void Script_Think(GOBJ *gobj)
         if (!Script_Instant(ft, 1))
             return;
         op = Script_Op();
-        // land: over once Falcon is back on the ground, and this frame is
-        // the next step's
-        if (op->kind == SOP_LAND && fp->phys.air_state == 1)
+        // land and follow: over once Falcon is back on the ground, and this
+        // frame is the next step's
+        int lands = op->kind == SOP_LAND || op->kind == SOP_FOLLOW;
+        if (lands && fp->phys.air_state == 1)
             script_air = 1;
-        if (op->kind == SOP_LAND && script_air && fp->phys.air_state == 0)
+        if (lands && script_air && fp->phys.air_state == 0)
         {
             Script_Next();
             continue;

@@ -15,7 +15,7 @@ mark clip wavedash in
 1 X
 3
 1 L s:-1,-0.35
-40
+20
 mark clip wavedash out
 
 script wd-pips
@@ -28,7 +28,7 @@ mark clip wd-pips in
 1 X
 3
 1 L s:1,-0.35
-40
+20
 mark clip wd-pips out
 
 script wd-ring
@@ -41,7 +41,7 @@ mark clip wd-ring in
 1 X
 3
 1 L s:1,-0.35
-40
+20
 mark clip wd-ring out
 
 # glossary "wavedash" and "jumpsquat" at half speed

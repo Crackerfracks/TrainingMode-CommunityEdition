@@ -11,7 +11,7 @@ air 20 75 right 0 0 1 0
 sync nil
 mark clip nil in
 land 150 s:0.6,0
-40
+20
 mark clip nil out
 
 # Spot cues compared on the same NIL: the path alone, the landing spot
@@ -26,7 +26,7 @@ air 20 75 right 0 0 1 0
 sync spot-path
 mark clip spot-path in
 land 150 s:0.6,0
-40
+20
 mark clip spot-path out
 
 script spot-timer
@@ -37,7 +37,7 @@ air 20 75 right 0 0 1 0
 sync spot-timer
 mark clip spot-timer in
 land 150 s:0.6,0
-40
+20
 mark clip spot-timer out
 
 script spot-glow
@@ -50,5 +50,5 @@ air 20 75 right 0 0 1 0
 sync spot-glow
 mark clip spot-glow in
 land 150 s:0.6,0
-40
+20
 mark clip spot-glow out

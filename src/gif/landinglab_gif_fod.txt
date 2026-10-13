@@ -10,8 +10,7 @@ air -40 70 right 0 0 0 0
 sync jump-timing
 mark clip jump-timing in
 follow 80
-land 150
-40
+20
 mark clip jump-timing out
 
 script jump-timing-run
@@ -23,6 +22,5 @@ sync jump-timing-run
 mark clip jump-timing-run in
 6 s:1,0
 follow 60 s:1,0
-land 150
-40
+20
 mark clip jump-timing-run out

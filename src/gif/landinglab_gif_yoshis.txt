@@ -14,5 +14,5 @@ mark clip first-minute in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip first-minute out

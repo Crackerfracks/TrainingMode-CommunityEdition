@@ -14,8 +14,7 @@ start -50 27.2 right
 sync hero
 mark clip hero in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip hero out
 
 script strip-cells
@@ -27,8 +26,7 @@ start -50 27.2 right
 sync strip-cells
 mark clip strip-cells in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip strip-cells out
 
 script strip-highway
@@ -40,8 +38,7 @@ start -50 27.2 right
 sync strip-highway
 mark clip strip-highway in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip strip-highway out
 
 script strip-dial
@@ -53,8 +50,7 @@ start -50 27.2 right
 sync strip-dial
 mark clip strip-dial in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip strip-dial out
 
 script strip-conveyor
@@ -66,8 +62,7 @@ start -50 27.2 right
 sync strip-conveyor
 mark clip strip-conveyor in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip strip-conveyor out
 
 script near-bubble
@@ -79,8 +74,7 @@ start -50 27.2 right
 sync near-bubble
 mark clip near-bubble in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip near-bubble out
 
 script near-halo
@@ -92,8 +86,7 @@ start -50 27.2 right
 sync near-halo
 mark clip near-halo in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip near-halo out
 
 script near-pincers
@@ -105,8 +98,7 @@ start -50 27.2 right
 sync near-pincers
 mark clip near-pincers in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip near-pincers out
 
 script near-ecbfill
@@ -118,8 +110,7 @@ start -50 27.2 right
 sync near-ecbfill
 mark clip near-ecbfill in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip near-ecbfill out
 
 script near-lights
@@ -131,8 +122,7 @@ start -50 27.2 right
 sync near-lights
 mark clip near-lights in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip near-lights out
 
 script near-oldstrip
@@ -144,8 +134,7 @@ start -50 27.2 right
 sync near-oldstrip
 mark clip near-oldstrip in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip near-oldstrip out
 
 script travel-catchup
@@ -157,8 +146,7 @@ start -50 27.2 right
 sync travel-catchup
 mark clip travel-catchup in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip travel-catchup out
 
 script everything-jump
@@ -169,8 +157,7 @@ start -50 27.2 right
 sync everything-jump
 mark clip everything-jump in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip everything-jump out
 
 # A plain rising AI with no Jump Timing: what the cues alone look like
@@ -186,7 +173,7 @@ mark clip ai-plain in
 1 X
 ai 0 A
 land 120
-40
+20
 mark clip ai-plain out
 
 # The same AI at 1/4 speed (glossary: the frame the ECB touches). Each game
@@ -220,7 +207,7 @@ mark clip paths in
 1 X s:1,0
 ai 0 c:1,0
 land 120
-40
+20
 mark clip paths out
 
 # HUD: the controller display beside the percent, each look and size.
@@ -234,7 +221,7 @@ mark clip pad-ring in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip pad-ring out
 
 script pad-ring-medium
@@ -247,7 +234,7 @@ mark clip pad-ring-medium in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip pad-ring-medium out
 
 script pad-ring-large
@@ -260,7 +247,7 @@ mark clip pad-ring-large in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip pad-ring-large out
 
 script pad-crest
@@ -274,7 +261,7 @@ mark clip pad-crest in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip pad-crest out
 
 script pad-classic
@@ -288,7 +275,7 @@ mark clip pad-classic in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip pad-classic out
 
 script padcue-ring
@@ -303,7 +290,7 @@ mark clip padcue-ring in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip padcue-ring out
 
 script padcue-gauge
@@ -318,7 +305,7 @@ mark clip padcue-gauge in
 10 X
 ai 0 A
 land 120
-40
+20
 mark clip padcue-gauge out
 
 # Shield on the right platform: the shield drop zone shaded in the gate.
@@ -334,7 +321,7 @@ mark clip shield-drop in
 20 R s:0,-0.6
 10 R s:0.3,-0.7
 land 60
-40
+20
 mark clip shield-drop out
 
 # Ledge: hang on the right ledge, the route list and its path, then play it.
@@ -423,7 +410,7 @@ mark clip cam-normal in
 1 X
 ai 0 A
 land 120
-40
+20
 mark clip cam-normal out
 
 script cam-zoom
@@ -438,7 +425,7 @@ mark clip cam-zoom in
 1 X
 ai 0 A
 land 120
-40
+20
 mark clip cam-zoom out
 
 script cam-fixed
@@ -453,7 +440,7 @@ mark clip cam-fixed in
 1 X
 ai 0 A
 land 120
-40
+20
 mark clip cam-fixed out
 
 script cam-advanced
@@ -469,7 +456,7 @@ mark clip cam-advanced in
 1 X
 ai 0 A
 land 120
-40
+20
 mark clip cam-advanced out
 
 # Presets: the same jump under each built-in.
@@ -481,8 +468,7 @@ start -50 27.2 right
 sync preset-minimal
 mark clip preset-minimal in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip preset-minimal out
 
 script preset-ledgedrill
@@ -493,8 +479,7 @@ start -50 27.2 right
 sync preset-ledgedrill
 mark clip preset-ledgedrill in
 follow 70 s:1,0
-land 120
-40
+20
 mark clip preset-ledgedrill out
 
 # Glossary loops: L-cancel (a fair landed on the floor, L on time),
@@ -512,7 +497,7 @@ mark clip lcancel in
 14
 1 L
 land 60
-40
+20
 mark clip lcancel out
 
 script fastfall
@@ -535,6 +520,6 @@ start 0 0 right
 sync jumpsquat
 mark clip jumpsquat in
 10 X
-40
+20
 mark clip jumpsquat out
 set Speed/Game Speed = 0

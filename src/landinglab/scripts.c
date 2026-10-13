@@ -37,6 +37,9 @@
 //                              window's first (-1: a frame early)
 //   ai <offset> [inputs]       the same for the next aerial interrupt window
 //   land <max> [inputs]        hold the inputs until Falcon is on the ground
+//   follow <n> [inputs]        hold the inputs and press what Jump Timing
+//                              shows, on its frames, for n frames or until
+//                              back on the ground after leaving it
 //   playroute [<n>]            while hanging: wait (stick at rest) until the
 //                              ledge's routes are found, then play the nth
 //                              row of the timers (1, the chosen route, if
@@ -167,7 +170,7 @@ static char shot_label[48];  // the last shot's label, for the heartbeat
 static int script_pc;       // its current step
 static int script_left;     // frames left in that step
 static int script_wait;     // frames a wl/ai/land step has waited
-static int script_air;      // Falcon has been in the air during a land step
+static int script_air;      // Falcon has been in the air during a land or follow step
 static int script_window;   // the frame a wl/ai step's window opened, -1 = not yet
 static int script_width;    // how many frames the prediction gave it
 static int script_pending;  // start the chosen script on the next frame

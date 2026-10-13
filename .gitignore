@@ -50,3 +50,5 @@ bin/*.orig
 .agent-state/
 tools/llsim/llsim
 tools/llsim/__pycache__/
+tools/harness/__pycache__/
+tools/nav/__pycache__/

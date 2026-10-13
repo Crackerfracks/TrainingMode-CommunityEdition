@@ -1,6 +1,6 @@
 # Glossary
 
-These are the terms Landing Lab uses, each in a sentence or two, for Melee NTSC 1.02.
+These are the terms Landing Gear uses, each in a sentence or two, for Melee NTSC 1.02.
 
 Most of Melee's vocabulary is players naming things the developers never meant to ship. Wavedashing is one of them.
 
@@ -12,15 +12,15 @@ An attack done in the air: neutral, forward, back, up or down air (nair, fair, b
 
 ## ECB
 
-The Environment Collision Box: the diamond Melee uses for a character's body when it checks for floors, walls and ceilings. Its shape changes with the animation, so its bottom is not where the feet are drawn. Landing Lab simulates it to predict landings.
+The Environment Collision Box: the diamond Melee uses for a character's body when it checks for floors, walls and ceilings. Its shape changes with the animation, so its bottom is not where the feet are drawn. Landing Gear simulates it to predict landings.
 
 ## NIL
 
-No-impact landing. Falcon touches down with no landing lag at all. Landing Lab draws NIL cues in green.
+No-impact landing. Falcon touches down with no landing lag at all. Landing Gear draws NIL cues in green.
 
 ## Aerial interrupt (AI)
 
-Starting an aerial while rising, so that when the ECB updates to the aerial's animation it touches the platform and forces a landing. Falcon skips the rest of his jump and can act. Landing Lab focuses on rising AIs that save 4 or more frames, and draws AI cues in pink.
+Starting an aerial while rising, so that when the ECB updates to the aerial's animation it touches the platform and forces a landing. Falcon skips the rest of his jump and can act. Landing Gear focuses on rising AIs that save 4 or more frames, and draws AI cues in pink.
 
 <!-- GIF: the same AI with Frame Advance on, stepping through the press and the frame the ECB touches the platform -->
 
@@ -34,7 +34,7 @@ Pressing L, R or Z just before landing from an aerial to halve its landing lag.
 
 ## Fastfall
 
-Tapping down on the stick while falling to fall faster. Ledge routes can include a fastfall, and Landing Lab tells you when yours was early or late.
+Tapping down on the stick while falling to fall faster. Ledge routes can include a fastfall, and Landing Gear tells you when yours was early or late.
 
 ## Jumpsquat
 
@@ -46,7 +46,7 @@ Falcon's second jump, used in the air. Jump Timing only runs while he still has 
 
 ## Waveland
 
-An airdodge into the ground that slides you along it with no lag. Landing Lab draws waveland cues in cyan.
+An airdodge into the ground that slides you along it with no lag. Landing Gear draws waveland cues in cyan.
 
 <!-- GIF: Falcon airdodges down and sideways onto a platform and slides along it -->
 
@@ -60,7 +60,7 @@ A jump straight into a waveland: the airdodge comes right out of the jumpsquat.
 
 ## GALINT
 
-The ledge intangibility Falcon still has when he can first act on stage. Ledge routes are ranked by how much of it they keep, and Landing Lab draws it in periwinkle.
+The ledge intangibility Falcon still has when he can first act on stage. Ledge routes are ranked by how much of it they keep, and Landing Gear draws it in periwinkle.
 
 ## Ledge intangibility
 
@@ -68,7 +68,7 @@ The time after grabbing the ledge when Falcon cannot be hit. It runs down while 
 
 ## Frame
 
-One 60th of a second. Melee counts everything in frames, and so does Landing Lab.
+One 60th of a second. Melee counts everything in frames, and so does Landing Gear.
 
 ## Frame Advance
 

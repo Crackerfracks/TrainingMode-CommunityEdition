@@ -72,7 +72,7 @@ All of the quick menu's inputs are in [Presets](presets.md#quick-menu).
 
 ## Sounds menu
 
-The Sounds menu sets the chime on a hit and which slips buzz. It is in the main Landing Lab menu, after HUD.
+The Sounds menu sets the chime on a hit and which slips buzz. It is in the main Landing Gear menu, after HUD.
 
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |

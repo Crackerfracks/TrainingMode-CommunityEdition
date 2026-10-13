@@ -1,6 +1,6 @@
-# Landing Lab guide
+# Landing Gear guide
 
-These pages explain every menu and option in Landing Lab.
+These pages explain every menu and option in Landing Gear.
 
 There are 97 options. Pressing A at the right time needs none of them, but here they are.
 

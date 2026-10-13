@@ -44,7 +44,7 @@ Views belong to the stage. The same slot on another stage is a different view. A
 
 ## Speed menu
 
-The Speed menu slows the game down and sets up Frame Advance. It is in the main Landing Lab menu, after Camera.
+The Speed menu slows the game down and sets up Frame Advance. It is in the main Landing Gear menu, after Camera.
 
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |

@@ -1,15 +1,15 @@
 <p align="center"><img src="Logos/Training-Mode-banner.png"  alt=""  width="300"/></p>
 
-# Training Mode CE + Landing Lab
+# Training Mode CE + Landing Gear
 
-Jump at a platform, start a nair while you're still rising, and on the right frame Melee decides Captain Falcon has already landed. He skips the rest of his own jump and stands there, ready to act. **Landing Lab** shows you that frame before you get there. The game has worked this way since 2001 and has never mentioned it to anyone.
+Jump at a platform, start a nair while you're still rising, and on the right frame Melee decides Captain Falcon has already landed. He skips the rest of his own jump and stands there, ready to act. **Landing Gear** shows you that frame before you get there. The game has worked this way since 2001 and has never mentioned it to anyone.
 
 <!-- GIF to reshoot at 0.8.4 defaults: Battlefield, run off the left platform, double jump, rising nair AI onto the top platform -->
 <p align="center"><i>GIF coming soon.</i></p>
 
 This is an unofficial build of [Training Mode - Community Edition](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition) (TM-CE) v1.4 with one new event. Everything else is TM-CE as it ships; its [README](https://github.com/AlexanderHarrison/TrainingMode-CommunityEdition#readme) covers the rest.
 
-> **Not made or supported by the TM-CE team.** Landing Lab was designed and playtested by [Crackerfracks](https://github.com/Crackerfracks), and its code was written with Claude, an AI model. TM-CE doesn't take AI-written code, so send feedback here, not to the TM-CE Discord or repository.
+> **Not made or supported by the TM-CE team.** Landing Gear was designed and playtested by [Crackerfracks](https://github.com/Crackerfracks), and its code was written with Claude, an AI model. TM-CE doesn't take AI-written code, so send feedback here, not to the TM-CE Discord or repository.
 
 ## New to Melee?
 
@@ -42,11 +42,11 @@ You bring the Melee. We bring a patch file and a batch script whose name is in a
 
 You need your own **Super Smash Bros. Melee NTSC 1.02** ISO. Nothing from the game is included.
 
-1. Download `TM-CE-LandingLab-<version>.zip` from [Releases](https://github.com/Crackerfracks/TrainingMode-CommunityEdition/releases) and unzip it.
+1. Download `TM-CE-LandingGear-<version>.zip` from [Releases](https://github.com/Crackerfracks/TrainingMode-CommunityEdition/releases) and unzip it.
 2. Make the ISO:
     - **Windows:** drag your Melee ISO onto `DRAG VANILLA MELEE HERE.bat`.
     - **Linux / macOS:** install xdelta (`sudo apt install xdelta3`, `sudo pacman -S xdelta3` or `brew install xdelta`), then run `./build_linux_and_mac.sh path/to/melee.iso`.
-3. That writes `TM-CE-LandingLab.iso` next to the script. It never overwrites an official `TM-CE.iso`.
+3. That writes `TM-CE-LandingGear.iso` next to the script. It never overwrites an official `TM-CE.iso`.
 4. Open it in Dolphin (Slippi's Dolphin works). It uses TM-CE's game ID (GTME01), so Dolphin treats it like TM-CE.
 
 <details>
@@ -57,7 +57,7 @@ The ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596
 
 ## Your first minute
 
-1. Event Mode → **Character-specific Tech** → **Landing Lab** (the last event). Pick Captain Falcon and Battlefield.
+1. Event Mode → **Character-specific Tech** → **Landing Gear** (the last event). Pick Captain Falcon and Battlefield.
 2. Run off the left platform and double jump toward the top one.
 3. A pink strip of frame cells appears in the corner. When a solid cell reaches the gate, press A.
 4. Falcon lands on the top platform on the frame he pressed. That's an aerial interrupt.
@@ -68,7 +68,7 @@ Miss it and the strip turns slate blue, the color of quiet disappointment. Do it
 
 ## What it shows
 
-Landing Lab simulates where Falcon's ECB is headed and marks what's possible on the way. It starts with only the useful parts on; the rest are a menu away.
+Landing Gear simulates where Falcon's ECB is headed and marks what's possible on the way. It starts with only the useful parts on; the rest are a menu away.
 
 | Effect | What you see | On at start |
 | --- | --- | --- |
@@ -132,7 +132,7 @@ Trigger + A saves over the preset you're on; trigger + X or Y saves a new one. P
 
 ## Ledge practice
 
-Hang on a ledge and Landing Lab lists every route back to stage that keeps GALINT: drop, wait, fastfall, double jump, then a NIL or an AI. Browse them with D-pad up and practice the one you can actually do.
+Hang on a ledge and Landing Gear lists every route back to stage that keeps GALINT: drop, wait, fastfall, double jump, then a NIL or an AI. Browse them with D-pad up and practice the one you can actually do.
 
 - **Assist** freezes the game on each input of the route until you press it, then plays on at full speed. Shorten its wait as the timing sinks in.
 - **Drop Drill** is for the first possible ledge drop.
@@ -165,7 +165,7 @@ See [Jump Timing](docs/guide/jump-timing.md) for targets and limits.
 | --- | --- |
 | Start | Menu |
 | L or R all the way + D-pad up/down | Quick menu |
-| L + R all the way + D-pad up/down | Hide or show everything Landing Lab draws |
+| L + R all the way + D-pad up/down | Hide or show everything Landing Gear draws |
 | D-pad right (hold) | Save Falcon's position |
 | D-pad left | Load it |
 | D-pad down | Frame Advance on/off |
@@ -198,7 +198,7 @@ Only if you can get the pink path to show up in bracket. If you can, open an iss
 Crackerfracks plays Falcon and needed this more than anyone. That was the whole meeting. Other characters are a data job for after 1.0.
 
 **Do falling AIs count?**
-Technically. A falling AI saves you about a frame, in situations so specific they'd need their own ruleset. Landing Lab only shows AIs that land while Falcon is still rising and save 4 frames or more. Set the AI Filter to All if you collect useless things.
+Technically. A falling AI saves you about a frame, in situations so specific they'd need their own ruleset. Landing Gear only shows AIs that land while Falcon is still rising and save 4 frames or more. Set the AI Filter to All if you collect useless things.
 
 **Does it work on console?**
 It's only been tested in Dolphin. If you try it on a console, tell us what happened.
@@ -218,7 +218,7 @@ Things that went wrong on the way here, all true.
 - Version 0.6.5 turned every effect on at once: paths, dots, rings, strips, glows, ticks and a controller, all moving at the same time. A friend saw the GIFs and said "busy." 0.8.4 starts with a lot fewer.
 - The AI built a jump planner for the ground. It thought for two seconds, flickered through a few routes, and then sent you to the very edge of the platform. Every time. It now lives behind an `#ifdef` until after 1.0, thinking about what it did.
 - While testing 0.8.4, the AI pressed D-pad down every five seconds, which toggles Frame Advance. It froze its own game, then filed the freeze as a bug.
-- The jump arc preview is one of the oldest features in Landing Lab. Crackerfracks has turned it on zero times.
+- The jump arc preview is one of the oldest features in Landing Gear. Crackerfracks has turned it on zero times.
 - Designed by Crackerfracks, a Falcon **main**, who asked us not to use his replays as reference footage. Request granted.
 - Crackerfracks's playtest notes for 0.6.5 ran 3,206 words. This README is shorter. Barely.
 </details>
@@ -236,8 +236,8 @@ Found a cue that lied, or a better ledge route? Open an issue on [this repositor
 
 ## Building from source
 
-See [DEVELOPMENT.md](DEVELOPMENT.md). `./build.sh path/to/melee.iso release` builds the ISO and the release zip. Landing Lab is `src/landinglab.c` and the modules it includes from `src/landinglab/` (see its README).
+See [DEVELOPMENT.md](DEVELOPMENT.md). `./build.sh path/to/melee.iso release` builds the ISO and the release zip. Landing Gear is `src/landinglab.c` and the modules it includes from `src/landinglab/` (see its README).
 
 ## Credits
 
-TM-CE by its contributors, maintained by Alex Harrison, built on UnclePunch's original Training Mode. Landing Lab by Crackerfracks, written with Claude.
+TM-CE by its contributors, maintained by Alex Harrison, built on UnclePunch's original Training Mode. Landing Gear by Crackerfracks, written with Claude.

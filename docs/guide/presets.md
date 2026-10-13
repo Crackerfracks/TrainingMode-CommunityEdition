@@ -132,7 +132,7 @@ On the ground it also puts up a still example hop, so the cues have something to
 | Input | Does |
 | --- | --- |
 | L or R clicked all the way + D-pad up or down | Opens the quick menu and freezes the game. The trigger must be clicked, not partway. |
-| L and R both clicked all the way + D-pad up or down | Hides everything Landing Lab draws, or shows it again. Works whether or not Quick Menu is on. |
+| L and R both clicked all the way + D-pad up or down | Hides everything Landing Gear draws, or shows it again. Works whether or not Quick Menu is on. |
 | D-pad left or right on the cards | Goes to the previous or next preset card, skipping empty ones. The preset is applied at once. |
 | D-pad down on the cards | Opens the settings list of the chosen card. |
 | D-pad up or down in the list | Goes to the previous or next setting. Up from the first setting returns to the cards. Down stops at the last setting. |
@@ -140,7 +140,7 @@ On the ground it also puts up a still example hop, so the cues have something to
 | A with a trigger held | Saves the current settings into the chosen preset (User Custom or Preset 1 to 4). If the chosen preset is built in, it saves into the first free Preset 1 to 4. |
 | X or Y with a trigger held | Saves the current settings as a new preset in the first free Preset 1 to 4. If none is free it says "No free preset: save over one". |
 | B | Closes the quick menu. |
-| L and R both clicked + D-pad up or down | Closes the quick menu and hides or shows everything Landing Lab draws. |
+| L and R both clicked + D-pad up or down | Closes the quick menu and hides or shows everything Landing Gear draws. |
 | Moving the stick or C-stick | Plays out of the quick menu. The game goes on and the menu fades out over the HUD > Quick Menu Play time. Does nothing if Quick Menu Play is Never. |
 | Start | Opens the main menu and closes the quick menu. |
 | No D-pad or trigger press | Closes after the HUD > Quick Menu Idle time, fading over the last 3 seconds. Letting go of the trigger does not close it. |

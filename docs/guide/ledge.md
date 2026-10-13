@@ -28,7 +28,7 @@ The Ledge Practice menu, in menu order.
 
 ## How routes are found and ordered
 
-When Falcon grabs a ledge, Landing Lab simulates his ECB through the drop timings, fastfalls, double jump frames and aerials within reach of that ledge. It keeps the routes that land with GALINT left and lists them in the timer.
+When Falcon grabs a ledge, Landing Gear simulates his ECB through the drop timings, fastfalls, double jump frames and aerials within reach of that ledge. It keeps the routes that land with GALINT left and lists them in the timer.
 
 Route Kind picks which lists you get: NIL routes, AI routes, or both together. Route Sort picks the order:
 

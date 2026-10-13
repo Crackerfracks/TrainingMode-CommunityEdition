@@ -41,7 +41,7 @@ D-pad down turns Frame Advance on. It is easy to hit by accident. Press D-pad do
 
 ## Tested in Dolphin only
 
-Landing Lab has only been tested in Dolphin. It has not been tested on console. If you try it on a console, say what happened.
+Landing Gear has only been tested in Dolphin. It has not been tested on console. If you try it on a console, say what happened.
 
 ## Limits
 
@@ -51,7 +51,7 @@ Landing Lab has only been tested in Dolphin. It has not been tested on console. 
 
 ## A screenshot without the overlay
 
-Two ways to hide everything Landing Lab draws:
+Two ways to hide everything Landing Gear draws:
 
 - Click L and R both all the way and press D-pad up or down. Do it again to bring it back.
 - Turn on Frame Advance, set Developer > Debug Log to anything but Off, and press D-pad up. Turning Frame Advance off clears it.

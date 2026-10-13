@@ -1,8 +1,7 @@
 # GIF shot scripts
 
 Test scripts for the README and guide GIFs, one file per stage (the event's
-stage is fixed per build: LLSTAGE=GRKINDEXT_BATTLE, _STORY (Yoshi's Story),
-_OLDPU (Dream Land), _PSTAD (Pokemon Stadium), _FD, _IZUMI (Fountain of
+stage is fixed per build: LLSTAGE=GRKINDEXT_BATTLE, _OLDPU (Dream Land), _PSTAD (Pokemon Stadium), _FD, _IZUMI (Fountain of
 Dreams)). Build with LLSCRIPT=<file>; the
 fighter is Falcon, except landinglab_gif_cast.txt (LLCHAR=file, one build
 run once per fighter, as tools/harness/run_tests.py does).

@@ -69,7 +69,7 @@ The ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596
 
 Miss it and the strip turns slate blue, the color of quiet disappointment. Do it again. That's the whole event; everything else is about doing it in more places.
 
-<!-- <img src="docs/media/first-minute.gif" width="480"> (first-minute, Yoshi's Story: short hop up to a side platform with an AI, at defaults) -->
+<!-- <img src="docs/media/first-minute.gif" width="480"> (first-minute, Battlefield: run off the left platform, double jump, nair AI onto the top platform, at defaults) -->
 
 ## What it shows
 

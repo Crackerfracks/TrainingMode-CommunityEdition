@@ -173,6 +173,26 @@ follow 70 s:1,0
 30
 mark clip everything-jump out
 
+# README "Your first minute", as its steps say: run off the left platform,
+# double jump toward the top one, nair when the strip's solid cell reaches
+# the gate. Defaults, no Jump Timing: the run and the jump on the frames
+# hero's Jump Timing pressed them (its LLFOLLOW lines). FILL IN: R = frames
+# from the start of the run to the double jump (the run goes off the edge
+# on the way).
+script first-minute
+preset load Defaults
+start -50 27.2 right
+90
+sync first-minute
+mark clip first-minute in
+15
+R s:1,0
+1 X s:1,0
+ai 0 A
+land 120
+30
+mark clip first-minute out
+
 # A plain rising AI with no Jump Timing: what the cues alone look like
 # (Cues page top, glossary "aerial interrupt").
 script ai-plain
@@ -526,8 +546,9 @@ mark clip lcancel in
 3 X
 2
 1 c:1,0
-# the L press about 4 frames before the touchdown (the window is 7)
-19
+# the L press 4 frames before the touchdown (the window is 7): the short
+# hop lands 30 frames after the fair's press
+25
 1 L
 land 60
 30

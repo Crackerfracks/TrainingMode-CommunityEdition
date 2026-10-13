@@ -5,6 +5,7 @@ autorun
 # Fall past a platform, then the double jump and nair Jump Timing plans.
 script jump-timing
 preset load Defaults
+set Camera/Camera Mode = 1
 set Jump/Show = 1
 air -40 70 right 0 0 0 0
 sync jump-timing
@@ -16,6 +17,7 @@ mark clip jump-timing out
 
 script jump-timing-run
 preset load Defaults
+set Camera/Camera Mode = 1
 set Jump/Show = 1
 start -55 0 right
 90

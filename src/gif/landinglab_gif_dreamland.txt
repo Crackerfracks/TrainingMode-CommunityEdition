@@ -1,6 +1,7 @@
 # Dream Land GIFs, Falcon. Side platforms about y 30.14, x 30.25 to 61.4
 # (and mirrored); top platform about y 51.4, x -19 to 19. Positions are a
-# first guess: tune them until the landing is the one named.
+# first guess: tune them until the landing is the one named. 20 80 lands
+# a NIL (2026-10-13). Zoom camera: Normal framed the tree, not the fighter.
 autorun
 
 # NIL: falling with the double jump left, Jump Timing (Kind NIL) times the
@@ -9,10 +10,11 @@ autorun
 # landing isn't "NIL".
 script nil
 preset load Defaults
+set Camera/Camera Mode = 1
 set Cues/NIL Cues = 1
 set Jump/Show = 1
 set Jump/Kind = 0
-air 10 80 right 0 0 0 0
+air 20 80 right 0 0 0 0
 sync nil
 mark clip nil in
 15
@@ -24,13 +26,14 @@ mark clip nil out
 # timer alone, Platform Glow alone.
 script spot-path
 preset load Defaults
+set Camera/Camera Mode = 1
 set Cues/NIL Cues = 1
 set Jump/Show = 1
 set Jump/Kind = 0
 set Paths/Landing Path = 1
 set Timers/Fixed Strip = 0
 set Timers/Landing Spot = 0
-air 10 80 right 0 0 0 0
+air 20 80 right 0 0 0 0
 sync spot-path
 mark clip spot-path in
 15
@@ -40,11 +43,12 @@ mark clip spot-path out
 
 script spot-timer
 preset load Defaults
+set Camera/Camera Mode = 1
 set Cues/NIL Cues = 1
 set Jump/Show = 1
 set Jump/Kind = 0
 set Timers/Fixed Strip = 0
-air 10 80 right 0 0 0 0
+air 20 80 right 0 0 0 0
 sync spot-timer
 mark clip spot-timer in
 15
@@ -54,13 +58,14 @@ mark clip spot-timer out
 
 script spot-glow
 preset load Defaults
+set Camera/Camera Mode = 1
 set Cues/NIL Cues = 1
 set Jump/Show = 1
 set Jump/Kind = 0
 set Cues/Platform Glow = 1
 set Timers/Fixed Strip = 0
 set Timers/Landing Spot = 0
-air 10 80 right 0 0 0 0
+air 20 80 right 0 0 0 0
 sync spot-glow
 mark clip spot-glow in
 15

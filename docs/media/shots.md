@@ -21,7 +21,7 @@ to the same frames.
 |---|---|---|
 | hero-ai.gif | hero (Battlefield) | README top |
 | cast-reel.gif | cast-top or cast-side (landinglab_gif_cast.txt), eight fighters cut together, about 1.5 s each: Fox, Marth, Sheik, Jigglypuff, Peach, Falco, Ice Climbers, Falcon (Battlefield) | README top, under the hero |
-| first-minute.gif | first-minute (Yoshi's Story) | README "Your first minute" |
+| first-minute.gif | first-minute (Battlefield, the README's steps) | README "Your first minute" |
 | nil.gif | nil (Dream Land) | README effects: NIL |
 | waveland.gif | waveland (Pokemon Stadium) | README effects: Perfect waveland |
 | wavedash.gif | wavedash (Final Destination) | README effects: Wavedash timer |

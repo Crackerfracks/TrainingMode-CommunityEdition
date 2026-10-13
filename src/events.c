@@ -301,15 +301,16 @@ EventDesc LandingLab = {
     .eventFile = "landinglab",
     .jumpTableIndex = -1,
     .CSSType = SLCHRKIND_EVENT,
-    // the fighters whose air movement works like Falcon's: one double jump
-    // the physics drives, aerials in the common states (not yet: Ness,
-    // Yoshi, Peach and Mewtwo's double-jump cancel, Kirby's and Puff's
-    // extra jumps, Game & Watch's own aerials)
+    // the fighters whose air movement the sim models: one double jump the
+    // physics drives, or (Yoshi, Mewtwo) one its animation moves, checked in
+    // game (src/landinglab_djc_test.txt); aerials in the common states (not
+    // yet: Ness's and Peach's double jumps, Kirby's and Puff's extra jumps,
+    // Game & Watch's own aerials)
     .allowed_characters = {
         .hmn = CSSID_CAPTAIN_FALCON | CSSID_DOCTOR_MARIO | CSSID_MARIO | CSSID_LUIGI | CSSID_BOWSER |
                CSSID_DONKEY_KONG | CSSID_GANONDORF | CSSID_FALCO | CSSID_FOX | CSSID_ICE_CLIMBERS |
                CSSID_SAMUS | CSSID_ZELDA | CSSID_LINK | CSSID_YOUNG_LINK | CSSID_PICHU | CSSID_PIKACHU |
-               CSSID_MARTH | CSSID_ROY,
+               CSSID_MARTH | CSSID_ROY | CSSID_YOSHI | CSSID_MEWTWO,
         .cpu = -1,
     },
 #ifdef LL_TEST_CHAR

@@ -264,6 +264,8 @@ static void Ledge_Move(int i, float x, float y)
     L->next = 0;
     if (route_build_ledge == i)
         route_build_ledge = -1; // what it found so far is for the old spot
+    if (route_path_ledge == i)
+        route_path_ledge = -1;  // ... and so is the path drawn from it
 }
 
 // The ledge with this corner, new or not, hung from at (x, y) if placed.
@@ -296,6 +298,8 @@ static void Hang_Learn(FighterData *fp, Vec3 *corner, int facing)
 {
     static int logged;
     float x = (fp->phys.pos.X - corner->X) * facing, y = fp->phys.pos.Y - corner->Y;
+    if (y > -1.f)
+        return; // on the corner itself: put there without a hang (Pichu, Script_LedgeCheck), not a spot
     int same = hang_known && fabs(x - hang_x) <= LR_HANG_TOL && fabs(y - hang_y) <= LR_HANG_TOL;
     if (!logged || !same)
     {
@@ -861,12 +865,25 @@ static int Route_Galint(LedgeRoute *r, int e, int intang)
     return intang - (r->act - e) + LR_GALINT_BIAS;
 }
 
+// A save loaded or a script's placement: whatever the fighter was doing on
+// or from a ledge is over (letting go is never seen, so this does it).
+static void Ledge_Forget(void)
+{
+    hang_ledge = -1;
+    route_show_num = 0;
+    route_active = 0;
+    attempt_active = 0;
+}
+
 static void Route_Path(FighterData *fp, int ledge, LedgeRoute *r)
 {
     LedgeRoute *o = &route_path_of;
     if (route_path_ledge == ledge && o->drop == r->drop && o->wait == r->wait && o->ff == r->ff && o->hold == r->hold &&
         o->dj_x == r->dj_x && o->fall_away == r->fall_away && o->kind == r->kind)
+    {
+        route_path_of = *r; // the same path, but the markers read its aerial and press from here
         return;
+    }
     LedgeRoute found[LR_TRY];
     int found_n;
     Floor_BuildCache();

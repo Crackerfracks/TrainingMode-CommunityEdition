@@ -429,6 +429,9 @@ static void Script_Think(GOBJ *gobj)
         if (sel > 0 && script_num > 0)
             Script_Begin(sel <= script_shown ? sel - 1 : 0);
     }
+    // a ledge placement (a script's, or the drill's reset) that left the
+    // fighter standing on the corner
+    Script_LedgeCheck(Fighter_GetGObj(0));
     if (script_cur < 0 || script_trace_end_pending)
         return;
 
@@ -437,8 +440,6 @@ static void Script_Think(GOBJ *gobj)
     ScriptInput in;
     int done = 0;
     ScriptOp *op;
-
-    Script_LedgeCheck(ft);
 
     for (;;)
     {

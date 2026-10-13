@@ -93,6 +93,19 @@ void Event_Think(GOBJ *event)
     }
 }
 
+// Zelda and Sheik changing into each other: the other one's tables, and
+// the ledges' routes and the hops found again for it.
+static void Fighter_Changed(FighterData *fp)
+{
+    Ecb_LoadDisc(fp);
+    Log_Attributes(fp);
+    memset(ledges, 0, sizeof(LedgeEntry) * LR_LEDGES);
+    ledges_found = 0;
+    route_build_ledge = route_list_ledge = route_path_ledge = route_browse = -1;
+    gl_gen = -1;
+    Script_ResetTracking();
+}
+
 static void Event_ThinkFrame(GOBJ *event)
 {
     GOBJ *ft = Fighter_GetGObj(0);
@@ -111,6 +124,8 @@ static void Event_ThinkFrame(GOBJ *event)
         Log_Attributes(fp);
         attributes_logged = 1;
     }
+    else if (fp->kind != sim_kind)
+        Fighter_Changed(fp);
 
     ai_show_all = Options_Cues[COPT_AI_FILTER].val == 1;
     ai_only = Options_Cues[COPT_AI_AERIAL].val ? AERIAL_BIT(TS_AIRN + Options_Cues[COPT_AI_AERIAL].val - 1) : 0;

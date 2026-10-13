@@ -3194,14 +3194,17 @@ static void Learned_Reset(void)
 // Another fighter than Falcon: none of his baked table, Falcon Dive or
 // fall leans. Its own table and leans come packed (Ecb_Unpack), or the
 // table is learned in play (and its falls don't lean).
+static int sim_kind = FTKIND_FALCON; // the fighter the tables are for
+
 static void Sim_ForFighter(int kind)
 {
     int falcon = kind == FTKIND_FALCON;
     sim_djc = Djc_Kind(kind);
     sim_mj = kind == FTKIND_KIRBY || kind == FTKIND_JIGGLYPUFF;
     sim_gw = kind == FTKIND_GAW;
-    if (falcon == sim_falcon)
+    if (falcon == sim_falcon && kind == sim_kind)
         return;
+    sim_kind = kind; // another fighter: a new one, or Zelda and Sheik changing
     sim_falcon = falcon;
     fall_loop[0] = fall_loop[1] = fall_loop[2] = LL_FALL_LOOP;
     fall_step = 1;
@@ -3679,6 +3682,13 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
 
     // animation: the state ends by itself when its animation runs out
     s->frame++;
+    if (s->len > 0 && s->frame >= s->len && Tracked_Next(s->ts) < 0)
+    {
+        // a state that doesn't end by itself (a fall) given a length: it
+        // goes on, never into "state -1"
+        s->len = 0;
+        s->len_estimated = 0;
+    }
     if (s->len > 0 && s->frame >= s->len)
     {
         int next = Tracked_Next(s->ts);
@@ -4621,14 +4631,17 @@ static u32 Check_Bits(float f)
 
 static void Sim_Check(FighterData *live, Prediction *p)
 {
-    static FighterData fp; // a copy, facing right with no stick or trigger history
+    static FighterData *copy; // a copy, facing right with no stick or trigger history
+    if (!copy)
+        copy = calloc(sizeof(FighterData)); // ~9 KB: too big a static for hmex at -O2
+    FighterData *fp = copy;
     static const float spots[][2] = {{-60, 0}, {-40, 0}, {-20, 0}, {0, 0}, {20, 0}, {40, 0}, {60, 0}, {-40, 27.2f}, {0, 54.4f}};
     static const float sticks[] = {-1, 0, 1};
     static const float speeds[] = {0, 1.5f};
-    fp = *live;
-    fp.facing_direction = 1;
-    fp.input.lstick.Y = 0;
-    fp.input.timer_trigger_any_ignore_hitlag = LL_TIMER_MAX;
+    *fp = *live;
+    fp->facing_direction = 1;
+    fp->input.lstick.Y = 0;
+    fp->input.timer_trigger_any_ignore_hitlag = LL_TIMER_MAX;
     OSReport("LLCHECK begin wlground %d\n", Cues_WavelandGround());
     for (int i = 0; i < (int)countof(spots); i++)
         for (int sh = 0; sh < 2; sh++)
@@ -4636,8 +4649,8 @@ static void Sim_Check(FighterData *live, Prediction *p)
                 for (int v = 0; v < (int)countof(speeds); v++)
                 {
                     SimStart s;
-                    Sim_GroundJumpAt(&fp, sh, spots[i][0], spots[i][1], speeds[v], sticks[k], 1, &s, 0);
-                    Predict(&fp, &s, p, BR_ALL);
+                    Sim_GroundJumpAt(fp, sh, spots[i][0], spots[i][1], speeds[v], sticks[k], 1, &s, 0);
+                    Predict(fp, &s, p, BR_ALL);
                     u32 h = 2166136261u;
                     for (int f = 0; f <= p->num; f++)
                     {

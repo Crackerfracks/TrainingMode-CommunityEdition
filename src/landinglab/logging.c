@@ -31,23 +31,42 @@ static u8 *Disc_Read(int entry, int offset, int size)
 // Another fighter than Falcon: its own ECB table from TM/llecb.bin
 // (captured in game by src/landinglab_capture.txt, packed by
 // tools/llsim/ecbpack.py). Without one it learns in play.
+// Read again when Zelda and Sheik change (Event_ThinkFrame), so each one's
+// read is kept to come back to rather than read (and allocated) each time.
 static void Ecb_LoadDisc(FighterData *fp)
 {
+    static const u8 *read[2];
+    static int read_kind[2] = {-1, -1}, read_size[2];
     char buf[96];
     Sim_ForFighter(fp->kind);
+    own_table = 0;
+    own_size = 0;
     if (sim_falcon)
         return;
     int entry = DVDConvertPathToEntrynum("TM/llecb.bin"), offset, size, rows = 0;
-    if (entry >= 0)
+    for (int i = 0; i < 2 && !own_table; i++)
+    {
+        if (read_kind[i] == fp->kind)
+        {
+            own_table = read[i];
+            own_size = read_size[i];
+        }
+    }
+    if (!own_table && entry >= 0)
     {
         u8 *dir = Disc_Read(entry, 0, LLE_DIR_BYTES);
         if (Ecb_Find(dir, fp->kind, &offset, &size) && offset % 32 == 0 && size % 32 == 0)
         {
             own_table = Disc_Read(entry, offset, size);
             own_size = size;
-            rows = Ecb_Unpack(own_table, own_size);
+            int i = read_kind[0] < 0 ? 0 : 1;
+            read[i] = own_table;
+            read_kind[i] = fp->kind;
+            read_size[i] = size;
         }
     }
+    if (own_table)
+        rows = Ecb_Unpack(own_table, own_size);
     sprintf(buf, "LLECB fighter %d: %d rows from TM/llecb.bin%s\n", fp->kind, rows, entry < 0 ? " (no file)" : "");
     Log(buf);
 }

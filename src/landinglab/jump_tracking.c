@@ -297,12 +297,7 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
         f->ecb.bottom = 0;
         Ecb_Fix(&f->ecb);
         f->ts = TS_FALL;
-        f->len = state_len[TS_FALL];
-        if (f->len == 0)
-        {
-            f->len = LL_GUESS_JUMP_LEN;
-            f->len_estimated = 1;
-        }
+        f->len = 0; // a fall loops, never ending by itself (as Sim_FromFighter)
         f->tilt_timer = LL_TIMER_MAX;
         f->trigger_timer = LL_TIMER_MAX;
         f->ecb_lock = 9;

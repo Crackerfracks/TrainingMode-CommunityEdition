@@ -598,6 +598,8 @@ static void Script_UpdatePosition(GOBJ *fighter)
 
 // After Falcon is moved, the event starts over as if he'd just appeared:
 // no landing for where he was, no windows or ghost left from it.
+static void Ledge_Forget(void);
+
 static void Script_ResetTracking(void)
 {
     prev_state_id = -1;
@@ -609,6 +611,7 @@ static void Script_ResetTracking(void)
     jt_active = 0;
     Cues_Clear();
     Window_Forget();
+    Ledge_Forget();
 }
 
 // Input timers as if nothing had been touched for a while.

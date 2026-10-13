@@ -399,7 +399,27 @@ static int Ll_Stick(int drop, int wait, int ff, int hold, int dj_x, int fall_awa
     return dj;
 }
 
-void llsim_ledge(float cx, float cy, int facing, float hx, float hy, int verbose)
+// One candidate frame by frame (llsim ledge with LLTRACE=<candidate>): the
+// state, its frame, where the fighter is, and what the step didn't know.
+static void Ll_Trace(SimStart *st, SimState *s0, int drop, int wait, int ff, int hold, int dj_x, int fall_away, int facing)
+{
+    SimState s = *s0;
+    SimStep step;
+    for (int k = 1; k <= 45; k++)
+    {
+        Ll_Stick(drop, wait, ff, hold, dj_x, fall_away, facing, 1 + wait + ff + k, &st->stick_x, &st->stick_y);
+        Sim_Step(&fighter, st, &s, -1, 0, &step);
+        EcbSample *e = Ecb_Get(s.ts, s.frame);
+        int djs = Is_DoubleJump(s.ts) ? Dj_Get(s.ts, s.frame)->seen : -1;
+        OSReport("LLTRACE %d %s f%d x %.3f y %.3f vy %.4f bottom %.3f lock %d ecb seen %d bottom %d shape %d dj %d%s%s\n", k,
+                 tracked_state_names[s.ts], s.frame, s.x, s.y, s.vy, s.bottom, s.lock, e->seen, e->has_bottom, e->has_shape,
+                 djs, step.unlearned ? " UNLEARNED" : "", step.landed ? " LANDED" : "");
+        if (step.landed)
+            break;
+    }
+}
+
+void llsim_ledge(float cx, float cy, int facing, float hx, float hy, int verbose, int trace)
 {
     static Prediction pred;
     int invuln = (*stc_ftcommon)->cliff_invuln_time ? (*stc_ftcommon)->cliff_invuln_time : 30; // dumps leave it out
@@ -449,6 +469,12 @@ void llsim_ledge(float cx, float cy, int facing, float hx, float hy, int verbose
         Sim_DoubleJump(&fighter, &st, &s, &step);
         if (step.landed || step.ceiling)
             continue;
+        if (c == trace)
+        {
+            OSReport("LLTRACE candidate %d: drop %d wait %d ff %d dj_x %d hold %d away %d, after the jump:\n", c, drop, wait, ff,
+                     dj_x, hold, fall_away);
+            Ll_Trace(&st, &s, drop, wait, ff, hold, dj_x, fall_away, facing);
+        }
         Ll_Stick(drop, wait, ff, hold, dj_x, fall_away, facing, dj + 1, &st.stick_x, &st.stick_y);
         SimStart ps;
         Sim_ToStart(&s, &st, &ps);

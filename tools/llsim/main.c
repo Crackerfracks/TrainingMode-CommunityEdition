@@ -314,7 +314,8 @@ int main(int argc, char **argv)
         llsim_lag();
     else if (ledge)
         llsim_ledge((float)atof(pos[2]), (float)atof(pos[3]), (float)atof(pos[2]) > 0 ? -1 : 1, (float)atof(pos[4]),
-                    (float)atof(pos[5]), getenv("LLV") != 0);
+                    (float)atof(pos[5]), getenv("LLV") != 0,
+                    getenv("LLTRACE") ? atoi(getenv("LLTRACE")) : -1);
     else if (jumps)
         llsim_jumps(npos > 2 ? (float)atof(pos[2]) : 0, npos > 3 ? (float)atof(pos[3]) : 0, npos > 4 ? atoi(pos[4]) : 30);
     else

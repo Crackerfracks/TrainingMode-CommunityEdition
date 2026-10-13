@@ -23,7 +23,7 @@ int llsim_fall_blend(void);
 void llsim_ecb_print(int fighter_kind);
 void llsim_jumps(float sx, float sy, int gap);
 void llsim_lag(void);
-void llsim_ledge(float cx, float cy, int facing, float hx, float hy, int verbose);
+void llsim_ledge(float cx, float cy, int facing, float hx, float hy, int verbose, int trace);
 int llsim_packed(const unsigned char *file, int size, int fighter_kind);
 
 #endif

@@ -359,3 +359,150 @@ void llsim_ecb_print(int fighter_kind)
         }
     OSReport("LLECB end\n");
 }
+
+// The ledge route search (src/landinglab/ledge_routes.c, Ledge_Try) from a
+// hang at (hx, hy) off the corner (cx, cy), facing the stage: every drop,
+// wait, fastfall, double-jump stick, hold and fall-away it tries, with the
+// touchdown each gives. One LLLEDGE line per candidate that touches down on
+// the stage (NIL or aerial interrupt, or "lag" for a landing with lag),
+// act frames from the drop and the GALINT left of cliff_invuln_time.
+static int Ll_Stick(int drop, int wait, int ff, int hold, int dj_x, int fall_away, int facing, int f, float *sx, float *sy)
+{
+    static const float dj_stick[3] = {1.f, 0.7f, 0.f};
+    int dj = 1 + wait + ff;
+    *sx = 0;
+    *sy = 0;
+    if (f == 0)
+    {
+        if (drop == 0)
+            *sx = -facing;
+        else
+            *sy = -1.f;
+    }
+    else if (f < dj && f > wait)
+    {
+        *sy = fall_away ? -0.7f : -1.f;
+        *sx = fall_away ? -0.7f * facing : 0;
+    }
+    else if (f < dj)
+    {
+        if (fall_away)
+            *sx = -facing;
+    }
+    else if (f == dj)
+    {
+        *sx = facing * dj_stick[dj_x];
+        *sy = dj_x == 1 ? -0.7f : 0;
+    }
+    else
+        *sx = hold ? facing : 0;
+    return dj;
+}
+
+void llsim_ledge(float cx, float cy, int facing, float hx, float hy, int verbose)
+{
+    static Prediction pred;
+    int invuln = (*stc_ftcommon)->cliff_invuln_time ? (*stc_ftcommon)->cliff_invuln_time : 30; // dumps leave it out
+    int best[3] = {999, 999, 999}, count[3] = {0, 0, 0}, tried = 0, unsure = 0, none = 0;
+    static int unsure_ts[TS_COUNT];
+    memset(unsure_ts, 0, sizeof(unsure_ts));
+    float tilt_dz = Common_Float(0xC);
+    for (int c = 0; c < 2 * 2 * 2 * 9 * 9 * 3; c++)
+    {
+        int drop = c % 2, hold = (c / 2) % 2, fall_away = (c / 4) % 2, r = c / 8;
+        int wait = r % 9, ff = (r / 9) % 9, dj_x = r / 81;
+        SimStart st;
+        SimState s;
+        SimStep step;
+        EcbSample *e = Ecb_Get(TS_FALL, 0);
+        memset(&st, 0, sizeof(st));
+        st.pos = (Vec2){cx + hx * facing, cy + hy};
+        st.facing = facing;
+        st.bottom = e->has_bottom ? e->bottom : 2.f;
+        st.locked_bottom = st.bottom;
+        st.ecb = (SimEcb){st.bottom, st.bottom + 16.f, st.bottom + 8.f, -3.f, 3.f};
+        if (e->has_shape)
+            Ecb_FromSample(e, facing, &st.ecb);
+        Ecb_Fix(&st.ecb);
+        st.ts = TS_FALL;
+        st.frame = -1;
+        st.tilt_timer = LL_TIMER_MAX;
+        st.trigger_timer = LL_TIMER_MAX;
+        st.skip_line = -1;
+        st.jumps = 1;
+        Sim_Init(&st, &s);
+        int dj = 1 + wait + ff, prev_down = 0, ff_at = -1, out = 0;
+        for (int f = 0; f < dj && !out; f++)
+        {
+            Ll_Stick(drop, wait, ff, hold, dj_x, fall_away, facing, f, &st.stick_x, &st.stick_y);
+            int down = st.stick_y <= -tilt_dz;
+            s.tilt_timer = down ? (prev_down ? s.tilt_timer : -1) : LL_TIMER_MAX;
+            prev_down = down;
+            Sim_Step(&fighter, &st, &s, -1, 0, &step);
+            if (step.fastfall_started)
+                ff_at = f;
+            out = step.landed;
+        }
+        if (out || (ff > 0 && ff_at < 0))
+            continue;
+        Ll_Stick(drop, wait, ff, hold, dj_x, fall_away, facing, dj, &st.stick_x, &st.stick_y);
+        Sim_DoubleJump(&fighter, &st, &s, &step);
+        if (step.landed || step.ceiling)
+            continue;
+        Ll_Stick(drop, wait, ff, hold, dj_x, fall_away, facing, dj + 1, &st.stick_x, &st.stick_y);
+        SimStart ps;
+        Sim_ToStart(&s, &st, &ps);
+        sim_limit = 45;
+        sim_bottom_y = st.pos.Y - 40.f;
+        Predict(&fighter, &ps, &pred, BR_AI);
+        sim_limit = LL_SIM_FRAMES;
+        sim_bottom_y = -100000.f;
+        Prediction *p = &pred;
+        tried++;
+        if (p->uncertain_from <= p->num)
+        {
+            unsure++;
+            unsure_ts[p->ts[p->uncertain_from]]++;
+        }
+        if (!p->land_frame)
+            none++;
+        if (p->land_frame)
+        {
+            int act = dj + p->land_frame + (p->land_kind == LAND_NIL ? 0 : p->lag);
+            int k = p->land_kind == LAND_NIL ? 0 : 2;
+            count[k]++;
+            if (act < best[k])
+                best[k] = act;
+            if (verbose)
+                OSReport("LLLEDGE %s drop %d wait %d ff %d dj_x %d hold %d away %d land %d act %d galint %d%s\n",
+                         land_kind_names[p->land_kind], drop, wait, ff, dj_x, hold, fall_away, dj + p->land_frame, act,
+                         invuln - act, p->uncertain_from <= p->land_frame ? " uncertain" : "");
+        }
+        int last = p->land_frame ? p->land_frame - 1 : p->num;
+        for (int k = 1; k <= last && k < p->uncertain_from; k++)
+        {
+            for (int a = TS_AIRN; a <= TS_AIRLW; a++)
+            {
+                u8 bit = AERIAL_BIT(a);
+                if (!(p->ai_mask[k] & ~p->ai_lag_mask[k] & bit))
+                    continue;
+                int act = dj + k + Ai_Delay(p, k, a) + (int)fighter.attr.normal_landing_lag;
+                count[1]++;
+                if (act < best[1])
+                {
+                    best[1] = act;
+                    if (verbose)
+                        OSReport("LLLEDGE AI %s drop %d wait %d ff %d dj_x %d hold %d away %d press %d act %d galint %d\n",
+                                 tracked_state_names[a], drop, wait, ff, dj_x, hold, fall_away, dj + k, act, invuln - act);
+                }
+            }
+        }
+    }
+    OSReport("LLLEDGE invuln %d: NIL %d found, best act %d (GALINT %d); AI %d, best act %d (GALINT %d); other landings %d, best act %d\n",
+             invuln, count[0], best[0], invuln - best[0], count[1], best[1], invuln - best[1], count[2], best[2]);
+    OSReport("LLLEDGE %d jumps simulated, %d never touched down, %d relied on unlearned data:", tried, none, unsure);
+    for (int ts = 0; ts < TS_COUNT; ts++)
+        if (unsure_ts[ts])
+            OSReport(" %s %d", tracked_state_names[ts], unsure_ts[ts]);
+    OSReport("\n");
+}

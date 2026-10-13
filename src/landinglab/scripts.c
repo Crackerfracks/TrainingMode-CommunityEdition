@@ -735,7 +735,26 @@ static int Script_PlaceLedge(GOBJ *ft, ScriptOp *op)
     Coll_CheckLedge(&fp->coll_data);
     Fighter_MoveToCliff(ft);
     Script_UpdatePosition(ft);
-    Fighter_ApplyIntang(ft, (*stc_ftcommon)->cliff_invuln_time + 1);
+    Vec3 corner;
+    if (op->facing > 0)
+        GrColl_GetGroundLineEndLeft(best, &corner);
+    else
+        GrColl_GetGroundLineEndRight(best, &corner);
+    if (fp->phys.pos.Y > corner.Y - 1.f)
+    {
+        // Pichu: put straight into CliffWait he stays on the corner (no
+        // TransN yet, ftCo_CliffCatch_Phys) and stands up on the stage. Drop
+        // him by the ledge instead, its corner in his grab box
+        // (FtCollDesc cliffgrab), and let the game catch it.
+        FtCollDesc *c = fp->ftData->coll;
+        fp->phys.pos.X = corner.X - op->facing * c->cliffgrab_width * 0.5f;
+        fp->phys.pos.Y = corner.Y - c->cliffgrab_y_offset - c->cliffgrab_height * 0.5f;
+        Fighter_EnterFall(ft);
+        Script_UpdatePosition(ft);
+        Log("LLSCRIPT ledge: falling into the ledge's catch\n");
+    }
+    else
+        Fighter_ApplyIntang(ft, (*stc_ftcommon)->cliff_invuln_time + 1);
     fp->jump.jumps_used = 1;
     Script_ResetTimers(fp);
     Script_FixCamera(ft);

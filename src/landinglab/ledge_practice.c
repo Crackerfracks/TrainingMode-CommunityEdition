@@ -627,6 +627,7 @@ static void Ledge_Think(FighterData *fp, int sid)
 // (ftCo_8009AA0C). Returns 1 when done: on the ground, or it couldn't.
 #define PLAY_WAIT 3600 // frames playroute waits for the ledge's routes
 #define PLAY_MAX 240   // frames it plays after the drop at most
+#define PLAY_CATCH 120 // frames it waits for a ledge to be caught
 static LedgeRoute play_route;
 static int play_drop = -1; // game frame of the drop, -1 not yet
 static int play_ledge;
@@ -641,6 +642,9 @@ static int Route_Play(FighterData *fp, ScriptInput *in, int row, int age)
     {
         if (fp->state_id != ASID_CLIFFWAIT)
         {
+            // a ledge the script fell into (Script_PlaceLedge) is caught soon
+            if (age < PLAY_CATCH && (fp->state_id == ASID_CLIFFCATCH || fp->phys.air_state == 1))
+                return 0;
             Log("LLPLAY not hanging: nothing to play\n");
             return 1;
         }
@@ -676,7 +680,7 @@ static int Route_Play(FighterData *fp, ScriptInput *in, int row, int age)
         sprintf(buf, "LLPLAY row %d (route %d of %d) after %d frames hanging, drop at %d\n", row, pick + 1,
                 route_list_num, age, t);
         Log(buf);
-        Route_Log("play", L, &play_route, Route_Galint(&play_route, -1, fp->hurt.intang_frames.ledge));
+        Route_Log("play", L, &play_route, Route_Galint(&play_route, 0, fp->hurt.intang_frames.ledge)); // logged on the drop frame itself, as "follow" is
     }
 
     LedgeRoute *r = &play_route;

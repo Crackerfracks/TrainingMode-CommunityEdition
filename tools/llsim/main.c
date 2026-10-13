@@ -284,12 +284,14 @@ int main(int argc, char **argv)
     }
     int check = npos >= 2 && !strcmp(pos[0], "check"), ecb = npos == 2 && !strcmp(pos[0], "ecb");
     int jumps = npos >= 2 && !strcmp(pos[0], "jumps"), lag = npos == 2 && !strcmp(pos[0], "lag");
-    if (!check && !ecb && !jumps && !lag)
+    int ledge = npos == 6 && !strcmp(pos[0], "ledge");
+    if (!check && !ecb && !jumps && !lag && !ledge)
     {
         fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-p <llecb.bin>] [-loops A,B,C] [-nolean]\n"
                         "       llsim ecb <dump> [-t <capture>] [-p <llecb.bin>]\n"
                         "       llsim jumps <dump> [sx sy gap] [-t <capture>] [-p <llecb.bin>]\n"
-                        "       llsim lag <dump>\n");
+                        "       llsim lag <dump>\n"
+                        "       llsim ledge <dump> <corner x> <corner y> <hang x> <hang y> [-t <capture>] [-p <llecb.bin>]\n");
         return 2;
     }
     Dump_Load(pos[1]);
@@ -310,6 +312,9 @@ int main(int argc, char **argv)
         llsim_ecb_print(dump_char);
     else if (lag)
         llsim_lag();
+    else if (ledge)
+        llsim_ledge((float)atof(pos[2]), (float)atof(pos[3]), (float)atof(pos[2]) > 0 ? -1 : 1, (float)atof(pos[4]),
+                    (float)atof(pos[5]), getenv("LLV") != 0);
     else if (jumps)
         llsim_jumps(npos > 2 ? (float)atof(pos[2]) : 0, npos > 3 ? (float)atof(pos[3]) : 0, npos > 4 ? atoi(pos[4]) : 30);
     else

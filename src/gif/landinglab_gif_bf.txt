@@ -176,9 +176,9 @@ mark clip everything-jump out
 # README "Your first minute", as its steps say: run off the left platform,
 # double jump toward the top one, nair when the strip's solid cell reaches
 # the gate. Defaults, no Jump Timing: the run and the jump on the frames
-# hero's Jump Timing pressed them (its LLFOLLOW lines). FILL IN: R = frames
-# from the start of the run to the double jump (the run goes off the edge
-# on the way).
+# hero's Jump Timing pressed them (its LLFOLLOW lines). 22 frames from the
+# start of the run to the double jump (the run goes off the edge on the way);
+# 20, 22 and 24 all land the nair AI on the top platform, 22 near its middle.
 script first-minute
 preset load Defaults
 start -50 27.2 right
@@ -186,7 +186,7 @@ start -50 27.2 right
 sync first-minute
 mark clip first-minute in
 15
-R s:1,0
+22 s:1,0
 1 X s:1,0
 ai 0 A
 land 120

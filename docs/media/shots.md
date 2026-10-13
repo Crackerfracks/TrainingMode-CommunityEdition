@@ -68,7 +68,7 @@ to the same frames.
 
 | File | Script (stage) | Page |
 |---|---|---|
-| cast/<fighter>.gif, 26 of them (Zelda and Sheik both), 320 px | cast-top or cast-side (landinglab_gif_cast.txt), whichever lands the fighter while still rising (Battlefield, one run per fighter) | a cast gallery in the README's collapsed section and guide/README.md |
+| cast/<fighter>.gif, 26 of them (Zelda and Sheik both), 320 px | cast-top, cast-side or cast-jt (landinglab_gif_cast.txt), whichever lands the fighter while still rising (Battlefield, one run per fighter) | a cast gallery in the README's collapsed section and guide/README.md |
 | cast/<fighter>-ledge.gif for the fighters with a ledge route | cast-ledge (landinglab_gif_cast.txt) | ledge.md, a collapsed "every fighter" section |
 
 A fighter whose clip can't show a rising AI is left out and listed, not

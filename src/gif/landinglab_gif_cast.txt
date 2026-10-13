@@ -3,11 +3,15 @@
 # aerial interrupt with nair onto the right platform from a full hop under
 # it, and one onto the top platform from a double jump; keep whichever
 # lands the fighter while still rising (trace on: vy > 0 on the landing),
-# and say which fighters neither works for. Then the ledge route, for the
+# and say which fighters neither works for. cast-jt is the hero's run: off
+# the left platform, Jump Timing planning the double jump and nair, for the
+# fighters the two fixed timings miss. Debug Log on so the trace and LLROUTE
+# lines reach the log after the script ends. Then the ledge route, for the
 # fighters that have one (no LLROUTE play line: none).
 autorun
 script cast-side
 preset load Defaults
+set Dev/Debug Log = 2
 start 38 0 right
 60
 trace on
@@ -23,6 +27,7 @@ trace off
 
 script cast-top
 preset load Defaults
+set Dev/Debug Log = 2
 start 0 0 right
 60
 trace on
@@ -38,8 +43,24 @@ land 120
 mark clip cast-top out
 trace off
 
+script cast-jt
+preset load Defaults
+set Dev/Debug Log = 2
+set Jump/Show = 1
+start -50 27.2 right
+90
+trace on
+sync cast-jt
+mark clip cast-jt in
+15
+follow 70 s:1,0
+30
+mark clip cast-jt out
+trace off
+
 script cast-ledge
 preset load Defaults
+set Dev/Debug Log = 2
 set Ledge/Keep Ledge Invincibility = 1
 ledge right
 sync cast-ledge

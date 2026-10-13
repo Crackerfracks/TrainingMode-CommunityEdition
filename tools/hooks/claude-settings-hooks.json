@@ -1,0 +1,10 @@
+{
+  "_comment": "Merged into ~/.claude/settings.json by tools/install.sh (KB_ROOT replaced by the real path).",
+  "SessionStart": [
+    {"matcher": "startup|resume|compact",
+     "hooks": [{"type": "command", "command": "python3 KB_ROOT/tools/kb hook session-start", "timeout": 10}]}
+  ],
+  "Stop": [
+    {"hooks": [{"type": "command", "command": "python3 KB_ROOT/tools/kb hook stop", "timeout": 10}]}
+  ]
+}

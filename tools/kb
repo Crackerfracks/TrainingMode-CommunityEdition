@@ -1,0 +1,932 @@
+#!/usr/bin/env python3
+"""kb: the shared knowledge base CLI.
+
+One store, plain Markdown, standard library only. It keeps:
+
+  incidents/   one file per problem an agent hit (open -> resolved), with the
+               agent's honest reasoning for the decision that caused it
+  insights/    the growing list of thinking-process corrections distilled
+               from incidents by the weekly RCA (scored, ExpeL-style)
+  rca/         weekly RCA inputs and reports
+  INDEX.md     generated indexes (the compact layer agents read first)
+
+Run `kb --help`, or read README.md and conventions/ for the protocol.
+Every command is safe to run from any directory; the store is found via
+$KB_ROOT, ~/kb, /mnt/project-files/kb, or the repo this script lives in.
+"""
+
+import argparse
+import datetime as dt
+import json
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+VERSION = "0.1.0"
+
+STATUSES = ("open", "resolved", "wontfix", "duplicate")
+SIZES = ("simple", "nuanced")
+IMPACTS = ("minor", "moderate", "major")
+SECTIONS = {
+    # key: heading. Order matters: it is the order in the file.
+    "what": "What happened",
+    "expected": "What I expected or assumed",
+    "reasoning": "The decision that led here, and my honest reasoning at the time",
+    "resolution": "Resolution",
+    "lesson": "Candidate lesson",
+    "rca": "RCA",
+}
+PLACEHOLDERS = {
+    "what": "_Fill in: the observable problem, with the command/file/message involved._",
+    "expected": "_Fill in: what you assumed would happen, and why that seemed safe._",
+    "reasoning": (
+        "_Fill in before resolving: the decision that caused this and your honest, "
+        "educated best guess at why it felt right at the time. Required for RCA. "
+        "Write `DEFER: <why>` if you truly cannot yet._"
+    ),
+    "resolution": "_Fill in: what fixed it, or why it stays open / won't be fixed._",
+    "lesson": "_Optional: one line, the thinking correction you would propose._",
+    "rca": "_Filled by the weekly review._",
+}
+INDEX_LINE_CAP = 60          # max entries in a generated index before it points to the rest
+INSIGHT_START_WEIGHT = 2     # ExpeL: new insight starts at 2, removed at 0
+
+
+# ---------------------------------------------------------------- utilities
+
+def now_utc():
+    return dt.datetime.now(dt.timezone.utc)
+
+
+def stamp(t=None):
+    return (t or now_utc()).strftime("%Y-%m-%dT%H:%MZ")
+
+
+def iso_week(d=None):
+    d = d or now_utc().date()
+    y, w, _ = d.isocalendar()
+    return f"{y}-W{w:02d}"
+
+
+def week_bounds(week):
+    """Monday and Sunday (dates) of an ISO week id like 2026-W42."""
+    m = re.fullmatch(r"(\d{4})-W(\d{2})", week)
+    if not m:
+        sys.exit(f"kb: bad week id {week!r} (want YYYY-Www)")
+    monday = dt.date.fromisocalendar(int(m.group(1)), int(m.group(2)), 1)
+    return monday, monday + dt.timedelta(days=6)
+
+
+def slugify(text, limit=48):
+    s = re.sub(r"[^a-z0-9]+", "-", text.lower()).strip("-")
+    return s[:limit].rstrip("-") or "untitled"
+
+
+def find_root():
+    cands = []
+    if os.environ.get("KB_ROOT"):
+        cands.append(Path(os.environ["KB_ROOT"]).expanduser())
+    cands += [Path.home() / "kb", Path("/mnt/project-files/kb"),
+              Path(__file__).resolve().parent.parent]
+    for c in cands:
+        if (c / "incidents").is_dir() and (c / "insights").is_dir():
+            return c
+    sys.exit("kb: no knowledge base found. Set KB_ROOT, or create ~/kb (see README.md).")
+
+
+ROOT = None  # set in main()
+
+
+def rel(p):
+    try:
+        return str(Path(p).resolve().relative_to(ROOT.resolve()))
+    except ValueError:
+        return str(p)
+
+
+def read(p):
+    return Path(p).read_text(encoding="utf-8")
+
+
+def write(p, text):
+    p = Path(p)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    os.replace(tmp, p)
+
+
+def guess_agent():
+    if os.environ.get("KB_AGENT"):
+        return os.environ["KB_AGENT"]
+    if os.environ.get("CLAUDECODE") or os.environ.get("CLAUDE_CODE_SESSION_ID") or os.environ.get("CLAUDE_SESSION_ID"):
+        return "claude-code"
+    if os.environ.get("CODEX_SANDBOX") or os.environ.get("CODEX_HOME"):
+        return "codex"
+    if Path("/mnt/project-files").is_dir():
+        return "claude-cloud"
+    return "unknown"
+
+
+def guess_session():
+    for k in ("KB_SESSION", "CLAUDE_SESSION_ID", "CLAUDE_CODE_SESSION_ID", "CODEX_SESSION_ID"):
+        if os.environ.get(k):
+            return os.environ[k]
+    return ""
+
+
+# ------------------------------------------------------- frontmatter + files
+
+def parse_front(text):
+    """Return (meta dict, body). Minimal YAML: `key: value`, lists as [a, b]."""
+    if not text.startswith("---\n"):
+        return {}, text
+    end = text.find("\n---\n", 4)
+    if end < 0:
+        return {}, text
+    meta = {}
+    for line in text[4:end].splitlines():
+        if ":" not in line or line.startswith("#"):
+            continue
+        k, v = line.split(":", 1)
+        v = v.strip()
+        if v.startswith("[") and v.endswith("]"):
+            v = [x.strip().strip("'\"") for x in v[1:-1].split(",") if x.strip()]
+        else:
+            v = v.strip("'\"")
+        meta[k.strip()] = v
+    return meta, text[end + 5:]
+
+
+def dump_front(meta):
+    out = ["---"]
+    for k, v in meta.items():
+        if isinstance(v, list):
+            v = "[" + ", ".join(v) + "]"
+        out.append(f"{k}: {v}")
+    out.append("---")
+    return "\n".join(out) + "\n"
+
+
+def split_sections(body):
+    """Return ordered {heading: text} for `## ` sections; '' key for preamble."""
+    parts, cur, buf = {}, "", []
+    for line in body.splitlines():
+        if line.startswith("## "):
+            parts[cur] = "\n".join(buf).strip("\n")
+            cur, buf = line[3:].strip(), []
+        else:
+            buf.append(line)
+    parts[cur] = "\n".join(buf).strip("\n")
+    return parts
+
+
+def join_sections(parts):
+    out = []
+    if parts.get(""):
+        out.append(parts[""].rstrip() + "\n")
+    for h, t in parts.items():
+        if h == "":
+            continue
+        out.append(f"## {h}\n{t.rstrip()}\n")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def section_filled(text):
+    lines = [l for l in (text or "").splitlines() if l.strip() and not l.strip().startswith("_Fill") and not l.strip().startswith("_Optional") and not l.strip().startswith("_Filled")]
+    return bool(lines)
+
+
+# ---------------------------------------------------------------- incidents
+
+class Incident:
+    def __init__(self, path):
+        self.path = Path(path)
+        self.meta, body = parse_front(read(path))
+        self.sections = split_sections(body)
+
+    @property
+    def id(self):
+        return self.meta.get("id", self.path.stem)
+
+    def section(self, key):
+        return self.sections.get(SECTIONS[key], "")
+
+    def set_section(self, key, text, append=False):
+        h = SECTIONS[key]
+        old = self.sections.get(h, "")
+        if append and section_filled(old):
+            self.sections[h] = old.rstrip() + "\n\n" + text.strip()
+        else:
+            self.sections[h] = text.strip()
+
+    def has(self, key):
+        return section_filled(self.section(key))
+
+    def reasoning_deferred(self):
+        return self.section("reasoning").strip().upper().startswith("DEFER:")
+
+    def save(self):
+        write(self.path, dump_front(self.meta) + "\n" + join_sections(self.sections))
+
+    def opened_date(self):
+        try:
+            return dt.datetime.strptime(self.meta.get("opened", ""), "%Y-%m-%dT%H:%MZ").date()
+        except ValueError:
+            return self.path.stat().st_mtime and dt.date.fromtimestamp(self.path.stat().st_mtime)
+
+    def tags(self):
+        t = self.meta.get("tags", [])
+        return t if isinstance(t, list) else [x.strip() for x in str(t).split(",") if x.strip()]
+
+    def one_line(self):
+        return (f"{self.id} · {self.meta.get('status','?')} · {self.meta.get('size','?')} · "
+                f"{self.meta.get('project','-')} · {', '.join(self.tags()) or '-'} · "
+                f"{self.meta.get('title','(untitled)')}")
+
+
+def all_incidents():
+    files = sorted((ROOT / "incidents").rglob("INC-*.md"))
+    return [Incident(f) for f in files]
+
+
+def find_incident(ident):
+    ident = ident.strip()
+    hits = [i for i in all_incidents() if i.id == ident or i.id.startswith(ident) or i.path.stem.startswith(ident)]
+    if not hits:
+        sys.exit(f"kb: no incident matches {ident!r}")
+    if len(hits) > 1 and not any(i.id == ident for i in hits):
+        sys.exit("kb: ambiguous id, matches: " + ", ".join(i.id for i in hits))
+    return next((i for i in hits if i.id == ident), hits[0])
+
+
+def next_incident_id(day):
+    prefix = f"INC-{day:%Y%m%d}-"
+    n = sum(1 for f in (ROOT / "incidents").rglob(prefix + "*.md"))
+    return f"{prefix}{n + 1:03d}"
+
+
+def cmd_new(a):
+    day = now_utc()
+    iid = next_incident_id(day)
+    path = ROOT / "incidents" / f"{day:%Y}" / f"{iid}-{slugify(a.title)}.md"
+    meta = {
+        "id": iid, "title": a.title, "status": "open", "opened": stamp(day), "resolved": "",
+        "agent": a.agent or guess_agent(), "model": a.model or os.environ.get("KB_MODEL", "unknown"),
+        "session": a.session or guess_session(), "project": a.project or os.environ.get("KB_PROJECT", "-"),
+        "tags": [t.strip() for t in (a.tags or "").split(",") if t.strip()],
+        "size": a.size, "impact": a.impact, "rca": "",
+    }
+    sections = {"": ""}
+    given = {"what": a.what, "expected": a.expected, "reasoning": a.reasoning,
+             "resolution": None, "lesson": a.lesson, "rca": None}
+    for key, heading in SECTIONS.items():
+        sections[heading] = (given.get(key) or PLACEHOLDERS[key]).strip()
+    write(path, dump_front(meta) + "\n" + join_sections(sections))
+    regen_indexes()
+    print(f"{iid}  {rel(path)}")
+    missing = [k for k in ("what", "reasoning") if not given.get(k)]
+    if missing:
+        print("fill in: " + ", ".join(missing) + f"   (kb note {iid} --section reasoning \"...\")")
+
+
+def cmd_note(a):
+    inc = find_incident(a.id)
+    inc.set_section(a.section, a.text, append=a.append)
+    inc.save()
+    regen_indexes()
+    print(f"{inc.id}: {a.section} updated")
+
+
+def cmd_resolve(a):
+    inc = find_incident(a.id)
+    if a.reasoning:
+        inc.set_section("reasoning", a.reasoning)
+    if a.resolution:
+        inc.set_section("resolution", a.resolution)
+    if a.lesson:
+        inc.set_section("lesson", a.lesson)
+    if not inc.has("reasoning") and not a.force:
+        sys.exit(f"kb: {inc.id} has no 'decision and reasoning' section yet. Add it with\n"
+                 f"  kb resolve {inc.id} --reasoning \"<honest best guess at why the decision felt right>\" ...\n"
+                 f"or, if you are closing someone else's incident, pass --force (the RCA will treat it as unexplained).")
+    if not inc.has("resolution"):
+        sys.exit(f"kb: give --resolution \"what fixed it / why it stays as is\" for {inc.id}")
+    inc.meta["status"] = a.status
+    inc.meta["resolved"] = stamp()
+    if a.duplicate_of:
+        inc.meta["status"] = "duplicate"
+        inc.meta["duplicate_of"] = a.duplicate_of
+    if a.size:
+        inc.meta["size"] = a.size
+    if a.tags:
+        inc.meta["tags"] = sorted(set(inc.tags()) | {t.strip() for t in a.tags.split(",") if t.strip()})
+    inc.save()
+    regen_indexes()
+    print(f"{inc.id}: {inc.meta['status']}" + ("" if inc.has("reasoning") else "  (reasoning missing, forced)"))
+
+
+def cmd_reopen(a):
+    inc = find_incident(a.id)
+    inc.meta["status"], inc.meta["resolved"] = "open", ""
+    if a.why:
+        inc.set_section("resolution", "Reopened: " + a.why, append=True)
+    inc.save()
+    regen_indexes()
+    print(f"{inc.id}: open")
+
+
+def cmd_show(a):
+    inc = find_incident(a.id)
+    print(read(inc.path))
+
+
+def cmd_path(a):
+    print(find_incident(a.id).path)
+
+
+def filter_incidents(a):
+    incs = all_incidents()
+    if getattr(a, "open", False):
+        incs = [i for i in incs if i.meta.get("status") == "open"]
+    if getattr(a, "status", None):
+        incs = [i for i in incs if i.meta.get("status") == a.status]
+    if getattr(a, "project", None):
+        incs = [i for i in incs if i.meta.get("project") == a.project]
+    if getattr(a, "tag", None):
+        incs = [i for i in incs if a.tag in i.tags()]
+    if getattr(a, "week", None):
+        lo, hi = week_bounds(a.week)
+        incs = [i for i in incs if lo <= i.opened_date() <= hi]
+    if getattr(a, "missing_reasoning", False):
+        incs = [i for i in incs if not i.has("reasoning")]
+    if getattr(a, "session", None):
+        incs = [i for i in incs if i.meta.get("session") == a.session]
+    return incs
+
+
+def cmd_list(a):
+    incs = filter_incidents(a)
+    if a.json:
+        print(json.dumps([dict(i.meta, path=rel(i.path), reasoning=i.has("reasoning")) for i in incs], indent=1))
+        return
+    for i in incs:
+        print(i.one_line())
+    if not incs:
+        print("(no incidents match)")
+
+
+def todo_items(session=None):
+    """What still needs an agent's hand: open incidents and resolved-but-unexplained ones."""
+    out = []
+    for i in all_incidents():
+        if session and i.meta.get("session") != session:
+            continue
+        need = []
+        if i.meta.get("status") == "open":
+            need.append("open")
+        if not i.has("reasoning"):
+            need.append("reasoning missing")
+        elif i.reasoning_deferred():
+            need.append("reasoning deferred")
+        if need:
+            out.append((i, need))
+    return out
+
+
+def cmd_todo(a):
+    items = todo_items(a.session)
+    if a.json:
+        print(json.dumps([{"id": i.id, "title": i.meta.get("title"), "needs": n, "path": rel(i.path)} for i, n in items]))
+        return
+    if not items:
+        print("kb: nothing pending")
+    for i, need in items:
+        print(f"{i.id} [{', '.join(need)}] {i.meta.get('title')}  -> {rel(i.path)}")
+
+
+# ----------------------------------------------------------------- insights
+
+INSIGHT_RE = re.compile(r"^## (I-\d{4}) (.+)$")
+
+
+class Insight:
+    def __init__(self, iid, title, file):
+        self.id, self.title, self.file = iid, title, file
+        self.meta = {}
+        self.body = ""
+
+    @classmethod
+    def parse_all(cls, path):
+        """Entries are `## I-0001 Title`, then `- key: value` lines, then free text."""
+        out, cur, body = [], None, []
+        for line in read(path).splitlines():
+            m = INSIGHT_RE.match(line)
+            if m:
+                if cur:
+                    cur.body = "\n".join(body).strip("\n")
+                    out.append(cur)
+                cur, body = cls(m.group(1), m.group(2).strip(), path), []
+                continue
+            if cur is None:
+                continue
+            mm = re.match(r"^- (\w+): ?(.*)$", line)
+            if mm and not body:
+                cur.meta[mm.group(1)] = mm.group(2).strip()
+            else:
+                body.append(line)
+        if cur:
+            cur.body = "\n".join(body).strip("\n")
+            out.append(cur)
+        return out
+
+    @property
+    def weight(self):
+        try:
+            return int(self.meta.get("weight", INSIGHT_START_WEIGHT))
+        except ValueError:
+            return INSIGHT_START_WEIGHT
+
+    def tags(self):
+        return [t.strip() for t in self.meta.get("tags", "").split(",") if t.strip()]
+
+    def render(self):
+        out = [f"## {self.id} {self.title}"]
+        for k in ("tags", "weight", "status", "added", "evidence", "history"):
+            if k in self.meta:
+                out.append(f"- {k}: {self.meta[k]}")
+        out.append("")
+        out.append(self.body.strip())
+        return "\n".join(out) + "\n"
+
+
+def insight_files():
+    return sorted(p for p in (ROOT / "insights").glob("*.md") if p.name != "INDEX.md")
+
+
+def all_insights():
+    out = []
+    for f in insight_files():
+        out += Insight.parse_all(f)
+    return out
+
+
+def write_insight_file(path, entries, preamble=None):
+    text = read(path) if path.exists() else ""
+    head = text.split("\n## I-", 1)[0].rstrip("\n") if text else (preamble or f"# Insights: {path.stem}\n")
+    write(path, head.rstrip("\n") + "\n\n" + "\n".join(e.render() for e in entries))
+
+
+def find_insight(iid):
+    for f in insight_files():
+        ents = Insight.parse_all(f)
+        for e in ents:
+            if e.id == iid:
+                return e, ents, f
+    sys.exit(f"kb: no insight {iid}")
+
+
+def next_insight_id():
+    ids = [int(e.id[2:]) for e in all_insights()]
+    return f"I-{(max(ids) + 1 if ids else 1):04d}"
+
+
+def cmd_insight_add(a):
+    f = ROOT / "insights" / f"{a.domain}.md"
+    ents = Insight.parse_all(f) if f.exists() else []
+    e = Insight(next_insight_id(), a.title, f)
+    e.meta = {"tags": a.tags or a.domain, "weight": str(INSIGHT_START_WEIGHT), "status": "active",
+              "added": iso_week(), "evidence": a.evidence or "", "history": f"{iso_week()} add"}
+    e.body = f"**Correction.** {a.correction.strip()}\n\n**Faulty pattern it replaces.** {a.pattern.strip()}"
+    if a.applies:
+        e.body += f"\n\n**Applies when.** {a.applies.strip()}"
+    ents.append(e)
+    write_insight_file(f, ents)
+    regen_indexes()
+    print(f"{e.id}  {rel(f)}")
+
+
+def _bump(a, delta, verb):
+    e, ents, f = find_insight(a.id)
+    e.meta["weight"] = str(e.weight + delta)
+    if a.evidence:
+        have = [x.strip() for x in e.meta.get("evidence", "").split(",") if x.strip()]
+        e.meta["evidence"] = ", ".join(have + [x for x in a.evidence.split(",") if x.strip() not in have])
+    e.meta["history"] = (e.meta.get("history", "") + f"; {iso_week()} {verb}" + (f" ({a.evidence})" if a.evidence else "") + (f": {a.why}" if getattr(a, 'why', None) else "")).strip("; ")
+    if e.weight <= 0:
+        e.meta["status"] = "retired"
+    write_insight_file(f, ents)
+    regen_indexes()
+    print(f"{e.id}: weight {e.weight} ({e.meta['status']})")
+
+
+def cmd_insight_upvote(a):
+    _bump(a, +1, "upvote")
+
+
+def cmd_insight_downvote(a):
+    _bump(a, -1, "downvote")
+
+
+def cmd_insight_edit(a):
+    e, ents, f = find_insight(a.id)
+    if a.title:
+        e.title = a.title
+    if a.tags:
+        e.meta["tags"] = a.tags
+    if a.correction or a.pattern or a.applies:
+        parts = {"Correction": None, "Faulty pattern it replaces": None, "Applies when": None}
+        for m in re.finditer(r"\*\*(Correction|Faulty pattern it replaces|Applies when)\.\*\* (.*?)(?=\n\n\*\*|\Z)", e.body, re.S):
+            parts[m.group(1)] = m.group(2).strip()
+        if a.correction:
+            parts["Correction"] = a.correction
+        if a.pattern:
+            parts["Faulty pattern it replaces"] = a.pattern
+        if a.applies:
+            parts["Applies when"] = a.applies
+        e.body = "\n\n".join(f"**{k}.** {v}" for k, v in parts.items() if v)
+    e.meta["weight"] = str(e.weight + 1)  # ExpeL: an edit counts as a confirmation
+    e.meta["history"] = (e.meta.get("history", "") + f"; {iso_week()} edit" + (f": {a.why}" if a.why else "")).strip("; ")
+    write_insight_file(f, ents)
+    regen_indexes()
+    print(f"{e.id}: edited, weight {e.weight}")
+
+
+def cmd_insight_retire(a):
+    e, ents, f = find_insight(a.id)
+    e.meta["status"] = "retired"
+    e.meta["history"] = (e.meta.get("history", "") + f"; {iso_week()} retired: {a.why}").strip("; ")
+    write_insight_file(f, ents)
+    regen_indexes()
+    print(f"{e.id}: retired")
+
+
+def cmd_insight_list(a):
+    ents = all_insights()
+    if a.tag:
+        ents = [e for e in ents if a.tag in e.tags()]
+    if not a.all:
+        ents = [e for e in ents if e.meta.get("status", "active") == "active"]
+    ents.sort(key=lambda e: (-e.weight, e.id))
+    if a.json:
+        print(json.dumps([dict(id=e.id, title=e.title, file=rel(e.file), **e.meta) for e in ents], indent=1))
+        return
+    for e in ents:
+        print(f"{e.id} (w{e.weight}; {e.meta.get('tags','')}) {e.title}  -> {rel(e.file)}")
+
+
+# ------------------------------------------------------------------ indexes
+
+def regen_indexes():
+    regen_incident_index()
+    regen_insight_index()
+    regen_rca_index()
+
+
+def regen_incident_index():
+    incs = all_incidents()
+    open_ = [i for i in incs if i.meta.get("status") == "open"]
+    unreviewed = [i for i in incs if i.meta.get("status") != "open" and not i.meta.get("rca")]
+    unexplained = [i for i in incs if not i.has("reasoning") or i.reasoning_deferred()]
+    lines = ["# Incidents index (generated by `kb index`; do not edit)", "",
+             f"Total {len(incs)} · open {len(open_)} · resolved awaiting RCA {len(unreviewed)} · "
+             f"missing or deferred reasoning {len(unexplained)}",
+             "", "Read an incident only when you need it: `kb show INC-...`. Log a new one: `kb new \"title\" ...`.", ""]
+
+    def block(title, items):
+        if not items:
+            return
+        lines.append(f"## {title} ({len(items)})")
+        for i in items[:INDEX_LINE_CAP]:
+            lines.append(f"- {i.one_line()} → {rel(i.path)}")
+        if len(items) > INDEX_LINE_CAP:
+            lines.append(f"- … {len(items) - INDEX_LINE_CAP} more: `kb list --open` / `kb list --json`")
+        lines.append("")
+
+    block("Open", sorted(open_, key=lambda i: i.id, reverse=True))
+    block("Resolved, awaiting weekly RCA", sorted(unreviewed, key=lambda i: i.id, reverse=True))
+    block("Reasoning missing or deferred", sorted(unexplained, key=lambda i: i.id, reverse=True))
+    # counts by week, newest first, last 12 weeks
+    byweek = {}
+    for i in incs:
+        byweek.setdefault(iso_week(i.opened_date()), []).append(i)
+    if byweek:
+        lines.append("## By week")
+        for w in sorted(byweek, reverse=True)[:12]:
+            ws = byweek[w]
+            tags = {}
+            for i in ws:
+                for t in i.tags():
+                    tags[t] = tags.get(t, 0) + 1
+            top = ", ".join(f"{t}×{n}" for t, n in sorted(tags.items(), key=lambda x: -x[1])[:5])
+            lines.append(f"- {w}: {len(ws)} incidents ({top or 'untagged'})  `kb list --week {w}`")
+        lines.append("")
+    write(ROOT / "incidents" / "INDEX.md", "\n".join(lines))
+
+
+def regen_insight_index():
+    ents = [e for e in all_insights() if e.meta.get("status", "active") == "active"]
+    ents.sort(key=lambda e: (-e.weight, e.meta.get("added", ""), e.id))
+    files = insight_files()
+    lines = ["# Insights (generated by `kb index`; the always-on list, edit the domain files instead)", "",
+             "Each line is a thinking-process correction distilled from logged incidents. Weight = how many",
+             "incidents backed it (ExpeL scoring: new = 2, +1 per confirmation, -1 per contradiction, retired at 0).",
+             "Read the full entry (correction, faulty pattern, evidence) in the domain file when it applies to your task.",
+             ""]
+    for e in ents[:INDEX_LINE_CAP]:
+        lines.append(f"- {e.id} (w{e.weight}; {e.meta.get('tags','')}) {e.title} → {rel(e.file)}#{e.id.lower()}")
+    if len(ents) > INDEX_LINE_CAP:
+        lines.append(f"- … {len(ents) - INDEX_LINE_CAP} more, lower weight: `kb insight list`")
+    lines += ["", "## Domain files"]
+    for f in files:
+        n = len([e for e in Insight.parse_all(f) if e.meta.get("status", "active") == "active"])
+        lines.append(f"- {rel(f)} ({n} active)")
+    write(ROOT / "insights" / "INDEX.md", "\n".join(lines) + "\n")
+
+
+def regen_rca_index():
+    reports = sorted((ROOT / "rca").glob("*.md"), reverse=True)
+    lines = ["# Weekly RCA reports (generated by `kb index`)", ""]
+    for r in reports:
+        if r.name == "INDEX.md" or r.name.endswith(".input.md"):
+            continue
+        first = next((l.lstrip("# ").strip() for l in read(r).splitlines() if l.strip()), r.stem)
+        lines.append(f"- {r.stem}: {first} → {rel(r)}")
+    inputs = [r for r in reports if r.name.endswith(".input.md")]
+    if inputs:
+        lines += ["", "Prepared inputs (delete after the report is written): " + ", ".join(rel(r) for r in inputs)]
+    write(ROOT / "rca" / "INDEX.md", "\n".join(lines) + "\n")
+
+
+def cmd_index(a):
+    regen_indexes()
+    print("indexes regenerated")
+
+
+# --------------------------------------------------------------------- RCA
+
+def cmd_rca_prepare(a):
+    week = a.week or iso_week()
+    lo, hi = week_bounds(week)
+    incs = [i for i in all_incidents() if not i.meta.get("rca") and i.opened_date() <= hi]
+    if a.include_open is False:
+        incs = [i for i in incs if i.meta.get("status") != "open"]
+    simple = [i for i in incs if i.meta.get("size") != "nuanced"]
+    nuanced = [i for i in incs if i.meta.get("size") == "nuanced"]
+    out = [f"# RCA input for {week} ({lo} to {hi})", "",
+           f"{len(incs)} incidents not yet reviewed: {len(simple)} simple, {len(nuanced)} nuanced. "
+           f"Open ones are included; treat missing reasoning as a finding in itself.", "",
+           "Procedure: skills/kb-rca/SKILL.md. Current insights: insights/INDEX.md (read the domain files you touch).", ""]
+    for title, items in (("Simple misses (short RCA each)", simple), ("Nuanced (full RCA each)", nuanced)):
+        out.append(f"## {title} ({len(items)})")
+        out.append("")
+        for i in items:
+            out.append(f"### {i.one_line()}")
+            out.append(f"file: {rel(i.path)}")
+            out.append("")
+            for key, heading in SECTIONS.items():
+                if key == "rca":
+                    continue
+                txt = i.section(key)
+                out.append(f"**{heading}:** " + (txt.strip() if section_filled(txt) else "(empty)"))
+            out.append("")
+    path = ROOT / "rca" / f"{week}.input.md"
+    write(path, "\n".join(out))
+    ids = [i.id for i in incs]
+    (ROOT / ".state").mkdir(exist_ok=True)
+    write(ROOT / ".state" / f"rca-{week}.json", json.dumps({"week": week, "ids": ids}))
+    regen_indexes()
+    print(f"{rel(path)}: {len(incs)} incidents ({len(simple)} simple, {len(nuanced)} nuanced)")
+    for i in ids:
+        print(i)
+
+
+def cmd_rca_mark(a):
+    week = a.week or iso_week()
+    ids = a.ids
+    if a.prepared:
+        st = ROOT / ".state" / f"rca-{week}.json"
+        if not st.exists():
+            sys.exit(f"kb: no prepared batch for {week}; run `kb rca prepare --week {week}` first")
+        ids = json.loads(read(st))["ids"]
+    n = 0
+    for ident in ids:
+        inc = find_incident(ident)
+        inc.meta["rca"] = week
+        inc.save()
+        n += 1
+    inp = ROOT / "rca" / f"{week}.input.md"
+    if inp.exists() and (ROOT / "rca" / f"{week}.md").exists():
+        inp.unlink()
+    regen_indexes()
+    print(f"{n} incidents marked reviewed in {week}")
+
+
+# ------------------------------------------------------------------- hooks
+
+def hook_input():
+    try:
+        return json.load(sys.stdin) if not sys.stdin.isatty() else {}
+    except (json.JSONDecodeError, ValueError):
+        return {}
+
+
+def cmd_hook_session_start(a):
+    data = hook_input()
+    items = todo_items()
+    open_n = sum(1 for i, n in items if "open" in n)
+    missing = [i for i, n in items if "reasoning missing" in n or "reasoning deferred" in n]
+    ents = [e for e in all_insights() if e.meta.get("status", "active") == "active"]
+    ents.sort(key=lambda e: (-e.weight, e.id))
+    parts = [f"kb ({ROOT}): {open_n} open incidents, {len(missing)} with reasoning missing or deferred"
+             + (": " + ", ".join(i.id for i in missing[:6]) if missing else "") + ".",
+             "Log any problem that costs you more than one attempt: `kb new \"title\" --tags a,b --what \"...\"`; "
+             "resolve it with `kb resolve ID --reasoning \"...\" --resolution \"...\"`."]
+    if ents:
+        parts.append("Top insights (full list: insights/INDEX.md): " + " | ".join(f"{e.id} {e.title}" for e in ents[:5]))
+    if data.get("source") == "compact":
+        parts.append("Context was compacted: path-scoped rules are unloaded until you touch matching files again; "
+                     "re-read the relevant INDEX.md before continuing.")
+    print(json.dumps({"hookSpecificOutput": {"hookEventName": "SessionStart", "additionalContext": " ".join(parts)}}))
+
+
+def cmd_hook_stop(a):
+    data = hook_input()
+    if data.get("stop_hook_active"):
+        return
+    session = data.get("session_id") or guess_session()
+    if not session:
+        return
+    items = [(i, n) for i, n in todo_items(session) if "reasoning missing" in n]
+    if not items:
+        return
+    marker = ROOT / ".state" / "nudged" / session
+    done = set(read(marker).split()) if marker.exists() else set()
+    fresh = [i for i, n in items if i.id not in done]
+    if not fresh:
+        return
+    marker.parent.mkdir(parents=True, exist_ok=True)
+    write(marker, "\n".join(sorted(done | {i.id for i in fresh})))
+    ids = ", ".join(i.id for i in fresh)
+    print(json.dumps({"decision": "block", "reason":
+        f"kb: you logged {ids} this session without the 'decision and reasoning' section. Before stopping, add your "
+        f"honest best guess at why the decision felt right at the time: `kb note {fresh[0].id} --section reasoning \"...\"` "
+        f"(or `DEFER: <why>` if you truly cannot yet). This is a one-time reminder."}))
+
+
+# -------------------------------------------------------------------- misc
+
+def cmd_sync(a):
+    git = ["git", "-C", str(ROOT)]
+    if not (ROOT / ".git").exists():
+        print("kb: not a git repo; nothing to sync")
+        return
+    subprocess.run(git + ["add", "-A"], check=False)
+    msg = a.message or f"kb: update {stamp()} ({guess_agent()})"
+    r = subprocess.run(git + ["commit", "-qm", msg], capture_output=True, text=True)
+    committed = r.returncode == 0
+    remotes = subprocess.run(git + ["remote"], capture_output=True, text=True).stdout.split()
+    if not remotes:
+        print("kb: committed locally" if committed else "kb: nothing to commit", "(no remote configured)")
+        return
+    pull = subprocess.run(git + ["pull", "--rebase", "-q"], capture_output=True, text=True)
+    push = subprocess.run(git + ["push", "-q"], capture_output=True, text=True)
+    status = "synced" if pull.returncode == 0 and push.returncode == 0 else "sync problem"
+    print(f"kb: {status}" + ("" if status == "synced" else "\n" + (pull.stderr + push.stderr).strip()))
+    if status != "synced":
+        sys.exit(1)
+
+
+def cmd_lint(a):
+    problems = []
+    known = set()
+    tagfile = ROOT / "conventions" / "tags.md"
+    if tagfile.exists():
+        known = {m.group(1) for m in re.finditer(r"^- `([a-z0-9-]+)`", read(tagfile), re.M)}
+    for i in all_incidents():
+        for k in ("id", "title", "status", "opened", "agent", "project", "size", "impact"):
+            if not i.meta.get(k):
+                problems.append(f"{rel(i.path)}: missing {k}")
+        if i.meta.get("status") not in STATUSES:
+            problems.append(f"{i.id}: bad status {i.meta.get('status')!r}")
+        if i.meta.get("size") not in SIZES:
+            problems.append(f"{i.id}: bad size {i.meta.get('size')!r}")
+        if i.meta.get("status") != "open" and not i.has("reasoning"):
+            problems.append(f"{i.id}: resolved without reasoning")
+        for t in i.tags():
+            if known and t not in known:
+                problems.append(f"{i.id}: unknown tag `{t}` (add it to conventions/tags.md or rename)")
+    seen = set()
+    for e in all_insights():
+        if e.id in seen:
+            problems.append(f"{e.id}: duplicate insight id")
+        seen.add(e.id)
+        if "**Correction.**" not in e.body:
+            problems.append(f"{e.id}: no **Correction.** paragraph")
+    for idx in ROOT.rglob("INDEX.md"):
+        n = len(read(idx).splitlines())
+        if n > 120:
+            problems.append(f"{rel(idx)}: {n} lines; indexes should stay under ~120 (split the directory)")
+    for p in problems:
+        print(p)
+    print(f"kb lint: {len(problems)} problem(s)")
+    sys.exit(1 if problems else 0)
+
+
+def cmd_where(a):
+    print(ROOT)
+
+
+def cmd_week(a):
+    d = dt.date.fromisoformat(a.date) if a.date else None
+    print(iso_week(d))
+
+
+# -------------------------------------------------------------------- main
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="kb", description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument("--version", action="version", version=VERSION)
+    sub = p.add_subparsers(dest="cmd", required=True)
+
+    s = sub.add_parser("new", help="log a new incident (a problem you hit)")
+    s.add_argument("title")
+    s.add_argument("--tags", help="comma-separated, see conventions/tags.md")
+    s.add_argument("--project")
+    s.add_argument("--size", choices=SIZES, default="simple", help="simple miss or nuanced issue (sets RCA depth)")
+    s.add_argument("--impact", choices=IMPACTS, default="minor")
+    s.add_argument("--agent"); s.add_argument("--model"); s.add_argument("--session")
+    s.add_argument("--what", help="what happened"); s.add_argument("--expected")
+    s.add_argument("--reasoning", help="decision + honest reasoning at the time (can come later)")
+    s.add_argument("--lesson")
+    s.set_defaults(fn=cmd_new)
+
+    s = sub.add_parser("note", help="fill or append a section of an incident")
+    s.add_argument("id"); s.add_argument("--section", choices=list(SECTIONS), required=True)
+    s.add_argument("text"); s.add_argument("--append", action="store_true")
+    s.set_defaults(fn=cmd_note)
+
+    s = sub.add_parser("resolve", help="close an incident (requires reasoning + resolution)")
+    s.add_argument("id"); s.add_argument("--resolution"); s.add_argument("--reasoning"); s.add_argument("--lesson")
+    s.add_argument("--status", choices=("resolved", "wontfix"), default="resolved")
+    s.add_argument("--duplicate-of"); s.add_argument("--size", choices=SIZES); s.add_argument("--tags")
+    s.add_argument("--force", action="store_true", help="close without reasoning (someone else's incident)")
+    s.set_defaults(fn=cmd_resolve)
+
+    s = sub.add_parser("reopen"); s.add_argument("id"); s.add_argument("--why"); s.set_defaults(fn=cmd_reopen)
+    s = sub.add_parser("show", help="print an incident"); s.add_argument("id"); s.set_defaults(fn=cmd_show)
+    s = sub.add_parser("path"); s.add_argument("id"); s.set_defaults(fn=cmd_path)
+
+    s = sub.add_parser("list", help="list incidents")
+    s.add_argument("--open", action="store_true"); s.add_argument("--status", choices=STATUSES)
+    s.add_argument("--project"); s.add_argument("--tag"); s.add_argument("--week"); s.add_argument("--session")
+    s.add_argument("--missing-reasoning", action="store_true"); s.add_argument("--json", action="store_true")
+    s.set_defaults(fn=cmd_list)
+
+    s = sub.add_parser("todo", help="open incidents and ones missing reasoning")
+    s.add_argument("--session"); s.add_argument("--json", action="store_true"); s.set_defaults(fn=cmd_todo)
+
+    s = sub.add_parser("insight", help="maintain the insights list (ExpeL-style ops)")
+    ss = s.add_subparsers(dest="icmd", required=True)
+    t = ss.add_parser("add"); t.add_argument("--title", required=True); t.add_argument("--domain", default="core", help="insights/<domain>.md")
+    t.add_argument("--tags"); t.add_argument("--correction", required=True); t.add_argument("--pattern", required=True)
+    t.add_argument("--applies"); t.add_argument("--evidence", help="comma-separated incident ids"); t.set_defaults(fn=cmd_insight_add)
+    for name, fn in (("upvote", cmd_insight_upvote), ("downvote", cmd_insight_downvote)):
+        t = ss.add_parser(name); t.add_argument("id"); t.add_argument("--evidence"); t.add_argument("--why"); t.set_defaults(fn=fn)
+    t = ss.add_parser("edit"); t.add_argument("id"); t.add_argument("--title"); t.add_argument("--tags")
+    t.add_argument("--correction"); t.add_argument("--pattern"); t.add_argument("--applies"); t.add_argument("--why"); t.set_defaults(fn=cmd_insight_edit)
+    t = ss.add_parser("retire"); t.add_argument("id"); t.add_argument("--why", required=True); t.set_defaults(fn=cmd_insight_retire)
+    t = ss.add_parser("list"); t.add_argument("--tag"); t.add_argument("--all", action="store_true"); t.add_argument("--json", action="store_true"); t.set_defaults(fn=cmd_insight_list)
+
+    s = sub.add_parser("rca", help="weekly review helpers")
+    ss = s.add_subparsers(dest="rcmd", required=True)
+    t = ss.add_parser("prepare", help="bundle unreviewed incidents into rca/<week>.input.md")
+    t.add_argument("--week"); t.add_argument("--no-open", dest="include_open", action="store_false"); t.set_defaults(fn=cmd_rca_prepare)
+    t = ss.add_parser("mark", help="mark incidents as reviewed in a week's report")
+    t.add_argument("ids", nargs="*"); t.add_argument("--week"); t.add_argument("--prepared", action="store_true", help="all ids from the prepared batch")
+    t.set_defaults(fn=cmd_rca_mark)
+
+    s = sub.add_parser("index", help="regenerate INDEX.md files"); s.set_defaults(fn=cmd_index)
+    s = sub.add_parser("lint", help="check the store"); s.set_defaults(fn=cmd_lint)
+    s = sub.add_parser("sync", help="commit, pull --rebase, push (if a remote exists)"); s.add_argument("-m", "--message"); s.set_defaults(fn=cmd_sync)
+    s = sub.add_parser("where"); s.set_defaults(fn=cmd_where)
+    s = sub.add_parser("week"); s.add_argument("date", nargs="?"); s.set_defaults(fn=cmd_week)
+
+    s = sub.add_parser("hook", help="Claude Code hook entry points (read JSON on stdin)")
+    ss = s.add_subparsers(dest="hcmd", required=True)
+    ss.add_parser("session-start").set_defaults(fn=cmd_hook_session_start)
+    ss.add_parser("stop").set_defaults(fn=cmd_hook_stop)
+    return p
+
+
+def main(argv=None):
+    global ROOT
+    a = build_parser().parse_args(argv)
+    ROOT = find_root()
+    a.fn(a)
+
+
+if __name__ == "__main__":
+    main()

@@ -529,7 +529,8 @@ static void Jump_Ending(FighterData *fp, int sid, int prev_sid)
 {
     if (jt_end_age >= 0 && ++jt_end_age > LL_FADE + 2)
         jt_end_age = -1;
-    int dj = (sid == ASID_JUMPAERIALF || sid == ASID_JUMPAERIALB) && prev_sid != sid;
+    int jts = Tracked_Index(sid); // Kirby's and Jigglypuff's air jumps are their own states
+    int dj = (Is_DoubleJump(jts) || Is_MultiJump(jts)) && prev_sid != sid;
     if (jt_due >= 0 && (dj || jt_due == 0))
     {
         jt_end_age = 0;

@@ -1,0 +1,66 @@
+# Ledge routes for any fighter: build with
+# LLSCRIPT=src/landinglab_ledge_cast_test.txt LLCHAR=file LLECB=<packed
+# tables>, one ISO per fighter (LLCHARFILE: a file holding its CKIND_
+# number), on Battlefield. In the log:
+# - LLHANG fighter <FTKIND> x <x> y <y>: where it hangs from the ledge's
+#   corner (ftCo_CliffCatch_Phys). "learned" after it for any fighter but
+#   Falcon (his is known: x -2.4527 y -23.0962, no "learned"). Both ledges
+#   should give the same x and y, and no second "learned" line should come.
+# - LLROUTES ledge <x> <y> facing <f> found <n> ...: its x, y are the
+#   corner (Battlefield: +-68.4, 0) plus the LLHANG spot. Then LLROUTE 1st,
+#   2nd and 3rd: what the search found from there.
+# - The follow scripts let go away and jump in on the next frame: an
+#   LLROUTE follow line (the best route let go that way), then "LandingLab
+#   route:" lines. Kirby and Jigglypuff: the jump is their first air jump
+#   (state 341); a "Jump missed" slip means it wasn't seen as the jump.
+# A missing LLROUTES line: raise the 900-frame waits (the search runs a few
+# hundred simulated frames per game frame).
+autorun
+
+script Ledge hang right
+preset load Defaults
+set Dev/Debug Log = 1
+set Ledge/Show Routes = 1
+set Ledge/Route Kind = 2
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+900
+mark right ledge: expect LLHANG, LLROUTES and LLROUTE 1st to 3rd above
+
+script Ledge hang left
+preset load Defaults
+set Dev/Debug Log = 1
+set Ledge/Show Routes = 1
+set Ledge/Route Kind = 2
+set Ledge/Keep Ledge Invincibility = 1
+ledge left
+900
+mark left ledge: expect LLROUTES and LLROUTE 1st to 3rd above, no new LLHANG learned
+
+script Ledge follow right
+preset load Defaults
+set Dev/Debug Log = 1
+set Ledge/Show Routes = 1
+set Ledge/Route Kind = 2
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+900
+1 s:1,0
+1 X s:-1,0
+land 120 s:-1,0
+60
+mark right follow: expect LLROUTE follow, then LandingLab route lines, no Jump missed
+
+script Ledge follow left
+preset load Defaults
+set Dev/Debug Log = 1
+set Ledge/Show Routes = 1
+set Ledge/Route Kind = 2
+set Ledge/Keep Ledge Invincibility = 1
+ledge left
+900
+1 s:-1,0
+1 X s:1,0
+land 120 s:1,0
+60
+mark left follow: expect LLROUTE follow, then LandingLab route lines, no Jump missed

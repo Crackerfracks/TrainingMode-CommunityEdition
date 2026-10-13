@@ -198,7 +198,7 @@ static void Drop_Think(FighterData *fp, int sid, int prev_sid)
 {
     drop_sid = sid;
     if (prev_sid < 0)
-        drop_w0 = -1; // a test script just put Falcon somewhere
+        drop_w0 = -1; // a test script just put the fighter somewhere
     if (drop_age < 99)
         drop_age++;
     if (sid == ASID_CLIFFCATCH)
@@ -323,9 +323,17 @@ static void Ledge_Think(FighterData *fp, int sid)
 
     if (hanging)
     {
-        // learn where Falcon really hangs, and keep the ledge's routes ready
+        // learn where the fighter really hangs from the corner it holds
+        // (ftCo_CliffCatch_Phys), and keep the ledge's routes ready
         int facing = fp->facing_direction > 0 ? 1 : -1;
-        hang_ledge = Ledge_Add(fp->phys.pos.X, fp->phys.pos.Y, facing);
+        FtCliffCatch *cliff = (void *)&fp->state_var;
+        Vec3 corner;
+        if (facing > 0)
+            GrColl_GetGroundLineEndLeft(cliff->ledge_index, &corner);
+        else
+            GrColl_GetGroundLineEndRight(cliff->ledge_index, &corner);
+        hang_ledge = Ledge_Add(corner.X, corner.Y, facing, 1, fp->phys.pos.X, fp->phys.pos.Y);
+        Hang_Learn(fp, &corner, facing);
         attempt_active = 0;
         route_active = 0;
         route_show_num = 0;
@@ -442,7 +450,10 @@ static void Ledge_Think(FighterData *fp, int sid)
         route_e = e;
         int ff_now = fp->flags.is_fastfall && !prev_fastfall;
         prev_fastfall = fp->flags.is_fastfall;
-        int jumped = (sid == ASID_JUMPAERIALF || sid == ASID_JUMPAERIALB) && prev_state_id != sid;
+        // the double jump, or Kirby's and Jigglypuff's first air jump
+        // (their own states, ftCo_800D74A4)
+        int jts = Tracked_Index(sid);
+        int jumped = (Is_DoubleJump(jts) || Is_MultiJump(jts)) && prev_state_id != sid;
         int in_aerial = Is_AerialState(sid);
         int aerial = in_aerial && prev_state_id != sid;
         int landed = fp->phys.air_state == 0;
@@ -539,8 +550,8 @@ static void Ledge_Think(FighterData *fp, int sid)
                 }
                 route_landed = e;
                 route_act = sid == ASID_WAIT ? e : e + (int)fp->attr.normal_landing_lag;
-                // the GALINT it will have at the first frame he can act, up
-                // as soon as he touches down
+                // the GALINT it will have at the first frame the fighter can act, up
+                // as soon as it touches down
                 sprintf(text_last, "Ledge %s  %d GALINT", route_act == route_landed ? "NIL" : "AI",
                         intang - (route_act - e));
             }

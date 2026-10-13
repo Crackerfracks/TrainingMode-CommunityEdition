@@ -25,7 +25,8 @@
 // per ledge, a few hundred simulated frames per game frame, and every
 // distinct route kept (up to LR_ROUTES of each kind), best first. The Route
 // option browses them. The main stage's two ledges are searched as the event
-// starts; any other ledge when Falcon first hangs from it.
+// starts (for a fighter whose hang spot isn't known yet, once it first hangs:
+// Hang_Learn); any other ledge when the fighter first hangs from it.
 
 #define LR_KEEP 3           // route rows shown: the chosen route and the next ones
 #define LR_LEDGES 8         // ledges remembered
@@ -52,8 +53,12 @@ enum lr_dj_x
 };
 static const float lr_dj_stick[LR_DJ_X] = {1.f, 0.7f, 0.f};
 #define LR_PATH 72          // frames of the shown route's path
-#define LR_HANG_X 2.4527f   // where Falcon hangs from a ledge: out from it
-#define LR_HANG_Y 23.0962f  // ... and down
+// Where the fighter hangs from a ledge's corner (ftCo_CliffCatch_Phys: the
+// corner plus the CliffWait animation's TransN, its z along the facing).
+// Falcon's is known; any other fighter's comes from its own animation, so
+// it's learned the first time it hangs (Hang_Learn).
+#define LR_HANG_X -2.4527f  // Falcon's: toward the stage (out from it, so < 0)
+#define LR_HANG_Y -23.0962f // ... and up (down, so < 0)
 #define LR_GALINT_BIAS 0    // GALINT is read as ledgedash training reads it
 #define LR_PLAIN 9999       // Route_Fail: the message as is
 
@@ -108,8 +113,10 @@ typedef struct LedgeEntry
     u8 done;     // the search has been through every candidate
     u8 have;     // a search finished: list holds its routes
     u8 logged;   // its routes went to the log
-    s8 facing;   // the way Falcon faces while hanging: toward the stage
-    float x, y;  // where he hangs
+    u8 placed;   // x, y are known (the fighter's hang spot is): it can be searched
+    s8 facing;   // the way the fighter faces while hanging: toward the stage
+    float cx, cy; // the ledge's corner
+    float x, y;  // where the fighter hangs
     int next;    // the next candidate to simulate
     int version; // finished searches, so what was built from the routes knows they changed
     RouteList list; // the last finished search's routes; it keeps showing while the next one runs
@@ -135,10 +142,12 @@ static int route_list_ledge = -1; // ledge it was built for
 static int route_list_version;    // ... from which search
 static int route_list_kind = -1;  // ... and with which Route Kind and Route Sort
 static int route_list_sort = -1;
-static int route_browse = -1;     // the ledge the Route option browses: where Falcon hangs, or last did
+static int route_browse = -1;     // the ledge the Route option browses: where the fighter hangs, or last did
 
 // while hanging
-static int hang_ledge = -1;   // the ledge Falcon hangs from, -1 none
+static int hang_ledge = -1;   // the ledge the fighter hangs from, -1 none
+static float hang_x, hang_y;  // where it hangs from a corner (LR_HANG_X, LR_HANG_Y) ...
+static int hang_known;        // ... once known: Falcon's from the start, another's once it hangs
 static LedgeRoute route_show[LR_KEEP]; // the chosen route, then the ones after it
 static int route_show_num;
 static int route_show_rank;   // the chosen route's place in the list, 0 first
@@ -153,7 +162,7 @@ static int route_e;           // frames since the drop
 static int route_hit;         // game frame of the last step done on time, for its burst
 static int route_fail = -100; // game frame a step went wrong, for the implosion
 static int route_landed = -1; // frames since the drop at touchdown, -1 not yet
-static int route_act;         // ... and when Falcon could act after it
+static int route_act;         // ... and when the fighter could act after it
 static int route_galint = -1; // measured GALINT
 static int route_pred;        // GALINT predicted on the drop frame, for the log
 static int route_aerial_done; // the route's aerial was pressed
@@ -182,56 +191,93 @@ static int Routes_On(void)
     return Options_Ledge[LOPT_ROUTES].val || Options_Ledge[LOPT_ASSIST].val;
 }
 
-static int Ledge_Find(float x, float y, int facing)
+// The ledge with this corner, held facing this way.
+static int Ledge_Find(float cx, float cy, int facing)
 {
     for (int i = 0; i < LR_LEDGES; i++)
     {
         LedgeEntry *L = &ledges[i];
-        if (L->used && L->facing == facing && fabs(L->x - x) < 1.5f && fabs(L->y - y) < 1.5f)
+        if (L->used && L->facing == facing && fabs(L->cx - cx) < 1.5f && fabs(L->cy - cy) < 1.5f)
             return i;
     }
     return -1;
 }
 
-static int Ledge_Add(float x, float y, int facing)
+// The ledge's hang spot is (x, y). A new one, or one that moved (learned
+// where the fighter really hangs), is searched again from there. The routes
+// of the search before keep showing until this one is done.
+static void Ledge_Move(int i, float x, float y)
 {
-    int i = Ledge_Find(x, y, facing);
-    if (i >= 0)
+    LedgeEntry *L = &ledges[i];
+    if (L->placed && fabs(L->x - x) <= 0.01f && fabs(L->y - y) <= 0.01f)
+        return;
+    L->placed = 1;
+    L->x = x;
+    L->y = y;
+    L->done = 0;
+    L->next = 0;
+    if (route_build_ledge == i)
+        route_build_ledge = -1; // what it found so far is for the old spot
+}
+
+// The ledge with this corner, new or not, hung from at (x, y) if placed.
+static int Ledge_Add(float cx, float cy, int facing, int placed, float x, float y)
+{
+    int i = Ledge_Find(cx, cy, facing);
+    for (int j = 0; j < LR_LEDGES && i < 0; j++)
     {
-        LedgeEntry *L = &ledges[i];
-        if (fabs(L->x - x) > 0.01f || fabs(L->y - y) > 0.01f)
-        {
-            // learned where Falcon really hangs: search again from there.
-            // The routes of the search before keep showing until this one
-            // is done.
-            L->x = x;
-            L->y = y;
-            L->done = 0;
-            L->next = 0;
-            if (route_build_ledge == i)
-                route_build_ledge = -1; // what it found so far is for the old spot
-        }
-        return i;
-    }
-    for (i = 0; i < LR_LEDGES; i++)
-    {
-        LedgeEntry *L = &ledges[i];
+        LedgeEntry *L = &ledges[j];
         if (L->used)
             continue;
         memset(L, 0, sizeof(*L));
         L->used = 1;
         L->facing = facing;
-        L->x = x;
-        L->y = y;
-        return i;
+        L->cx = cx;
+        L->cy = cy;
+        i = j;
     }
-    return -1;
+    if (i >= 0 && placed)
+        Ledge_Move(i, x, y);
+    return i;
+}
+
+// Learn where the fighter hangs from the corner it holds (the spot
+// ftCo_CliffCatch_Phys puts it at, read back). Another spot than the one in
+// use moves every ledge to it, and lets ledges that waited for it be
+// searched. Logged as LLHANG, for a table of the cast.
+static void Hang_Learn(FighterData *fp, Vec3 *corner, int facing)
+{
+    static int logged;
+    float x = (fp->phys.pos.X - corner->X) * facing, y = fp->phys.pos.Y - corner->Y;
+    int same = hang_known && fabs(x - hang_x) <= 0.01f && fabs(y - hang_y) <= 0.01f;
+    if (!logged || !same)
+    {
+        char buf[80];
+        sprintf(buf, "LLHANG fighter %d x %.4f y %.4f%s\n", fp->kind, x, y, same ? "" : " learned");
+        Log(buf);
+        logged = 1;
+    }
+    if (same)
+        return;
+    hang_x = x;
+    hang_y = y;
+    hang_known = 1;
+    for (int i = 0; i < LR_LEDGES; i++)
+    {
+        LedgeEntry *L = &ledges[i];
+        if (L->used)
+            Ledge_Move(i, L->cx + L->facing * hang_x, L->cy + hang_y);
+    }
 }
 
 // The main stage's ledges, as Script_PlaceLedge finds them: the outermost
-// ends of the ledge floors. Falcon hangs at a fixed offset from them.
+// ends of the ledge floors. The fighter hangs at a fixed offset from them
+// (hang_x, hang_y); until that's known they wait unsearched.
 static void Ledge_FindMain(void)
 {
+    hang_known = sim_falcon;
+    hang_x = LR_HANG_X;
+    hang_y = LR_HANG_Y;
     CollLine *lines = *stc_collline;
     for (int side = -1; side <= 1; side += 2)
     {
@@ -257,12 +303,15 @@ static void Ledge_FindMain(void)
             }
         }
         if (best >= 0)
-            Ledge_Add(best_end.X - side * LR_HANG_X, best_end.Y - LR_HANG_Y, side);
+            Ledge_Add(best_end.X, best_end.Y, side, hang_known, best_end.X + side * hang_x, best_end.Y + hang_y);
     }
 }
 
-// Falcon on the first frame after letting go, before it runs: falling from
-// where he hung, standing still.
+// The fighter on the first frame after letting go, before it runs: falling
+// from where it hung, standing still (ftCo_Fall_Enter from CliffWait). Its
+// own fall ECB; the ledge gives the jumps back (ftCommon_8007D5D4 on the
+// catch), so the jump is the double jump, or Kirby's and Jigglypuff's first
+// air jump (Sim_DoubleJump).
 static void Ledge_Start(LedgeEntry *L, SimStart *s)
 {
     EcbSample *e = Ecb_Get(TS_FALL, 0);
@@ -309,8 +358,8 @@ static int Aerial_Rank(int aerial)
 // aerial the first few windows of press frames that touch down together
 // with no aerial lag. Of those the best is the touchdown soonest, then the
 // widest window, then the aerial Aerial_Order offers first (Route_Better
-// sorts them that way). With path, also records where Falcon goes, frame by
-// frame from the drop to the touchdown.
+// sorts them that way). With path, also records where the fighter goes,
+// frame by frame from the drop to the touchdown.
 static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff, int hold, int dj_x, int fall_away,
                       LedgeRoute *out, int *n_out, Vec2 *path, float *bottom, int *num)
 {
@@ -575,11 +624,11 @@ static void Ledge_Solve(FighterData *fp, int budget)
     if (!Routes_On())
         return;
     int at = -1;
-    if (hang_ledge >= 0 && !ledges[hang_ledge].done)
-        at = hang_ledge; // the ledge Falcon hangs from first
+    if (hang_ledge >= 0 && ledges[hang_ledge].placed && !ledges[hang_ledge].done)
+        at = hang_ledge; // the ledge the fighter hangs from first
     for (int i = 0; i < LR_LEDGES && at < 0; i++)
     {
-        if (ledges[i].used && !ledges[i].done)
+        if (ledges[i].used && ledges[i].placed && !ledges[i].done)
             at = i;
     }
     if (at < 0)
@@ -757,7 +806,7 @@ static void Route_Path(FighterData *fp, int ledge, LedgeRoute *r)
     route_path_ledge = ledge;
     if (cue_log)
     {
-        // where the route's simulation has Falcon, frame by frame from the
+        // where the route's simulation has the fighter, frame by frame from the
         // drop, to check against a scripted run of it
         char buf[400];
         for (int k0 = 0; k0 < route_path_num; k0 += 10)
@@ -793,7 +842,7 @@ static int Route_TailEnd(LedgeRoute *r, int galint)
     return act + galint - 1;
 }
 
-// The frame of the route's ACT cell: the first one Falcon can act on.
+// The frame of the route's ACT cell: the first one the fighter can act on.
 static int Route_ActCell(LedgeRoute *r)
 {
     if (r == &route_cur && route_landed >= 0)
@@ -803,7 +852,7 @@ static int Route_ActCell(LedgeRoute *r)
 
 // The route's cells, e frames after the drop (-1 while hanging): its inputs
 // with their glyphs, frames in the air, the touchdown, the landing lag, the
-// first frame Falcon can act and the GALINT left after it.
+// first frame the fighter can act and the GALINT left after it.
 static void Row_Route(MeterRow *row, LedgeRoute *r, int e, int facing, int galint)
 {
     int base = -e - 1; // cell of the drop

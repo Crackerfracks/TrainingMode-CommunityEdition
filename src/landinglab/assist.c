@@ -17,9 +17,9 @@
 // before each of its inputs and waits for it. The input comes: the game
 // plays on at full speed to the next one. It doesn't come within the wait
 // set in the menu: a window longer than a frame steps one frame further
-// into it, and after its last frame Falcon starts over. While frozen, the
-// stick is fed into Falcon's input timers every real frame, as the game
-// would, so a slow press reads as a slow press when the game goes on.
+// into it, and after its last frame the fighter starts over. While frozen,
+// the stick is fed into the fighter's input timers every real frame, as the
+// game would, so a slow press reads as a slow press when the game goes on.
 
 enum assist_step
 {
@@ -224,13 +224,23 @@ static void Assist_Update(void)
     Drill_Reset();
 }
 
-// The input Assist waits for, over Falcon's head: its glyphs in a ring that
-// drains clockwise as the wait runs out, the window's frames left as dots
+// The input Assist waits for, over the fighter's head: its glyphs in a ring
+// that drains clockwise as the wait runs out, the window's frames left as dots
 // under it. The input arriving bursts the ring out in white; running out of
 // time folds it in, in the miss color. (Codex's note of Stephen's report:
 // the old timer, a line in the info panel, didn't say an input was timed,
 // how long was left, or whether it reset.)
 #define AS_R 1.7f
+
+// How high over the fighter's feet the ring goes: 24 units for Falcon, and
+// for another in proportion to how tall its fall's ECB is against his
+// (10.7793, baked_ecb).
+static float Assist_Over(void)
+{
+    EcbSample *e = Ecb_Get(TS_FALL, 0);
+    return e->has_shape && e->top > 1.f ? 24.f * (e->top / 10.7793f) : 24.f;
+}
+
 static void Assist_Glyphs(FighterData *fp, int step, int *g0, int *g1, GXColor *c)
 {
     LedgeRoute *r = route_active ? &route_cur : &route_show[0];
@@ -270,7 +280,7 @@ static void Assist_Draw(void)
         return;
     FighterData *fp = Fighter_GetGObj(0)->userdata;
     float cx, cy;
-    if (!Hud_FromWorld(fp->phys.pos.X, fp->phys.pos.Y + 24.f, &cx, &cy))
+    if (!Hud_FromWorld(fp->phys.pos.X, fp->phys.pos.Y + Assist_Over(), &cx, &cy))
         return;
     float lim_x = SAFE_W - AS_R - 0.5f, lim_y = SAFE_H - AS_R - 0.5f;
     cx = cx > lim_x ? lim_x : cx < -lim_x ? -lim_x : cx;

@@ -3654,10 +3654,10 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
             out->unlearned = 1;
         if (sim_djc == DJC_NESS)
         {
-            // his drift speed takes the air friction and drift of his whole
-            // speed last frame, the animation's included (djc test: 0.03 a
-            // frame off his drift-free double jump)
-            s->drift.X += Drift_Accel(fp, s->vx, start->stick_x);
+            // ftNs_JumpAerial_Phys_Cb: his drift speed drifts from itself,
+            // but with the stick at 0 its air friction slows his whole speed
+            // last frame, the animation's included (Deaccel reads self_vel)
+            s->drift.X += Drift_Accel(fp, start->stick_x == 0 ? s->vx : s->drift.X, start->stick_x);
             s->vx = a->x * s->face + s->drift.X;
         }
         else

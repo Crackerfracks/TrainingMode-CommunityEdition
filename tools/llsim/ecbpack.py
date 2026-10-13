@@ -18,7 +18,10 @@ movement frame by frame (DjMove), from the first jump of each kind.
 Kirby's and Jigglypuff's air jumps (states 15-19, TS_MJ1..5) go in their
 own section (MJMP), so the main block reads as before; a log from before
 the event tracked them gives them from its LLSPEC lines (states 341-345)
-instead, their lengths only where one was seen ending in a fall.
+instead, their lengths only where one was seen ending in a fall. Game &
+Watch's own nair, bair and uair (states 347-349) go in the aerial slots
+(6, 8, 9) of the main block, from his LLSPEC lines the same way when his
+LLECB rows have none there.
 Falcon Dive's slots (13, 14) are Falcon's own, so another fighter's are
 left out, as are his leans (baked in the event). Insert the result with
 LLECB=<out.bin> ./build.sh.
@@ -38,6 +41,8 @@ TS_MJ1, MJ_STATES = 15, 5  # Kirby's and Jigglypuff's air jumps, TS_MJ1..TS_MJ5
 MJ = {4: 'Kirby', 15: 'Jigglypuff'}  # internal kinds (sim_mj)
 ASID_MJ1 = 341  # their JumpAerialF1, F2 .. F5 after it
 ASID_TS = {29: TS_FALL, 32: TS_FALLAERIAL}  # ASID_FALL, ASID_FALLAERIAL
+GAW = 24  # internal kind (sim_gw)
+GW_AERIALS = [(6, 347, 'nair'), (8, 348, 'bair'), (9, 349, 'uair')]  # TS_AIRN/B/HI: ftGw_MS_AttackAirN, B, Hi
 FALCON = 2
 FIGHTERS = 32
 DIR_BYTES = 32 + FIGHTERS * 16
@@ -233,8 +238,11 @@ def read_table(path):
         rows = {k: v for k, v in rows.items() if k[0] not in (TS_UPB, TS_UPBA)}
         for ts in (TS_UPB, TS_UPBA):
             lens[ts] = (0, -1)
+    if kind == GAW:
+        read_spec(path, rows, lens, spec, spec_lens, GW_AERIALS)
     if kind in MJ:
-        read_spec_jumps(path, rows, lens, spec, spec_lens)
+        read_spec(path, rows, lens, spec, spec_lens,
+                  [(TS_MJ1 + j, ASID_MJ1 + j, 'air jump %d' % (j + 1)) for j in range(MJ_STATES)])
     else:
         rows = {k: v for k, v in rows.items() if k[0] < TS_COUNT}
     if kind != FALCON and loops == (0, 0, 0):
@@ -246,18 +254,19 @@ def read_table(path):
     return kind, rows, lens, loops, leans, dj, step, blend
 
 
-def read_spec_jumps(path, rows, lens, spec, spec_lens):
-    """Kirby's and Jigglypuff's air jumps from a log's LLSPEC lines, for each
-    one its own LLECB rows don't have (a log from before the event tracked
-    them). LLSPECLEN gives the most frames seen and the last state after, so
-    the length is only kept when that was a fall (the jump ran out)."""
-    for j in range(MJ_STATES):
-        ts, sid = TS_MJ1 + j, ASID_MJ1 + j
+def read_spec(path, rows, lens, spec, spec_lens, states):
+    """The fighter's own states the sim tracks (states: slot, state id, name;
+    Kirby's and Jigglypuff's air jumps, Game & Watch's own aerials) from a
+    log's LLSPEC lines, for each one its own LLECB rows don't have (a log
+    from before the event tracked them). LLSPECLEN gives the most frames seen
+    and the last state after, so the length is only kept when that was a
+    fall (the state ran out)."""
+    for ts, sid, name in states:
         if any(k[0] == ts for k in rows):
             continue
         got = {(ts, f): v for (s, f), v in spec.items() if s == sid}
         if not got:
-            print('ecbpack: %s has no air jump %d (state %d): capture it whole' % (path, j + 1, sid))
+            print('ecbpack: %s has no %s (state %d): capture it whole' % (path, name, sid))
             continue
         rows.update(got)
         n, nxt = spec_lens.get(sid, (0, -1))
@@ -265,8 +274,8 @@ def read_spec_jumps(path, rows, lens, spec, spec_lens):
             lens[ts] = (n, ASID_TS[nxt])
         else:
             lens[ts] = (0, -1)
-            print('ecbpack: %s: air jump %d (state %d) was never seen ending (last went to %d after %d frames): its length is left out'
-                  % (path, j + 1, sid, nxt, n))
+            print('ecbpack: %s: %s (state %d) was never seen ending (last went to %d after %d frames): its length is left out'
+                  % (path, name, sid, nxt, n))
 
 
 def pad32(b):
@@ -336,6 +345,9 @@ def main():
         if kind in MJ:
             dj_note = ', air jumps %s' % ' '.join('%d/%d' % (sum(1 for k in rows if k[0] == ts), lens.get(ts, (0, -1))[0])
                                                   for ts in range(TS_MJ1, TS_MJ1 + MJ_STATES))
+        if kind == GAW:
+            dj_note = ', own aerials %s' % ' '.join('%s %d/%d' % (name, sum(1 for k in rows if k[0] == ts), lens.get(ts, (0, -1))[0])
+                                                    for ts, sid, name in GW_AERIALS)
         print('kind %2d: %4d rows, %2d of %d states, falls loop %s step %d blend %d, %4d lean rows%s, %s' % (kind, len(rows), filled, TS_COUNT, loops, step, blend, len(leans), dj_note, path))
     header = pad32(b'LLE1' + struct.pack('>I', len(tables)))
     directory += b'\0' * (FIGHTERS * 16 - len(directory))

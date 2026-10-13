@@ -1,0 +1,246 @@
+# Mr. Game & Watch's aerial checks: build with
+# LLSCRIPT=src/landinglab_gw_test.txt LLCHAR=file LLCHARFILE=<file holding
+# 3 (CKIND_GAW)> LLECB=<packed tables with his aerials in slots 6, 8, 9>.
+# His nair, bair and uair are his own states (347-349, landing in 350-352),
+# tracked in the aerial slots. The event predicts from the live state every
+# frame, so an aerial it moves wrongly shows as "LandingLab drift at +N"
+# lines; none should appear before the landing. Each landing line says what
+# was predicted against what happened. The trace's state_id counts the lag:
+# nair 15 frames in 350, bair 18 in 351, uair 18 in 352 (his bair's lag,
+# ftGw_LandingAirHi_Init), with or without L: those three never L-cancel
+# ("Lag", never "L-cancel"). Fair and dair are the common ones: with L
+# their lag halves (12 in LandingAirF, 10 in LandingAirLw) and the line
+# says "L-cancel". Landing in an aerial's no-lag frames is "Land" (Landing).
+autorun
+
+script GW nair
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 20 right
+2
+trace on
+1 A
+land 200
+40
+trace off
+90
+
+# L pressed every third frame from the aerial on: in its 7-frame window at
+# the landing whatever the frame
+script GW nair L
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 20 right
+2
+trace on
+1 A
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+land 200
+40
+trace off
+90
+
+script GW bair L
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 20 right
+2
+trace on
+1 c:-1,0
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+land 200
+40
+trace off
+90
+
+script GW uair
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 20 right
+2
+trace on
+1 c:0,1
+land 200
+40
+trace off
+90
+
+script GW uair L
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 20 right
+2
+trace on
+1 c:0,1
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+land 200
+40
+trace off
+90
+
+# the common ones, for the difference
+script GW fair L
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 20 right
+2
+trace on
+1 c:1,0
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+land 200
+40
+trace off
+90
+
+script GW dair L
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 20 right
+2
+trace on
+1 c:0,-1
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+2
+1 L
+land 200
+40
+trace off
+90
+
+# from high up: nair and bair each run out into Fall (their length) while
+# drifting (the A press itself neutral: with the stick it'd be a fair),
+# then a uair lands
+script GW drift
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air -40 170 right
+2
+1 A
+30 s:1,0
+30 s:-0.6,0
+1 c:-1,0 s:-0.6,0
+36 s:-0.6,0
+1 c:0,1 s:0.4,0
+land 200 s:0.4,0
+90
+
+# a short hop's aerials: the event's own aerial interrupt windows, when
+# one comes (nair, then bair)
+script GW AI nair
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+1 X
+ai 0 A
+land 200
+90
+
+script GW AI bair
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+1 X
+ai 0 c:-1,0
+land 200
+90

@@ -45,7 +45,7 @@ static void Body_Flash(FighterData *fp, int sid)
 
     float a = 0;
     GXColor c = color_galint;
-    int landing = sid == ASID_LANDING || sid == ASID_LANDINGFALLSPECIAL || (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW);
+    int landing = sid == ASID_LANDING || sid == ASID_LANDINGFALLSPECIAL || Is_LandingAirState(sid);
     if (Options_Cues[COPT_FLASH].val)
     {
         if (flash_age < 4 && flash_kind >= 0)

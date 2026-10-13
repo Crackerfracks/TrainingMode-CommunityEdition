@@ -14,6 +14,8 @@
  *       air jumps from standing still in the air (Kirby's and Jigglypuff's
  *       five), one every gap frames (default 30) with the stick at sx, sy,
  *       as LLJUMPS lines frame by frame
+ *   llsim lag <dump>
+ *       each aerial's landing lag, held and L-cancelled (LLLAG lines)
  *
  * The ECB table is Falcon's baked one unless -t names a capture's log
  * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it
@@ -281,12 +283,13 @@ int main(int argc, char **argv)
             pos[npos++] = argv[i];
     }
     int check = npos >= 2 && !strcmp(pos[0], "check"), ecb = npos == 2 && !strcmp(pos[0], "ecb");
-    int jumps = npos >= 2 && !strcmp(pos[0], "jumps");
-    if (!check && !ecb && !jumps)
+    int jumps = npos >= 2 && !strcmp(pos[0], "jumps"), lag = npos == 2 && !strcmp(pos[0], "lag");
+    if (!check && !ecb && !jumps && !lag)
     {
         fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-p <llecb.bin>] [-loops A,B,C] [-nolean]\n"
                         "       llsim ecb <dump> [-t <capture>] [-p <llecb.bin>]\n"
-                        "       llsim jumps <dump> [sx sy gap] [-t <capture>] [-p <llecb.bin>]\n");
+                        "       llsim jumps <dump> [sx sy gap] [-t <capture>] [-p <llecb.bin>]\n"
+                        "       llsim lag <dump>\n");
         return 2;
     }
     Dump_Load(pos[1]);
@@ -305,6 +308,8 @@ int main(int argc, char **argv)
         llsim_nolean();
     if (ecb)
         llsim_ecb_print(dump_char);
+    else if (lag)
+        llsim_lag();
     else if (jumps)
         llsim_jumps(npos > 2 ? (float)atof(pos[2]) : 0, npos > 3 ? (float)atof(pos[3]) : 0, npos > 4 ? atoi(pos[4]) : 30);
     else

@@ -23,8 +23,10 @@ static void Text_Prediction(Prediction *p)
         sprintf(text_predict, "Learning...");
     else if (p->land_kind == LAND_NIL)
         sprintf(text_predict, "NIL");
-    else if (p->land_kind == LAND_AERIAL)
+    else if (p->land_kind == LAND_AERIAL && p->lcancel_lag < p->lag)
         sprintf(text_predict, "Lag %d (L: %d)", p->lag, p->lcancel_lag);
+    else if (p->land_kind == LAND_AERIAL)
+        sprintf(text_predict, "Lag %d, no L-cancel", p->lag); // Game & Watch's own (Aerial_LCancels)
     else
         sprintf(text_predict, "%s, %d lag", land_kind_names[p->land_kind], p->lag);
 }

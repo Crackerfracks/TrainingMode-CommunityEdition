@@ -356,7 +356,7 @@ static void Landing_Resolve(FighterData *fp)
 static void Landing_Judge(FighterData *fp)
 {
     int sid = fp->state_id;
-    int landing_air = sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW;
+    int landing_air = Is_LandingAirState(sid);
     int is_landing = sid == ASID_LANDING || sid == ASID_LANDINGFALLSPECIAL || landing_air;
 
     sprintf(text_ai, "-");
@@ -401,6 +401,8 @@ static void Landing_Judge(FighterData *fp)
         kind = LAND_AI; // aerial pressed during the lock; its ECB came in on this frame
     else if (sid == ASID_LANDING)
         kind = LAND_NORMAL;
+    else if (Gw_Own(sid, ASID_GW_LANDINGAIRN) >= 0)
+        kind = LAND_AERIAL; // Game & Watch's own: never L-cancelled (Aerial_LCancels)
     else
         kind = (u8)fp->input.timer_trigger_any_ignore_hitlag < common_lcancel_window ? LAND_LCANCEL : LAND_AERIAL;
 

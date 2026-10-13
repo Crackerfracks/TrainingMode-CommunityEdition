@@ -112,7 +112,7 @@ static int panel_left;
 // HUD
 static int stat_total;
 static int stat_exact;
-static char text_predict[32] = "-";
+static char text_predict[48] = "-";
 static char text_ai[32] = "-";
 static char text_last[48] = "-";
 static u8 press_note; // text_last says why the last press stayed in the air: the landing keeps it

@@ -5,6 +5,8 @@
 # frame by frame from a clean slate, and writes the table (LLECB, LLLEN).
 # The character's own states seen in the air (its specials, Kirby's and
 # Jigglypuff's air jumps) are caught too, by state id (LLSPEC, LLSPECLEN).
+# Game & Watch's own nair, bair and uair (347-349) are learned in the
+# aerial slots (6, 8, 9), and by state id as well.
 # With LLCHAR=file one build serves every character: the fighter is the
 # CKIND_ number in TM/llchar.txt (LLCHARFILE=<file> ./build.sh ...).
 # Each dump also logs the checks (LLCHECK): the first on Falcon's baked
@@ -48,7 +50,9 @@ air 0 140 right
 land 200
 90
 
-# the aerials, each whole, from a fresh jump
+# the aerials, each whole, from a fresh jump (each its length and the
+# frames that land with lag, LLECB's flag 4; Game & Watch's nair, bair and
+# uair are his own states, in the same slots)
 10 X
 hover 0 100
 1 A

@@ -62,8 +62,7 @@ static void Ghost_Update(int sid)
 {
     if (!ghost_visible)
         return;
-    int resting = sid == ASID_WAIT || sid == ASID_LANDING || sid == ASID_LANDINGFALLSPECIAL ||
-                  (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW);
+    int resting = sid == ASID_WAIT || sid == ASID_LANDING || sid == ASID_LANDINGFALLSPECIAL || Is_LandingAirState(sid);
     if (--ghost_timer <= 0 || !resting)
         ghost_visible = 0;
 }

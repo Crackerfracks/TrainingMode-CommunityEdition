@@ -240,6 +240,31 @@ int llsim_len(int ts, int len, int next)
     return 1;
 }
 
+// Each aerial landing on a frame with its lag (Landing_Kind), trigger left
+// alone and then with L just pressed: one LLLAG line each, the aerial, the
+// landing it gives and its lag, then the same with L (Game & Watch's own
+// nair, bair and uair don't L-cancel, Aerial_LCancels).
+void llsim_lag(void)
+{
+    SimState s;
+    EcbSample e;
+    memset(&s, 0, sizeof(s));
+    memset(&e, 0, sizeof(e));
+    e.aerial_lag = 1;
+    e.seen = 1;
+    for (int ts = TS_AIRN; ts <= TS_AIRLW; ts++)
+    {
+        int lag, lc_lag, kind, l_lag, l_lc_lag, l_kind;
+        s.ts = ts;
+        s.trigger_timer = LL_TIMER_MAX;
+        kind = Landing_Kind(&fighter, &s, &e, 0, &lag, &lc_lag);
+        s.trigger_timer = 0;
+        l_kind = Landing_Kind(&fighter, &s, &e, 0, &l_lag, &l_lc_lag);
+        OSReport("LLLAG %s %s %d, L pressed %s %d\n", tracked_state_names[ts], land_kind_names[kind], lag,
+                 land_kind_names[l_kind], l_lag);
+    }
+}
+
 // Jumps in the air from standing still at (0, 100) in a fall with one jump
 // used: the next jump pressed on frame 2 and every gap frames after while
 // any are left (none with gap 0), the stick held at (sx, sy) throughout.

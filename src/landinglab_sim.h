@@ -158,8 +158,40 @@ static const StateName state_names[] = {
     {ASID_REBIRTHWAIT, "Platform"},
 };
 
+// Is it Mr. Game & Watch? His nair, bair and uair are his own states
+// (ftGw_AttackAirN_DecideAction; fair and dair are the common ones), tracked
+// in the aerial slots, and they land in his own landing states.
+static int sim_gw;
+
+#define ASID_GW_ATTACKAIRN 347  // ftGw_MS_AttackAirN, then AttackAirB, AttackAirHi
+#define ASID_GW_LANDINGAIRN 350 // ftGw_MS_LandingAirN, then LandingAirB, LandingAirHi
+static const s8 gw_aerials[3] = {TS_AIRN, TS_AIRB, TS_AIRHI};
+static const char *gw_landing_names[3] = {"Nair lag", "Bair lag", "Uair lag"};
+
+// Which of his three (from first, the attack's or the landing's), or -1.
+static int Gw_Own(int sid, int first)
+{
+    return sim_gw && sid >= first && sid < first + 3 ? sid - first : -1;
+}
+
+// An aerial's state: the common ones, or his own.
+static int Is_AerialState(int sid)
+{
+    return (sid >= ASID_ATTACKAIRN && sid <= ASID_ATTACKAIRLW) || Gw_Own(sid, ASID_GW_ATTACKAIRN) >= 0;
+}
+
+// An aerial's landing lag (ftCo_LandingAir_EnterWithMsidLag): the common
+// states, or his own.
+static int Is_LandingAirState(int sid)
+{
+    return (sid >= ASID_LANDINGAIRN && sid <= ASID_LANDINGAIRLW) || Gw_Own(sid, ASID_GW_LANDINGAIRN) >= 0;
+}
+
 static const char *State_Name(int sid)
 {
+    int gw = Gw_Own(sid, ASID_GW_LANDINGAIRN);
+    if (gw >= 0)
+        return gw_landing_names[gw];
     for (int i = 0; i < (int)countof(state_names); i++)
         if (state_names[i].sid == sid)
             return state_names[i].name;
@@ -189,6 +221,9 @@ static int Tracked_Index(int state_id)
 {
     if (state_id == ASID_FALLSPECIALF || state_id == ASID_FALLSPECIALB)
         return TS_FALLSPECIAL;
+    int gw = Gw_Own(state_id, ASID_GW_ATTACKAIRN);
+    if (gw >= 0)
+        return gw_aerials[gw];
     for (int i = 0; i < TS_COUNT; i++)
     {
         if (tracked_state_ids[i] == state_id)
@@ -1059,12 +1094,22 @@ static float Aerial_LandingLag(FighterData *fp, int ts)
     case TS_AIRB:
         return fp->attr.b_air_landing_lag;
     case TS_AIRHI:
-        return fp->attr.u_air_landing_lag;
+        // Game & Watch's takes his bair's (ftGw_LandingAirHi_Init)
+        return sim_gw ? fp->attr.b_air_landing_lag : fp->attr.u_air_landing_lag;
     case TS_AIRLW:
         return fp->attr.d_air_landing_lag;
     default:
         return fp->attr.normal_landing_lag;
     }
+}
+
+// Does an L-cancel halve this aerial's lag (ftCo_LandingAir_EnterWithLag)?
+// Game & Watch's own nair, bair and uair land straight into their lag
+// (ftGw_LandingAirN_Enter and the others: ftCo_LandingAir_EnterWithMsidLag
+// with the full lag), so not theirs.
+static int Aerial_LCancels(int ts)
+{
+    return !(sim_gw && (ts == TS_AIRN || ts == TS_AIRB || ts == TS_AIRHI));
 }
 
 // The ECB this frame into s (the capture's character states use it too).
@@ -3154,6 +3199,7 @@ static void Sim_ForFighter(int kind)
     int falcon = kind == FTKIND_FALCON;
     sim_djc = Djc_Kind(kind);
     sim_mj = kind == FTKIND_KIRBY || kind == FTKIND_JIGGLYPUFF;
+    sim_gw = kind == FTKIND_GAW;
     if (falcon == sim_falcon)
         return;
     sim_falcon = falcon;
@@ -3862,7 +3908,8 @@ static void Mark_Uncertain(Prediction *p, int frame)
 }
 
 // What a touchdown in state ts gives: ft_80082B1C for jumps and falls,
-// ftCo_LandingAir_EnterWithLag for aerials, ftCo_LandingFallSpecial_Enter
+// ftCo_LandingAir_EnterWithLag for aerials (Game & Watch's own nair, bair
+// and uair: Aerial_LCancels), ftCo_LandingFallSpecial_Enter
 // for the airdodge, Falcon Dive and the helpless fall. An aerial whose own
 // ECB touches down the first time it's used is an aerial interrupt,
 // whatever its lag; a horizontal airdodge that does the same is a perfect
@@ -3921,9 +3968,11 @@ static int Landing_Kind(FighterData *fp, SimState *s, EcbSample *e, int first_ec
     int halved = (int)(full / common_lcancel_div);
     if (halved == 0)
         halved = 1;
+    if (!Aerial_LCancels(s->ts))
+        halved = (int)full;
     *lcancel_lag = halved;
 
-    int lcancel = s->trigger_timer < common_lcancel_window;
+    int lcancel = Aerial_LCancels(s->ts) && s->trigger_timer < common_lcancel_window;
     *lag = lcancel ? halved : (int)full;
     if (first_ecb)
         return LAND_AI;

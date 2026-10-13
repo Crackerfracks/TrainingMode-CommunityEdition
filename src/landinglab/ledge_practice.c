@@ -443,7 +443,7 @@ static void Ledge_Think(FighterData *fp, int sid)
         int ff_now = fp->flags.is_fastfall && !prev_fastfall;
         prev_fastfall = fp->flags.is_fastfall;
         int jumped = (sid == ASID_JUMPAERIALF || sid == ASID_JUMPAERIALB) && prev_state_id != sid;
-        int in_aerial = sid >= ASID_ATTACKAIRN && sid <= ASID_ATTACKAIRLW;
+        int in_aerial = Is_AerialState(sid);
         int aerial = in_aerial && prev_state_id != sid;
         int landed = fp->phys.air_state == 0;
         // an aerial whose ECB touched down on its first frame never shows

@@ -804,7 +804,7 @@ static void Script_TraceFrame(FighterData *fp)
             fp->phys.self_vel_ground.X, fp->phys.air_state, fp->facing_direction,
             fp->flags.is_fastfall, fp->jump.jumps_used, fp->hurt.intang_frames.ledge,
             sid == ASID_WAIT, sid == ASID_LANDING,
-            sid >= ASID_ATTACKAIRN && sid <= ASID_ATTACKAIRLW,
+            Is_AerialState(sid),
             sid == ASID_CLIFFCATCH, sid == ASID_CLIFFWAIT, Options_Ledge[LOPT_INV].val);
     Log(buf);
     sprintf(buf, "LLST1 FRAME id=%s timer=%d part=1 ecb_lock=%d bottom_desired=%.9g bottom_corrected=%.9g ecb_top=%.9g ecb_left=%.9g ecb_right=%.9g ecb_side_y=%.9g floor_line=%d ignore_line=%d\n",

@@ -9,8 +9,9 @@ set Jump/Show = 1
 air -40 70 right 0 0 0 0
 sync jump-timing
 mark clip jump-timing in
+15
 follow 80
-20
+30
 mark clip jump-timing out
 
 script jump-timing-run
@@ -20,7 +21,8 @@ start -55 0 right
 90
 sync jump-timing-run
 mark clip jump-timing-run in
+15
 6 s:1,0
 follow 60 s:1,0
-20
+30
 mark clip jump-timing-run out

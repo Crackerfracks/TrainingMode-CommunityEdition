@@ -11,10 +11,11 @@ start 40 0 right
 60
 sync waveland
 mark clip waveland in
+15
 10 X
 wl 0 L s:1,0
 land 120
-20
+30
 mark clip waveland out
 
 script wl-rails
@@ -24,10 +25,11 @@ start 40 0 right
 60
 sync wl-rails
 mark clip wl-rails in
+15
 10 X
 wl 0 L s:1,0
 land 120
-20
+30
 mark clip wl-rails out
 
 script wl-chevrons
@@ -37,10 +39,11 @@ start 40 0 right
 60
 sync wl-chevrons
 mark clip wl-chevrons in
+15
 10 X
 wl 0 L s:1,0
 land 120
-20
+30
 mark clip wl-chevrons out
 
 script wl-plain
@@ -51,10 +54,11 @@ start 40 0 right
 60
 sync wl-plain
 mark clip wl-plain in
+15
 10 X
 wl 0 L s:1,0
 land 120
-20
+30
 mark clip wl-plain out
 
 script wl-flash
@@ -65,10 +69,11 @@ start 40 0 right
 60
 sync wl-flash
 mark clip wl-flash in
+15
 10 X
 wl 0 L s:1,0
 land 120
-20
+30
 mark clip wl-flash out
 
 script wl-flash-glow
@@ -79,10 +84,11 @@ start 40 0 right
 60
 sync wl-flash-glow
 mark clip wl-flash-glow in
+15
 10 X
 wl 0 L s:1,0
 land 120
-20
+30
 mark clip wl-flash-glow out
 
 # Airdodge down and sideways onto the platform and slide (glossary
@@ -94,10 +100,11 @@ start 30 0 right
 60
 sync slide-off
 mark clip slide-off in
+15
 10 X
 wl 0 L s:1,-0.3
 land 120
-20
+30
 mark clip slide-off out
 
 script everything-wl
@@ -106,8 +113,9 @@ start 40 0 right
 60
 sync everything-wl
 mark clip everything-wl in
+15
 10 X
 wl 0 L s:1,0
 land 120
-20
+30
 mark clip everything-wl out

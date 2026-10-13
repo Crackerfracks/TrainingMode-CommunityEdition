@@ -8,8 +8,10 @@ once and cut into each. Falcon unless it says the
 cast. All at the defaults plus the lines the script sets.
 
 Specs: game picture only (no window, no Dolphin UI), true game speed from
-Dolphin's frame dump, 30 fps, 480 px wide (README top: 640 px), each under
-3 MB, looping. Each comparison set is one script with only the look
+Dolphin's frame dump, 30 fps, 480 px wide (README top: 640 px), looping.
+Aim for under 3 MB; up to 5 MB is fine (GitHub shows images up to 10 MB),
+and a long clip may drop to 24 fps before it drops below 480 px. Each clip
+has 15 frames before the action and 30 after the landing. Each comparison set is one script with only the look
 changed, so the look is the only thing that moves; cut each clip of a set
 to the same frames.
 
@@ -38,7 +40,7 @@ to the same frames.
 | wl-plain.gif, wl-flash.gif, wl-flash-glow.gif | wl-plain, wl-flash, wl-flash-glow (Stadium) | cues.md Body Flash / Platform Glow |
 | spot-path.gif, spot-timer.gif, spot-glow.gif | spot-path, spot-timer, spot-glow (Dream Land) | cues.md spot cues |
 | glossary-ai.gif | ai-plain (Battlefield) | glossary.md top |
-| glossary-frames.gif | ai-slow (Battlefield), the same AI at 1/4 speed | glossary.md ECB |
+| glossary-frames.gif | ai-slow (Battlefield), the same AI at 1/2 speed | glossary.md ECB |
 | glossary-waveland.gif | slide-off (Stadium) | glossary.md waveland |
 | glossary-lcancel.gif, glossary-fastfall.gif, glossary-jumpsquat.gif, glossary-wavedash.gif | lcancel, fastfall, jumpsquat (Battlefield), wd-slow (Final Destination) | glossary.md |
 | paths.gif | paths (Battlefield) | paths.md top |

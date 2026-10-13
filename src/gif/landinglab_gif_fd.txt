@@ -8,6 +8,7 @@ start -20 0 right
 60
 sync wavedash
 mark clip wavedash in
+15
 1 X
 3
 1 L s:1,-0.35
@@ -15,7 +16,7 @@ mark clip wavedash in
 1 X
 3
 1 L s:-1,-0.35
-20
+30
 mark clip wavedash out
 
 script wd-pips
@@ -25,10 +26,11 @@ start -20 0 right
 60
 sync wd-pips
 mark clip wd-pips in
+15
 1 X
 3
 1 L s:1,-0.35
-20
+30
 mark clip wd-pips out
 
 script wd-ring
@@ -38,10 +40,11 @@ start -20 0 right
 60
 sync wd-ring
 mark clip wd-ring in
+15
 1 X
 3
 1 L s:1,-0.35
-20
+30
 mark clip wd-ring out
 
 # glossary "wavedash" and "jumpsquat" at half speed
@@ -52,6 +55,7 @@ start -20 0 right
 60
 sync wd-slow
 mark clip wd-slow in
+15
 1 X
 3
 1 L s:1,-0.35

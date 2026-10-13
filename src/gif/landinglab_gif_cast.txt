@@ -13,10 +13,11 @@ start 38 0 right
 trace on
 sync cast-side
 mark clip cast-side in
+15
 10 X
 ai 0 A
 land 120
-20
+30
 mark clip cast-side out
 trace off
 
@@ -27,12 +28,13 @@ start 0 0 right
 trace on
 sync cast-top
 mark clip cast-top in
+15
 10 X
 20
 1 X
 ai 0 A
 land 120
-20
+30
 mark clip cast-top out
 trace off
 
@@ -42,6 +44,7 @@ set Ledge/Keep Ledge Invincibility = 1
 ledge right
 sync cast-ledge
 mark clip cast-ledge in
+15
 playroute 1
 90
 mark clip cast-ledge out

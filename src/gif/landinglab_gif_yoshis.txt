@@ -11,8 +11,9 @@ start 28 0 right
 60
 sync first-minute
 mark clip first-minute in
+15
 10 X
 ai 0 A
 land 120
-20
+30
 mark clip first-minute out

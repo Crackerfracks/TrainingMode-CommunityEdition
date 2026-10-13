@@ -3,15 +3,21 @@
 # first guess: tune them until the landing is the one named.
 autorun
 
-# NIL: drift down onto the right platform from above, no aerial.
+# NIL: falling with the double jump left, Jump Timing (Kind NIL) times the
+# double jump so the fighter settles onto the right platform with no lag.
+# A plain fall from high up lands too fast for a NIL. Tune x/y if the
+# landing isn't "NIL".
 script nil
 preset load Defaults
 set Cues/NIL Cues = 1
-air 20 75 right 0 0 1 0
+set Jump/Show = 1
+set Jump/Kind = 0
+air 10 80 right 0 0 0 0
 sync nil
 mark clip nil in
-land 150 s:0.6,0
-20
+15
+follow 150 s:0.6,0
+30
 mark clip nil out
 
 # Spot cues compared on the same NIL: the path alone, the landing spot
@@ -19,36 +25,45 @@ mark clip nil out
 script spot-path
 preset load Defaults
 set Cues/NIL Cues = 1
+set Jump/Show = 1
+set Jump/Kind = 0
 set Paths/Landing Path = 1
 set Timers/Fixed Strip = 0
 set Timers/Landing Spot = 0
-air 20 75 right 0 0 1 0
+air 10 80 right 0 0 0 0
 sync spot-path
 mark clip spot-path in
-land 150 s:0.6,0
-20
+15
+follow 150 s:0.6,0
+30
 mark clip spot-path out
 
 script spot-timer
 preset load Defaults
 set Cues/NIL Cues = 1
+set Jump/Show = 1
+set Jump/Kind = 0
 set Timers/Fixed Strip = 0
-air 20 75 right 0 0 1 0
+air 10 80 right 0 0 0 0
 sync spot-timer
 mark clip spot-timer in
-land 150 s:0.6,0
-20
+15
+follow 150 s:0.6,0
+30
 mark clip spot-timer out
 
 script spot-glow
 preset load Defaults
 set Cues/NIL Cues = 1
+set Jump/Show = 1
+set Jump/Kind = 0
 set Cues/Platform Glow = 1
 set Timers/Fixed Strip = 0
 set Timers/Landing Spot = 0
-air 20 75 right 0 0 1 0
+air 10 80 right 0 0 0 0
 sync spot-glow
 mark clip spot-glow in
-land 150 s:0.6,0
-20
+15
+follow 150 s:0.6,0
+30
 mark clip spot-glow out

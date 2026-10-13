@@ -76,7 +76,9 @@ hover 0 100
 # all five, each run out into its fall (states 15-19 in the table: their
 # length and the frame their command flag lets the next one out, LLECB's
 # flag 4), the next one from that fall. X just pressed takes the first;
-# the later ones come out with X held (ftCo_800D730C)
+# the later ones come out with X held (ftCo_800D730C). Five presses gave
+# only four jumps in the first capture, so a sixth makes sure of the last
+# (a press with none left does nothing), and it runs long into FallAerial
 hover off
 land 200
 90
@@ -93,6 +95,8 @@ refill
 90
 1 X
 90
+1 X
+120
 
 # the specials, each from a fresh jump: neutral, side both ways, down, up
 hover off

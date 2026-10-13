@@ -4,7 +4,7 @@ The HUD menu sets how your controller and the info panel show on screen, and how
 
 The controller display shows what the game actually read from your stick. That is often not what you meant.
 
-<!-- GIF: the Ring controller display beside the percent, with the stick trail, deadzone band and fastfall line, at default settings -->
+<!-- GIF: ../media/hud.gif (pad-ring, Battlefield): the Ring controller display beside the percent, with the stick trail, deadzone band and fastfall line, at default settings -->
 
 ## Options
 
@@ -12,15 +12,15 @@ The HUD menu, in menu order.
 
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |
-| Controller | By Percent, Bottom Left, Bottom Right, Off | By Percent | Shows your real stick, the band where Melee reads an axis as zero, a trail of the last frames, and the fastfall line (lit when a flick would fastfall). By Percent puts it beside your percent display. |
+| Controller | By Percent, Bottom Left, Bottom Right, Off | By Percent | Shows your real stick, the band where Melee reads an axis as zero (the [deadzone](glossary.md#deadzone)), a trail of the last frames, and the fastfall line (lit when a flick would [fastfall](glossary.md#fastfall)). By Percent puts it beside your percent display. |
 | Controller Look | Ring, Crest, Classic | Ring | Ring: the whole controller in a small ellipse, with L and R as its halves, filling into their nubs. Crest: a shield with L and R as its wings. Classic: the wider block with trigger bars. |
 | Controller Size | Small, Medium, Large | Small | How big the Ring look is. Small takes the same room as TM-CE's own controller display. |
 | Buttons and Triggers | Off, On | On | Shows the buttons, triggers and C-stick too, in the controller's own colors. |
 | Controller Cues | Off, Closing Ring, Gauge | Off | Shows the button an AI or waveland window wants, timed on the controller: a ring closing in on it, or a gauge going round it. It is never filled, so it cannot pass for a press. Needs Buttons and Triggers. |
-| Shield Drop Zone | Off, On | On | Shades the stick angles that drop through a platform out of shield, in the stick's gate. Shown while Falcon is on a platform. |
+| Shield Drop Zone | Off, On | On | Shades the stick angles that drop through a platform out of shield, inside the stick octagon. Shown while you are on a platform. |
 | Info Panel | Off, On | On | Two lines in a top corner: what is coming up, and how your last attempt went. |
-| Panel Side | Auto, Right, Left | Auto | Where the info panel goes. Auto keeps it on the side of the screen Falcon is not on. |
-| Quick Menu | Off, On | On | L or R clicked all the way with D-pad up or down freezes the game and opens a deck of your presets. Left and right flip through them. Down changes the chosen one's settings. |
+| Panel Side | Auto, Right, Left | Auto | Where the info panel goes. Auto keeps it on the side of the screen you are not on. |
+| Quick Menu | Off, On | On | L or R clicked all the way with D-pad up or down freezes the game and lays out your presets as cards. Left and right flip through them. Down changes the chosen one's settings. |
 | Quick Menu Idle | 3 s, 5 s, 8 s, Never | 5 s | The quick menu stays up when you let go of the trigger. It fades out and closes after this long with no D-pad or trigger press. B closes it at once. |
 | Quick Menu Play | 1 s, 2 s, 3 s, Never | 2 s | Moving the stick plays out of the quick menu. The game goes on and the menu fades out over this long. The D-pad or a trigger brings it back. |
 
@@ -33,9 +33,9 @@ Controller Look changes how the controller is drawn. Controller Size only change
 <details>
 <summary>Controller looks: Ring, Crest, Classic</summary>
 
-<!-- GIF: the Ring look at Small, Medium and Large -->
-<!-- GIF: the Crest look -->
-<!-- GIF: the Classic look -->
+<!-- GIF: ../media/pad-small.gif, ../media/pad-medium.gif, ../media/pad-large.gif (pad-ring, pad-ring-medium, pad-ring-large): the Ring look at Small, Medium and Large -->
+<!-- GIF: ../media/pad-crest.gif (pad-crest): the Crest look -->
+<!-- GIF: ../media/pad-classic.gif (pad-classic): the Classic look -->
 
 </details>
 
@@ -46,20 +46,20 @@ Controller Cues shows the button an AI or waveland window wants, on the controll
 <details>
 <summary>Controller cues: Closing Ring and Gauge</summary>
 
-<!-- GIF: an AI with Controller Cues on Closing Ring, the ring closing on A -->
-<!-- GIF: the same AI with Controller Cues on Gauge -->
+<!-- GIF: ../media/padcue-ring.gif (padcue-ring): an AI with Controller Cues on Closing Ring, the ring closing on A -->
+<!-- GIF: ../media/padcue-gauge.gif (padcue-gauge): the same AI with Controller Cues on Gauge -->
 
 </details>
 
 ### Shield drop zone
 
-While Falcon is on a platform, Shield Drop Zone shades the stick angles in the gate that drop you through the platform out of shield.
+While you are on a platform, Shield Drop Zone shades the stick angles inside the stick octagon that drop you through the platform out of shield. See [platform drop and shield drop](glossary.md#platform-drop-and-shield-drop).
 
-<!-- GIF: Falcon in shield on a platform with the shield drop zone shaded in the gate -->
+<!-- GIF: ../media/shield-drop.gif (shield-drop, Battlefield): a fighter in shield on a platform with the shield drop zone shaded in the stick octagon -->
 
 ## Info panel
 
-The info panel is two lines in a top corner. One says what is coming up. The other says how your last attempt went. Panel Side Auto puts it on the side of the screen Falcon is not on.
+The info panel is two lines in a top corner. One says what is coming up. The other says how your last attempt went. Panel Side Auto puts it on the side of the screen you are not on.
 
 ## Quick menu timing
 
@@ -89,4 +89,4 @@ The Missed and Skipped buzzes are about cues. The last five rows are about [ledg
 
 Controller rumble is a separate setting. See [Cues](cues.md#rumble).
 
-[Back to the README](../../README.md)
+[Back to the guide](README.md) · [Back to the README](../../README.md)

@@ -7,7 +7,7 @@
 #include <stdint.h>
 
 #define TM_VERSSHORT "TM-CE LG 0.9.28"
-#define TM_VERSLONG "TM-CE v1.4 + Landing Gear 0.9.0"
+#define TM_VERSLONG "TM-CE v1.4 + Landing Gear 0.9.28"
 #define EVENT_DATASIZE 512
 #define TM_FUNC -(50 * 4)
 

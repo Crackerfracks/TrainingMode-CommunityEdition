@@ -1,10 +1,18 @@
 # Timers
 
-Timers count down the frames to each input so you can press on the right one.
+Timers count down the [frames](glossary.md#frame) to each input so you can press on the right one.
 
-Six ways to count down next to Falcon, three in the corner, one at the landing spot, three for wavelands. Pick one. Picking all of them is how 0.6.5 happened.
+Six ways to count down next to you, four in a corner, one at the landing spot, three for wavelands and three for wavedashes. Pick one. Picking all of them is how 0.6.5 happened.
 
-<!-- GIF: Battlefield, double jump toward the top platform with the Cells strip in the corner, the landing spot brackets closing, and a press on the gate, at default settings -->
+<!-- GIF: ../media/timers.gif (strip-cells, Battlefield): a double jump toward the top platform with the Cells look in the corner, the landing spot brackets closing, and a press on the gate, at default settings -->
+
+## The words
+
+- **Near You** is the timer that rides with your fighter. **Fixed Strip** is the one in a corner of the screen. They are two rows of the Timers menu and each has several looks.
+- The Fixed Strip's looks are **Cells**, **Highway**, **Dial** and **Conveyor**. "The Cells look" always means this one; the Wavedash row has a value called Cells too, which adds a row to it.
+- A **lane** is one cue's line in the Fixed Strip, labeled AI, NIL, WL (waveland), WD (wavedash), JUMP, HOP or DRP (ledge drop). Cells, Highway and Dial give each cue its own lane. Conveyor puts every cue on one belt and tells them apart by shape.
+- The **gate** is the white line in the Fixed Strip where a press is due. (The controller display has a stick octagon, and Jump Timing's path has colored bars. Neither is called a gate on these pages.)
+- A **window** is the frames a press works on. A **note** is a window as the Highway or Conveyor draws it.
 
 ## Options
 
@@ -12,74 +20,79 @@ The Timers menu, in menu order.
 
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |
-| Near Falcon | Off, Bubble, Halo, Pincers, ECB Fill, Lights, Old Strip | Off | A countdown that rides with Falcon. Bubble: a ring closes on where his body will be. Halo: a bead runs into a notch. Pincers, ECB Fill and Lights close, fill or count in on him. |
-| Fixed Strip | Off, Cells, Highway, Dial | Cells | A countdown in a corner. Cells slide into a gate, Highway drops notes into a window, Dial sweeps a hand into the window. Press as it arrives. |
-| Wide Cells | Off, On | On | Makes each frame cell of the cell timers a little wider. |
+| Near You | Off, Bubble, Halo, Pincers, ECB Fill, Lights, Old Strip | Off | A countdown that rides with you. Bubble: a ring closes on where your body will be. Halo: a bead runs into a notch. Pincers, ECB Fill and Lights close, fill or count in on you. |
+| Fixed Strip | Off, Cells, Highway, Dial, Conveyor | Cells | A countdown in a corner. Cells slide into a gate, Highway drops notes into a window, Dial sweeps a hand in, Conveyor carries every cue on one moving belt. Press as it arrives. |
+| Wide Cells | Off, On | On | Makes each frame cell of the Cells look a little wider. |
 | Landing Spot | Off, On | On | Brackets close in on the landing spot of an AI or NIL and meet it on the frame to press. |
 | Waveland | Off, Ticks, Rails, Chevrons | Ticks | Drawn at the slide. Ticks run in from its ends and spike where they meet, rails fill in, or chevrons hop in a notch a frame. They meet on the frame to airdodge. |
-| Wavedash | Off, Cells, Pips, Ring | Cells | Drawn out of the jumpsquat. A row in the strips, a pip a frame under Falcon's feet, or a ring on the floor that closes on the airdodge frame. Works with Waveland Cues off. |
+| Wavedash | Off, Cells, Pips, Ring | Cells | Drawn out of the [jumpsquat](glossary.md#jumpsquat). Cells: a WD lane in the Fixed Strip. Pips: a pip a frame under your feet. Ring: a ring on the floor that closes on the airdodge frame. Works with Waveland Cues off. |
 | Note Travel | Fixed Speed, Catch Up | Fixed Speed | Applies to Cells and Highway. Fixed Speed: a frame is always the same distance, so a window found late shows up partway along. Catch Up: every window comes in from the far end and settles to that speed halfway in. |
 
 ## How to read it
 
-- The timer is colored like its cue: pink for an AI, green for a NIL, cyan for a waveland or wavedash.
-- Solid cells are the frames to press on. Hollow cells are the frames you touch down.
-- The white gate is the frame to press now. Press when a solid cell reaches it.
-- A timer that goes slate means you missed the window.
+Every look uses the same colors: pink for an AI, green for a NIL, cyan for a waveland or wavedash, yellow for a jump. A timer that goes slate means you missed the window.
+
+- **Cells.** Each lane is a row of frame cells sliding toward the gate, one cell a frame. Solid cells are the frames to press on; hollow cells are the frames you [touch down](glossary.md#touchdown). Press when a solid cell reaches the gate. A tick under every cell and a brighter empty cell every fifth frame show the game's clock going by, so you can see the row moving even with no window on it.
+- **Highway.** One upright lane per cue. Notes fall down the lane onto a strikeline, and each lane has a window one note tall above it. Press when the note is in the window.
+- **Dial.** A hand sweeps round the dial and the window is a wedge on the rim. Press as the hand enters the wedge. Ticks round the rim mark the frames.
+- **Conveyor.** One belt for every cue, moving a row a frame, with a heavier line every fifth frame. Notes on the same frame share a row. Shapes tell the kinds apart: a jump has a raised cap, an AI is solid, a NIL is notched, a waveland or wavedash is hollow. A plan from a press you haven't made yet hovers over the rows it will take and sets down when you press. A small key beside the belt names the shapes.
 - You can run several timers at once. Fixed Strip, Landing Spot, Waveland and Wavedash are on at the start.
+
+How a window ends tells you where it was due. A hit flashes the gate white (on Highway the note burns white and a beam runs up the lane). A skip leaves the note in the gate or window in gray for a moment. A miss leaves it cracked in two. An early press on the JUMP lane says how early.
 
 ## Tips
 
-- Start with the corner strip. It stays in one place, so you can read it without looking at Falcon.
-- Try Near Falcon when you want the countdown where you are already looking. Bubble draws every live cue at its own spot. The other looks draw only the soonest cue, and when two tie, the AI comes before the NIL and the NIL before the waveland.
-- How a window ends shows where it was due. A hit flashes the gate white (on Highway the note burns white and a beam runs up the lane). A skip leaves the note in the gate or window in gray for a moment. A miss leaves it cracked in two. Early presses on the JUMP lane say how early.
-- While ledge routes are showing in the timer, the Near Falcon timers are not drawn.
+- Start with the Fixed Strip. It stays in one place, so you can read it without looking at your fighter.
+- Try Near You when you want the countdown where you are already looking. Bubble draws every live cue at its own spot. The other looks draw only the soonest cue, and when two tie, the AI comes before the NIL and the NIL before the waveland.
+- While ledge routes are showing in the Fixed Strip, the Near You timer is not drawn.
 - Timers get fainter or bolder with Intensity, and each can fade as you learn it. See [Visibility](visibility.md).
 
 <details>
-<summary>Fixed Strip: Cells, Highway, Dial</summary>
+<summary>Fixed Strip: Cells, Highway, Dial, Conveyor</summary>
 
-<!-- GIF: the same AI with Fixed Strip set to Cells -->
-<!-- GIF: the same AI with Fixed Strip set to Highway -->
-<!-- GIF: the same AI with Fixed Strip set to Dial -->
+<!-- GIF: ../media/strip-cells.gif (strip-cells, Battlefield): the same AI with Fixed Strip set to Cells -->
+<!-- GIF: ../media/strip-highway.gif (strip-highway, Battlefield): the same AI with Fixed Strip set to Highway -->
+<!-- GIF: ../media/strip-dial.gif (strip-dial, Battlefield): the same AI with Fixed Strip set to Dial -->
+<!-- GIF: ../media/strip-conveyor.gif (strip-conveyor, Battlefield): the same AI with Fixed Strip set to Conveyor -->
 
 </details>
 
 <details>
-<summary>Near Falcon: Bubble, Halo, Pincers, ECB Fill, Lights, Old Strip</summary>
+<summary>Near You: Bubble, Halo, Pincers, ECB Fill, Lights, Old Strip</summary>
 
-<!-- GIF: the same AI with Near Falcon set to Bubble -->
-<!-- GIF: the same AI with Near Falcon set to Halo -->
-<!-- GIF: the same AI with Near Falcon set to Pincers -->
-<!-- GIF: the same AI with Near Falcon set to ECB Fill -->
-<!-- GIF: the same AI with Near Falcon set to Lights -->
-<!-- GIF: the same AI with Near Falcon set to Old Strip -->
+<!-- GIF: ../media/near-bubble.gif (near-bubble, Battlefield): the same AI with Near You set to Bubble -->
+<!-- GIF: ../media/near-halo.gif (near-halo, Battlefield): the same AI with Near You set to Halo -->
+<!-- GIF: ../media/near-pincers.gif (near-pincers, Battlefield): the same AI with Near You set to Pincers -->
+<!-- GIF: ../media/near-ecbfill.gif (near-ecbfill, Battlefield): the same AI with Near You set to ECB Fill -->
+<!-- GIF: ../media/near-lights.gif (near-lights, Battlefield): the same AI with Near You set to Lights -->
+<!-- GIF: ../media/near-oldstrip.gif (near-oldstrip, Battlefield): the same AI with Near You set to Old Strip -->
 
 </details>
 
 <details>
 <summary>Waveland: Ticks, Rails, Chevrons</summary>
 
-<!-- GIF: the same perfect waveland with Waveland set to Ticks -->
-<!-- GIF: the same perfect waveland with Waveland set to Rails -->
-<!-- GIF: the same perfect waveland with Waveland set to Chevrons -->
+<!-- GIF: ../media/wl-ticks.gif (waveland, Stadium): the same perfect waveland with Waveland set to Ticks -->
+<!-- GIF: ../media/wl-rails.gif (wl-rails, Stadium): the same perfect waveland with Waveland set to Rails -->
+<!-- GIF: ../media/wl-chevrons.gif (wl-chevrons, Stadium): the same perfect waveland with Waveland set to Chevrons -->
 
 </details>
 
 <details>
 <summary>Wavedash: Cells, Pips, Ring</summary>
 
-<!-- GIF: the same wavedash with Wavedash set to Cells -->
-<!-- GIF: the same wavedash with Wavedash set to Pips -->
-<!-- GIF: the same wavedash with Wavedash set to Ring -->
+<!-- GIF: ../media/wd-cells.gif (wavedash, first half, Final Destination): the same wavedash with Wavedash set to Cells -->
+<!-- GIF: ../media/wd-pips.gif (wd-pips, Final Destination): the same wavedash with Wavedash set to Pips -->
+<!-- GIF: ../media/wd-ring.gif (wd-ring, Final Destination): the same wavedash with Wavedash set to Ring -->
 
 </details>
 
 <details>
 <summary>Note Travel: Fixed Speed and Catch Up</summary>
 
-<!-- GIF: the same AI with Note Travel set to Fixed Speed, then Catch Up, with a window found late -->
+<!-- GIF: ../media/travel-fixed.gif (hero, Battlefield): the same AI with Note Travel set to Fixed Speed, with a window found late -->
+<!-- GIF: ../media/travel-catchup.gif (travel-catchup, Battlefield): the same AI with Note Travel set to Catch Up -->
 
 </details>
 
-[Back to the README](../../README.md)
+[Back to the guide](README.md) · [Back to the README](../../README.md)

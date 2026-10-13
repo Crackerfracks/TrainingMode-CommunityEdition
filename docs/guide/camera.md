@@ -4,7 +4,7 @@ The Camera menu sets the camera mode and lets you save and name camera views for
 
 Eight saved views per stage, each with a name up to 12 letters long. You can name one FALCON CAM. Nobody will stop you.
 
-<!-- GIF: Battlefield with the camera in Advanced mode, panning with the C-stick while A is held, then zooming with Y -->
+<!-- GIF: ../media/cam-advanced.gif (cam-advanced, Battlefield): the camera in Advanced mode, panning with the C-stick while A is held, then zooming with Y -->
 
 ## Options
 
@@ -33,12 +33,12 @@ Views belong to the stage. The same slot on another stage is a different view. A
 
 ## Tips
 
-- Pause on a moment you like with Frame Advance, then save the view.
+- Pause on a moment you like with [Frame Advance](glossary.md#frame-advance), then save the view.
 
 <details>
 <summary>Camera modes: Normal, Zoom, Fixed, Advanced</summary>
 
-<!-- GIF: the same jump in Normal, Zoom, Fixed and Advanced camera modes -->
+<!-- GIF: ../media/cam-normal.gif, ../media/cam-zoom.gif, ../media/cam-fixed.gif, ../media/cam-advanced.gif (cam-*, Battlefield): the same jump in Normal, Zoom, Fixed and Advanced camera modes -->
 
 </details>
 
@@ -56,4 +56,4 @@ Frame Advance is how you check a cue against what happened. D-pad down turns it 
 
 The D-pad does nothing while a trigger is partway in, so shielding cannot turn Frame Advance on by accident.
 
-[Back to the README](../../README.md)
+[Back to the guide](README.md) · [Back to the README](../../README.md)

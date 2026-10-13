@@ -2,9 +2,9 @@
 
 Presets save a whole setup so you can switch between them in one step, and pick the one the event starts with.
 
-Four built-in presets, four slots of your own, and User Custom, which saves itself every time you close the menu after changing something by hand.
+Four built-in presets, four slots of your own, and User Custom, which saves itself every time you close the menu after changing something by hand. Defaults is what Crackerfracks settled on after 0.6.5, which is why most of the paths start off.
 
-<!-- GIF: the quick menu opening over a frozen jump, flipping to another preset card, then the stick playing out of it, at default settings -->
+<!-- GIF: ../media/quick-menu.gif (by pad, Battlefield): the quick menu opening over a frozen jump, flipping to another preset card, then the stick playing out of it, at default settings -->
 
 ## Options
 
@@ -27,11 +27,11 @@ Minimal, Everything and Ledge Drill are Defaults with the changes below. Everyth
 
 ### Defaults
 
-The values in the Default columns of this guide. AI and waveland cues, the corner strip, the landing spot brackets and the controller display.
+The values in the Default columns of this guide. On screen: AI and waveland cues, the Fixed Strip (Cells), the landing spot brackets, the waveland and wavedash timers, the controller display, the info panel, input markers, frame dots, Window Bands, the ledge route path, Body Flash and the shield drop zone.
 
 ### Minimal
 
-The AI cue and the corner strip, nothing else on screen.
+The AI cue and the Fixed Strip, and as little else as the preset reaches. Waveland cues, the landing spot, the waveland and wavedash timers, frame dots, the controller and the info panel go off. Body Flash, input markers, Window Bands and the ledge route path are not in the preset, so they stay as they were.
 
 | Menu | Option | Defaults | Minimal |
 | --- | --- | --- | --- |
@@ -45,13 +45,13 @@ The AI cue and the corner strip, nothing else on screen.
 
 ### Everything
 
-Every cue, path, timer and sound.
+Every cue, path, timer and sound that has a plain on switch. It leaves Jump Timing, Controller Cues and Rumble as they were, and keeps the Fixed Strip on Cells.
 
 | Menu | Option | Defaults | Everything |
 | --- | --- | --- | --- |
 | Cues | NIL Cues | Off | On |
 | Cues | Platform Glow | Off | On |
-| Timers | Near Falcon | Off | Bubble |
+| Timers | Near You | Off | Bubble |
 | Paths | Landing Path | Off | On |
 | Paths | Body Path | Off | On |
 | Paths | Slide-off Line | Off | On |
@@ -74,7 +74,10 @@ Ledge routes from the ledge, both kinds, reset to the same ledge each time.
 <details>
 <summary>The four built-in presets, side by side</summary>
 
-<!-- GIF: the same jump on Battlefield under Defaults, Minimal, Everything and Ledge Drill -->
+<!-- GIF: ../media/preset-defaults.gif (hero, Battlefield): the same jump under Defaults -->
+<!-- GIF: ../media/preset-minimal.gif (preset-minimal, Battlefield): under Minimal -->
+<!-- GIF: ../media/preset-everything.gif (everything-jump, Battlefield): under Everything -->
+<!-- GIF: ../media/preset-ledgedrill.gif (preset-ledgedrill, Battlefield): under Ledge Drill -->
 
 </details>
 
@@ -98,7 +101,7 @@ Name grid inputs (the same grid names camera views):
 
 ## What a preset stores
 
-A preset stores every list, number and toggle in the Cues, Intensity by Group, Rumble, Timers, Paths, HUD, Sounds, Ledge Practice, Jump Timing, Camera and Speed menus. That is 70 options.
+A preset stores every list, number and toggle in the Cues, Intensity by Group, Rumble, Timers, Paths, HUD, Sounds, Ledge Practice, Jump Timing, Camera and Speed menus. That is 72 options.
 
 It does not store:
 
@@ -123,7 +126,7 @@ On a fresh start with no memory card, no saved file, or an unreadable file, noth
 
 ## Quick menu
 
-The quick menu opens a deck of your presets over a frozen game so you can switch between them without opening the main menu. It needs HUD > Quick Menu on, which it is by default.
+The quick menu lays your presets out as cards over a frozen game, so you can switch between them without opening the main menu. It needs HUD > Quick Menu on, which it is by default.
 
 On the ground it also puts up a still example hop, so the cues have something to show.
 
@@ -149,12 +152,12 @@ A D-pad press or a new trigger press brings back a quick menu that is fading out
 
 ### Settings in the list
 
-The list has 16 rows, in this order:
+The list has 16 rows, in this order, named as the quick menu names them:
 
 1. AI cues
 2. NIL cues
 3. Waveland cues
-4. Timer near Falcon
+4. Timer near you (Timers > Near You)
 5. Fixed strip
 6. Landing spot
 7. Waveland timer
@@ -170,4 +173,4 @@ The list has 16 rows, in this order:
 
 How long the quick menu stays up or plays out is set in the HUD menu. See [HUD](hud.md).
 
-[Back to the README](../../README.md)
+[Back to the guide](README.md) · [Back to the README](../../README.md)

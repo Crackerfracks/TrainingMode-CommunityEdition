@@ -170,6 +170,7 @@ void llsim_table_begin(int keep_lean)
     memset(ecb_table, 0, sizeof(EcbSample) * TS_COUNT * LL_STATE_FRAMES);
     memset(state_len, 0, sizeof(state_len));
     memset(state_next, -1, sizeof(state_next));
+    fall_step = 1;
     if (!keep_lean)
         Lean_Drop();
 }
@@ -201,6 +202,17 @@ void llsim_loops(const int *loops)
 {
     for (int i = 0; i < 3; i++)
         fall_loop[i] = loops[i] > 0 && loops[i] <= LL_STATE_FRAMES ? loops[i] : LL_FALL_LOOP;
+}
+
+// The falls' lean step (fall_step), as a capture's LLFALLANIM lines show it.
+void llsim_step(int step)
+{
+    fall_step = step > 1 ? step : 1;
+}
+
+int llsim_fall_step(void)
+{
+    return fall_step;
 }
 
 int llsim_len(int ts, int len, int next)

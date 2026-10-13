@@ -12,7 +12,8 @@
  *       the ECB table in use, as the game's LLECB and LLLEN lines
  *
  * The ECB table is Falcon's baked one unless -t names a capture's log
- * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it.
+ * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it
+ * (and its LLFALLANIM lines give the falls' lean step, Step_Load).
  * -p names a packed TM/llecb.bin (tools/llsim/ecbpack.py) to load the
  * dump's fighter from, as the event does for every fighter but Falcon.
  * The fall leans in use (Falcon's, or a packed fighter's own) stay, as in
@@ -129,6 +130,54 @@ static void Dump_Load(const char *path)
     fclose(f);
 }
 
+// The falls' lean step (fall_step) from a capture's LLFALLANIM lines, as
+// tools/llsim/ecbpack.py fits it: of each fall's frames in a row, how many
+// moved the animation a frame (step 1) and how many moved it 2 after a
+// frame that leant, 1 otherwise (step 2), the lean from the LLLEANECB line
+// before. The rule that explains more wins; 1 with no LLFALLANIM lines.
+static int Step_Load(const char *path, const int *loops)
+{
+    FILE *f = fopen(path, "r");
+    if (!f)
+        return 1;
+    char line[512];
+    int lean_ts = -1, lean_frame = 0, prev_ts = -1, prev_frame = 0, prev_anim = 0, pairs = 0, fits[2] = {0, 0};
+    float lean = 0, prev_lean = 0;
+    while (fgets(line, sizeof(line), f))
+    {
+        char *t;
+        int ts, frame, sid;
+        unsigned bits;
+        if ((t = strstr(line, "LLLEANECB ")))
+        {
+            lean_ts = -1;
+            if (sscanf(t + 10, "%d %*d %d %*d %*d %*d %x", &ts, &frame, &bits) == 3)
+                lean_ts = ts, lean_frame = frame, memcpy(&lean, &bits, sizeof(lean));
+        }
+        else if ((t = strstr(line, "LLFALLANIM ")) && sscanf(t + 11, "%d %d %d %x", &ts, &frame, &sid, &bits) == 4)
+        {
+            float a;
+            memcpy(&a, &bits, sizeof(a));
+            int anim = (int)(a + 0.5f), fall = ts == 4 ? 0 : ts == 5 ? 1 : -1; // TS_FALL, TS_FALLAERIAL
+            if (fall >= 0 && ts == prev_ts && frame == prev_frame + 1)
+            {
+                int loop = loops[fall] > 0 ? loops[fall] : 8, d = ((anim - prev_anim) % loop + loop) % loop;
+                pairs++;
+                fits[0] += d == 1 % loop;
+                fits[1] += d == (prev_lean > 0 ? 2 : 1) % loop;
+            }
+            prev_ts = fall >= 0 && lean_ts == ts && lean_frame == frame ? ts : -1;
+            prev_frame = frame, prev_anim = anim, prev_lean = lean;
+        }
+    }
+    fclose(f);
+    int step = fits[1] > fits[0] ? 2 : 1;
+    if (pairs)
+        fprintf(stderr, "llsim: %s: falls step %d (of %d frame pairs, step 1 explains %d, step 2 %d)\n", path, step, pairs,
+                fits[0], fits[1]);
+    return step;
+}
+
 // A capture's LLECB and LLLEN lines in place of the baked table.
 static void Table_Load(const char *path, int keep_lean)
 {
@@ -139,7 +188,7 @@ static void Table_Load(const char *path, int keep_lean)
         exit(1);
     }
     char line[512];
-    int table_char = -1, rows = 0, lens = 0;
+    int table_char = -1, rows = 0, lens = 0, loops[3] = {0, 0, 0};
     while (fgets(line, sizeof(line), f))
     {
         char *t;
@@ -157,12 +206,8 @@ static void Table_Load(const char *path, int keep_lean)
             rows += llsim_ecb(ts, frame, flags, w);
         else if ((t = strstr(line, "LLLEN ")) && sscanf(t + 6, "%d %d %d", &ts, &len, &next) == 3)
             lens += llsim_len(ts, len, next);
-        else if ((t = strstr(line, "LLLOOP ")))
-        {
-            int loops[3];
-            if (sscanf(t + 7, "%d %d %d", &loops[0], &loops[1], &loops[2]) == 3)
-                llsim_loops(loops);
-        }
+        else if ((t = strstr(line, "LLLOOP ")) && sscanf(t + 7, "%d %d %d", &loops[0], &loops[1], &loops[2]) == 3)
+            llsim_loops(loops);
     }
     fclose(f);
     if (table_char < 0 || rows == 0)
@@ -172,6 +217,7 @@ static void Table_Load(const char *path, int keep_lean)
     }
     if (table_char != dump_char)
         fprintf(stderr, "llsim: warning: %s is char %d's table, the dump is char %d's\n", path, table_char, dump_char);
+    llsim_step(Step_Load(path, loops));
 }
 
 static void Packed_Load(const char *path)
@@ -191,7 +237,7 @@ static void Packed_Load(const char *path)
         fprintf(stderr, "llsim: %s has no table for char %d\n", path, dump_char);
         exit(1);
     }
-    fprintf(stderr, "llsim: char %d: %d rows from %s\n", dump_char, rows, path);
+    fprintf(stderr, "llsim: char %d: %d rows from %s, falls step %d\n", dump_char, rows, path, llsim_fall_step());
 }
 
 int main(int argc, char **argv)

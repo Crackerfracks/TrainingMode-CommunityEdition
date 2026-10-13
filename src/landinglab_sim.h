@@ -320,9 +320,27 @@ static void Learned_Clear(void)
 // or its packed table).
 static u8 fall_loop[3] = {LL_FALL_LOOP, LL_FALL_LOOP, LL_FALL_LOOP};
 
+// How many frames Fall's and FallAerial's animations move on a frame after
+// one that leant (lean > 0): 2 for Peach and DK, 1 for the rest (their
+// LLFALLANIM lines). Unleaning, they move 1. From the packed table.
+static u8 fall_step = 1;
+
 static int Fall_Index(int ts)
 {
     return ts == TS_FALL ? 0 : ts == TS_FALLAERIAL ? 1 : ts == TS_FALLSPECIAL ? 2 : -1;
+}
+
+static int Is_Fall(int ts)
+{
+    return ts == TS_FALL || ts == TS_FALLAERIAL;
+}
+
+// The live fall's animation frame in its loop: where its pose is, which
+// is the frame in the state only while it moves 1 a frame (fall_step).
+static int Fall_Anim(FighterData *fp, int ts)
+{
+    int anim = (int)(fp->state.frame + 0.5f);
+    return anim < 0 ? 0 : anim % fall_loop[Fall_Index(ts)];
 }
 
 // Where a frame is learned.
@@ -1045,11 +1063,12 @@ static void Fall_Learn(FighterData *fp, int ts)
         fall_loop[fi] = n < 1 ? 1 : n > LL_STATE_FRAMES ? LL_STATE_FRAMES : n;
 }
 
+// A fall is learned at its animation frame (Fall_Anim).
 static void Ecb_Record(FighterData *fp, int ts, int frame)
 {
     if (frame >= LL_STATE_FRAMES)
         return;
-    Ecb_Fill(fp, Ecb_Slot(ts, frame));
+    Ecb_Fill(fp, Ecb_Slot(ts, Is_Fall(ts) ? Fall_Anim(fp, ts) : frame));
 }
 
 // Falcon Dive moves by its animation (ft_80085134) plus a drift speed of its
@@ -2364,6 +2383,7 @@ typedef struct SimStart
     int ecb_lock;
     int skip_line;
     float lean;          // a fall's blend toward its leaning pose (mv.co.fall.x4)
+    int anim;            // a fall's animation frame in its loop (Fall_Anim)
     Vec2 drift;          // Falcon Dive's own drift speed (mv.ca.specialhi.vel)
     float special_lag;   // the helpless fall's landing lag (mv.co.fallspecial.landing_lag)
     int dodge_late;      // an airdodge's first frame, pressed in a late window
@@ -2391,6 +2411,7 @@ typedef struct SimState
     int dodge_low;   // ... or at the shallowest angle down (WL_LOW_*)
     float lean;      // a fall's blend toward its leaning pose
     int lean_side;   // LEAN_FORWARD, LEAN_BACK or LEAN_NONE
+    int anim;        // a fall's animation frame in its loop: the pose
     float locked_bottom; // bottom kept while the lock lasts
     float face;          // facing: Falcon Dive can turn him around
     Vec2 drift;          // Falcon Dive's drift speed (x: Ness's double jump's)
@@ -3055,6 +3076,7 @@ static void Sim_ForFighter(int kind)
         return;
     sim_falcon = falcon;
     fall_loop[0] = fall_loop[1] = fall_loop[2] = LL_FALL_LOOP;
+    fall_step = 1;
     Learned_Clear();
     lean_rows = falcon ? lean_ecb : lean_own;
     lean_count = 0;
@@ -3071,15 +3093,16 @@ static void Sim_ForFighter(int kind)
 // of LLE_FIGHTERS entries (internal kind, offset, size, a pad word). A
 // fighter's block: u16 rows, u16 states, each state's s16 frames and s16
 // next state (as LLLEN), the falls' loops (u8 each for Fall, FallAerial,
-// FallSpecial, then a pad byte; 0 = Falcon's), then each row: u8 state, u8
-// frame, u8 flags (BAKED_*), a pad byte and five floats (as BakedEcb). Then
-// sections, each a u32 tag, its u32 size and its data, up to a zero tag:
-// "LEAN", the falls' leans: u16 rows, a pad u16, each row u8 fall, u8
-// leaning back, u8 loop frame, a pad byte and six floats (as LeanEcb, in
-// its order). "DJMV", a double-jump-cancel fighter's double jump movement:
-// u16 frames forward, u16 backward, then each frame's two floats (DjMove x
-// and y), forward ones first. Blocks start and end on 32 bytes, as the disc
-// reads them.
+// FallSpecial; 0 = Falcon's) and their lean step (u8 fall_step; 0 = 1, the
+// pad byte of packs from before it), then each row: u8 state, u8 frame
+// (a fall's: its animation frame), u8 flags (BAKED_*), a pad byte and five
+// floats (as BakedEcb). Then sections, each a u32 tag, its u32 size and its
+// data, up to a zero tag: "LEAN", the falls' leans: u16 rows, a pad u16,
+// each row u8 fall, u8 leaning back, u8 animation frame in the loop, a pad
+// byte and six floats (as LeanEcb, in its order). "DJMV", a
+// double-jump-cancel fighter's double jump movement: u16 frames forward,
+// u16 backward, then each frame's two floats (DjMove x and y), forward ones
+// first. Blocks start and end on 32 bytes, as the disc reads them.
 #define LLE_FIGHTERS 32
 #define LLE_DIR_BYTES (32 + LLE_FIGHTERS * 16)
 #define LLE_ROW 24
@@ -3141,6 +3164,7 @@ static int Ecb_Unpack(const u8 *b, int size)
     }
     for (int i = 0; i < 3; i++)
         fall_loop[i] = b[at + i] ? b[at + i] : LL_FALL_LOOP;
+    fall_step = b[at + 3] > 1 ? b[at + 3] : 1;
     at += 4;
     for (int i = 0; i < rows; i++, at += LLE_ROW)
     {
@@ -3260,8 +3284,9 @@ static EcbSample *Lean_Mix(EcbSample *plain, const LeanEcb *rows, int levels, in
     return out;
 }
 
-// The fall's ECB on this frame with the given lean.
-static EcbSample *Lean_Ecb(EcbSample *plain, int ts, int side, int frame, float lean, EcbSample *out)
+// The fall's ECB on this frame (in the state) and animation frame with the
+// given lean.
+static EcbSample *Lean_Ecb(EcbSample *plain, int ts, int side, int frame, int anim, float lean, EcbSample *out)
 {
     int fall = ts == TS_FALLAERIAL, back = side == LEAN_BACK;
     if (side == LEAN_NONE || lean <= 0.f || !plain->has_bottom || !plain->has_shape)
@@ -3271,12 +3296,7 @@ static EcbSample *Lean_Ecb(EcbSample *plain, int ts, int side, int frame, float 
     if (lean_levels[fall][back] == 0)
         return plain;
     int loop = fall_loop[fall];
-    return Lean_Mix(plain, &lean_rows[lean_first[fall][back] + frame % loop], lean_levels[fall][back], loop, lean, out);
-}
-
-static int Is_Fall(int ts)
-{
-    return ts == TS_FALL || ts == TS_FALLAERIAL;
+    return Lean_Mix(plain, &lean_rows[lean_first[fall][back] + anim % loop], lean_levels[fall][back], loop, lean, out);
 }
 
 // The live fall's blend (mv.co.fall.x4, the second state variable; the
@@ -3335,6 +3355,7 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->ecb_lock = cd->u.ecb_bot_lock_frames;
     s->skip_line = cd->ignore_line;
     s->lean = Lean_FromFighter(fp, ts);
+    s->anim = Is_Fall(ts) ? Fall_Anim(fp, ts) : 0;
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
     s->dodge_late = 0;
@@ -3382,6 +3403,7 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->dodge_low = start->ts == TS_ESCAPEAIR && start->vel.Y < 0 && -start->vel.Y <= fabs(start->vel.X) * WL_LOW_MAX_TAN;
     s->lean = start->lean;
     s->lean_side = LEAN_NONE;
+    s->anim = start->anim;
     s->locked_bottom = start->locked_bottom;
     s->face = start->facing;
     s->drift = start->drift;
@@ -3470,16 +3492,21 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
         }
     }
 
-    // a fall's lean: back to plain on entering, then toward the drift speed
+    // a fall's lean: back to plain on entering, then toward the drift speed;
+    // its animation moves on first, fall_step frames if it leant last frame
     if (Is_Fall(s->ts))
     {
         if (s->frame == 0)
         {
             s->lean = 0;
             s->lean_side = LEAN_NONE;
+            s->anim = 0;
         }
         else
+        {
+            s->anim = (s->anim + (s->lean > 0.f ? fall_step : 1)) % fall_loop[Fall_Index(s->ts)];
             s->lean_side = Lean_Update(fp, s->vx, s->face, &s->lean);
+        }
     }
 
     // Falcon Dive's IASA turns him toward a stick held far enough sideways
@@ -3502,9 +3529,9 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
 
     // this frame's learned ECB; for the airdodge, its first command variable
     // is the flag that ends the speed decay
-    EcbSample *e = Ecb_Get(s->ts, s->frame);
+    EcbSample *e = Ecb_Get(s->ts, Is_Fall(s->ts) ? s->anim : s->frame);
     if (Is_Fall(s->ts))
-        e = Lean_Ecb(e, s->ts, s->lean_side, s->frame, s->lean, &out->lean_ecb);
+        e = Lean_Ecb(e, s->ts, s->lean_side, s->frame, s->anim, s->lean, &out->lean_ecb);
     out->ecb = e;
 
     if (s->ts == TS_ESCAPEAIR && !e->aerial_lag)
@@ -4114,6 +4141,7 @@ static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, fl
     s->ecb_lock = 9; // set to 10 on takeoff, counted down before collision
     s->skip_line = -1;
     s->lean = 0;
+    s->anim = 0;
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
     s->dodge_late = 0;
@@ -4196,6 +4224,7 @@ static void Sim_ToStart(SimState *s, SimStart *start, SimStart *out)
     out->trigger_timer = s->trigger_timer;
     out->ecb_lock = s->lock;
     out->lean = s->lean;
+    out->anim = s->anim;
     out->facing = s->face;
     out->drift = s->drift;
     out->special_lag = s->special_lag;

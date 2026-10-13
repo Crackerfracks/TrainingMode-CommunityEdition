@@ -125,7 +125,9 @@ static void Lean_Log(FighterData *fp, int ts, int frame)
              Float_Bits(e.side_y), Float_Bits(e.front), Float_Bits(e.back));
     // and where its animation really is (LLFALLANIM state, frame in the
     // state, action state, then as bits the animation frame, its rate and
-    // blend), to check that the fall's pose follows the frame in the state
+    // blend): the fall's pose follows the animation frame, which moves
+    // fall_step frames after a leaning frame (ecbpack.py keys the leans by
+    // it and fits the step to it)
     OSReport("LLFALLANIM %d %d %d %08x %08x %08x\n", ts, frame, fp->state_id, Float_Bits(fp->state.frame),
              Float_Bits(fp->state.rate), Float_Bits(fp->state.blend));
 }

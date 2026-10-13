@@ -7,14 +7,15 @@ A capture (src/landinglab_capture.txt) ends with falls drifting free; its
 LLLEANECB lines tagged 9999 are those frames as the game played them. For
 each, the fall's ECB is worked out as the event does (Lean_Ecb: the plain
 loop frame, or its mix toward the grid's blends) and compared with the
-game's, next to what the plain pose alone would give. Prints the worst
-bottom and top error per fall and how many frames were off by more than
-0.01 unit; -v also lists those frames (state, frame, sm, side, lean, real
-and grid bottom and top).
+game's, next to what the plain pose alone would give, each at its
+animation frame (its LLFALLANIM line's, or the frame in the loop without
+one). Prints the worst bottom and top error per fall and how many frames
+were off by more than 0.01 unit; -v also lists those frames (state, frame,
+animation frame, sm, side, lean, real and grid bottom and top).
 """
 import sys
 
-from ecbpack import FREE, TS_FALL, TS_FALLAERIAL, bits_float, read_lean_frames, read_leans, read_table
+from ecbpack import FREE, TS_FALL, TS_FALLAERIAL, anim_frame, bits_float, read_lean_frames, read_leans, read_table
 
 
 def mix(plain, levels, lean):
@@ -33,7 +34,7 @@ def mix(plain, levels, lean):
 
 
 def check(path, verbose=False):
-    kind, rows, lens, loops, _, _ = read_table(path)
+    kind, rows, lens, loops, _, _, _ = read_table(path)
     loops = [l or 8 for l in loops]
     grid = {}
     for fall, back, k, words in read_leans(path, loops):
@@ -49,11 +50,12 @@ def check(path, verbose=False):
             frame, game_side, side = f[2], f[3], f[4]
             lean = bits_float(f[6][0])
             real = [bits_float(w) for w in f[6][1:]]
-            key = (ts, frame % loop)
+            anim = anim_frame(f, loop)
+            key = (ts, anim)
             if key not in rows:
                 continue
             plain = tuple(bits_float(w) for w in rows[key][1])
-            levels = grid.get((fall, side == 2, frame % loop))
+            levels = grid.get((fall, side == 2, anim))
             guess = {'plain': plain, 'grid': plain if side == 0 or lean <= 0 or not levels else mix(plain, levels, lean)}
             n += 1
             sides += side != 0
@@ -64,8 +66,8 @@ def check(path, verbose=False):
                 off = abs(g[0] - real[0]) > 0.01 or abs(g[1] - real[1]) > 0.01
                 w[2] += off
                 if verbose and off and name == 'grid':
-                    print('    off: %d %3d sm %d side %d lean %.4f real %.4f %.4f grid %.4f %.4f' %
-                          (ts, frame, game_side, side, lean, real[0], real[1], g[0], g[1]))
+                    print('    off: %d %3d anim %2d sm %d side %d lean %.4f real %.4f %.4f grid %.4f %.4f' %
+                          (ts, frame, anim, game_side, side, lean, real[0], real[1], g[0], g[1]))
         if not n:
             print('  state %d: no free frames' % ts)
             continue

@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """nav_boot_test.py [N]: boot the test Dolphin N times (default 10, alternating Fox and Mario) and drive it
-into Landing Lab with tools/nav/nav.py (closed loop on MemoryWatcher). A boot passes when nav exits 0 and the
+into Landing Gear with tools/nav/nav.py (closed loop on MemoryWatcher). A boot passes when nav exits 0 and the
 event logs the picked fighter ("LLECB fighter <internal id>"). Boots 3 and 8 get a `hyprctl reload` right
 after nav confirms the event. The build has no LLCHAR, so the fighter really comes from the CSS pick.
 Report: llsim-capture/nav_boot_test.txt; per-boot nav logs in nav_boot_<i>.txt.
@@ -45,7 +45,7 @@ def log_lines():
 
 with jobboard.Job("TM-CE nav boot test (closed-loop menus)", total=N, unit="boots", group="TM-CE", stale_after=400,
                   owner_label="Landing trainer research", replaces=os.environ.get("REPLACES") or None,
-                  description="nav.py route into Landing Lab, Fox/Mario alternating, hyprctl reload on boots 3 and 8",
+                  description="nav.py route into Landing Gear, Fox/Mario alternating, hyprctl reload on boots 3 and 8",
                   fields={"boot": 0, "fighter": "-", "passed": 0, "failed": 0}) as job:
     job.update(phase="building the test ISO (no LLCHAR)")
     env = dict(os.environ, LLSCRIPT="src/landinglab_dump.txt")
@@ -64,7 +64,7 @@ with jobboard.Job("TM-CE nav boot test (closed-loop menus)", total=N, unit="boot
         job.update(phase=f"boot {i}: {name}", fields={"boot": i, "fighter": name})
         open(f"{U}/Logs/dolphin.log", "w").close()
         navlog = open(f"{O}/nav_boot_{i}.txt", "w")
-        nav = subprocess.Popen(["python3", NAV, "route", "Landing Lab", name], stdout=navlog, stderr=subprocess.STDOUT)
+        nav = subprocess.Popen(["python3", NAV, "route", "Landing Gear", name], stdout=navlog, stderr=subprocess.STDOUT)
         time.sleep(1)                                   # nav binds the socket and writes Locations.txt first
         if HEADLESS:                                    # hidden X display; Stephen's screens untouched
             subprocess.Popen([f"{U}/hlaunch.sh", ISO])

@@ -1,4 +1,4 @@
-/* sim.c: Landing Lab's simulation (src/landinglab_sim.h) built for a PC,
+/* sim.c: Landing Gear's simulation (src/landinglab_sim.h) built for a PC,
  * with the game's data loaded where the game keeps it. Only MexTK's view of
  * the C library is visible here (its memcpy and calloc differ from the
  * PC's); main.c does the file work and calls in through llsim.h.

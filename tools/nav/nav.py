@@ -2,9 +2,9 @@
 """nav.py: closed-loop menu navigation for the test Dolphin (menus.toml has the map).
 
   nav.py watch [SECONDS]              print memory values as they change (calibration)
-  nav.py goto event "Landing Lab"     steer the event list onto an event and press A
+  nav.py goto event "Landing Gear"     steer the event list onto an event and press A
   nav.py pick fighter Fox             steer the CSS cursor onto a portrait and press A
-  nav.py route "Landing Lab" Falcon   the whole boot path: event, fighter, START
+  nav.py route "Landing Gear" Falcon   the whole boot path: event, fighter, START
 
 Start it BEFORE Dolphin: MemoryWatcher reads its Locations.txt at boot and only
 sends values when they change. Every step is checked against game memory and

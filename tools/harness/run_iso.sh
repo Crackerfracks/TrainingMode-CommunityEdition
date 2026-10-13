@@ -8,7 +8,7 @@ grep -q 'SlotA = 1' $U/Config/Dolphin.ini || echo "SlotA not 1"
 # closed-loop menus (tools/nav): nav binds the MemoryWatcher socket before Dolphin boots, then steers
 # event list -> CSS -> match from game memory. NAVFIGHTER picks the portrait (LLCHAR builds override it).
 NAV="/run/media/svaughn/External HD/Emulation/Mods/GC/Melee/TM-CE/TM-CE (CURRENT)/TM-CE_Claude_Landing_Trainer/TM-CE-landinglab-cloud/tools/nav/nav.py"
-python3 "$NAV" route "Landing Lab" "${NAVFIGHTER:-Falcon}" > $U/nav.out 2>&1 &
+python3 "$NAV" route "Landing Gear" "${NAVFIGHTER:-Falcon}" > $U/nav.out 2>&1 &
 NAVPID=$!; sleep 1
 if [ -n "$HEADLESS" ]; then
   # hidden X display (hlaunch.sh); no workspace, no focus guard. Stop the Xvfb we started on any exit.

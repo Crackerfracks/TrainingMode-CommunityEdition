@@ -1,6 +1,6 @@
 /* landinglab_sim.h
  *
- * Landing Lab's simulation: tracked states, the learned and baked ECB
+ * Landing Gear's simulation: tracked states, the learned and baked ECB
  * tables, stage floors and walls, and the prediction itself. Only
  * landinglab.c includes it (hmex builds an event from one file); it is
  * apart so tools/llsim can build the same code on a PC.

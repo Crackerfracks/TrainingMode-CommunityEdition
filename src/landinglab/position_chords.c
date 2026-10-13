@@ -2,7 +2,7 @@
  *
  * Holds saving and loading position, hiding the HUD, and button chords.
  *
- * Part of Landing Lab: src/landinglab.c includes it, in order, into one
+ * Part of Landing Gear: src/landinglab.c includes it, in order, into one
  * translation unit, so it sees everything included before it (and mex.h,
  * events.h, landinglab_sim.h).
  *
@@ -65,7 +65,7 @@ static int chord_pad_place; // where the controller goes when it comes back on
 static void Hide_Toggle(void)
 {
     hide_all ^= 1;
-    Toast(hide_all ? "Landing Lab hidden" : "Landing Lab shown");
+    Toast(hide_all ? "Landing Gear hidden" : "Landing Gear shown");
     SFX_PlayCommon(2);
 }
 
@@ -85,7 +85,7 @@ static void Chord(int lr, int z, int down)
     {
         // everything the event draws, hidden or back
         hide_all ^= 1;
-        Toast(hide_all ? "Landing Lab hidden" : "Landing Lab shown");
+        Toast(hide_all ? "Landing Gear hidden" : "Landing Gear shown");
     }
     else if (lr && z)
     {

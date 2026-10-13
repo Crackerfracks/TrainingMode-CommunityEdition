@@ -42,7 +42,7 @@ def make_iso(n):
     args += ["insert", "codes.gct", f"{CAP}/build/codes.gct", "insert", "Start.dol", f"{CAP}/build/Start.dol",
              "insert", "opening.bnr", f"{CAP}/opening.bnr"]
     subprocess.run(NICE + args, check=True, capture_output=True)
-    subprocess.run([f"{CAP}/gc_fst", "set-header", ISO, "GTME01", "TM-CE + Landing Lab"], check=True, capture_output=True)
+    subprocess.run([f"{CAP}/gc_fst", "set-header", ISO, "GTME01", "TM-CE + Landing Gear"], check=True, capture_output=True)
     tree = subprocess.run([f"{CAP}/gc_fst", "tree", ISO, "-s", "-o", "-x"], capture_output=True, text=True).stdout
     rows = sorted((int(p[1], 16), int(p[2], 16), p[0]) for p in (l.split("\t") for l in tree.splitlines())
                   if len(p) == 3 and p[1].startswith("0x") and int(p[2], 16) > 0)

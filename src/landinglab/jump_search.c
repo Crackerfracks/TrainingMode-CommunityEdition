@@ -3,7 +3,7 @@
  * Holds the jump search's candidates, solving, the chosen jump's text and
  * meter rows, and the route and jump paths.
  *
- * Part of Landing Lab: src/landinglab.c includes it, in order, into one
+ * Part of Landing Gear: src/landinglab.c includes it, in order, into one
  * translation unit, so it sees everything included before it (and mex.h,
  * events.h, landinglab_sim.h).
  *

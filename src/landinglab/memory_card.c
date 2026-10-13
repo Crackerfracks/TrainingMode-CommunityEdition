@@ -1,8 +1,8 @@
 /* landinglab/memory_card.c
  *
- * Holds Landing Lab's own memory card file: reading and writing the presets.
+ * Holds Landing Gear's own memory card file: reading and writing the presets.
  *
- * Part of Landing Lab: src/landinglab.c includes it, in order, into one
+ * Part of Landing Gear: src/landinglab.c includes it, in order, into one
  * translation unit, so it sees everything included before it (and mex.h,
  * events.h, landinglab_sim.h).
  *
@@ -13,7 +13,7 @@
 /// Memory card     ///
 ///////////////////////
 
-// Landing Lab's own file on the memory card in slot A: one block with a
+// Landing Gear's own file on the memory card in slot A: one block with a
 // comment for the card screen and the presets. It's read once at start (the
 // event waits for it, as the lab does), written in the background one step
 // a frame whenever a preset changes, and once more, waiting, on Exit.
@@ -147,10 +147,10 @@ static void Card_Load(void)
                     if (preset_file->version < PRESET_VERSION)
                         preset_file->version = PRESET_VERSION;
                     ok = 1;
-                    Card_Say("Kept in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
+                    Card_Say("Kept in Landing Gear's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
                 }
                 else
-                    Card_Say("Landing Lab's file on the card in slot A", "couldn't be read, so it starts over. Changes", "save when the menu closes.");
+                    Card_Say("Landing Gear's file on the card in slot A", "couldn't be read, so it starts over. Changes", "save when the menu closes.");
             }
             else if (r == CARD_RESULT_NOFILE)
                 Card_Say("Nothing saved on the card in slot A yet.", "Settings save to a file of 1 block there", "when the menu closes.");
@@ -182,7 +182,7 @@ static void Card_Fail(s32 r)
     if (r == CARD_RESULT_NOCARD || r == CARD_RESULT_WRONGDEVICE)
         Card_Say("No memory card in slot A: settings last until", "you leave the event.", "");
     else if (r == CARD_RESULT_INSSPACE || r == CARD_RESULT_NOENT)
-        Card_Say("The card in slot A is full: Landing Lab", "needs 1 free block and 1 free file, so", "settings last until you leave the event.");
+        Card_Say("The card in slot A is full: Landing Gear", "needs 1 free block and 1 free file, so", "settings last until you leave the event.");
     else
         Card_Error(r);
 }
@@ -205,7 +205,7 @@ static void Card_Begin(void)
 {
     CardImage *img = (CardImage *)card_buf;
     memset(card_buf, 0, CARD_SIZE);
-    strcpy(img->comment, "TM-CE Landing Lab");
+    strcpy(img->comment, "TM-CE Landing Gear");
     strcpy(img->comment + 32, "Settings presets");
     img->size = sizeof(PresetFile);
     memcpy(&img->file, preset_file, sizeof(PresetFile));
@@ -317,7 +317,7 @@ static void Card_Step(void)
         Card_Stop();
         card_gen_saved = card_gen_writing;
         card_probe = CARD_PROBE;
-        Card_Say("Saved in Landing Lab's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
+        Card_Say("Saved in Landing Gear's own file on the", "memory card in slot A (1 block). Changes", "save when the menu closes.");
         return;
     }
 }

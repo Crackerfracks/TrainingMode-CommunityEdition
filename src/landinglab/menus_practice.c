@@ -2,7 +2,7 @@
  *
  * Holds the Ledge, Jump, Camera, Controls, Developer and Rumble menus.
  *
- * Part of Landing Lab: src/landinglab.c includes it, in order, into one
+ * Part of Landing Gear: src/landinglab.c includes it, in order, into one
  * translation unit, so it sees everything included before it (and mex.h,
  * events.h, landinglab_sim.h).
  *
@@ -378,7 +378,7 @@ static EventOption Options_Controls[] = {
         .kind = OPTKIND_INFO,
         .name = "Hide Everything",
         .desc = {"Click L and R both all the way and press D-pad",
-                 "up or down: everything Landing Lab draws hides,",
+                 "up or down: everything Landing Gear draws hides,",
                  "or comes back. With a trigger only partway in,",
                  "the D-pad does nothing."},
     },

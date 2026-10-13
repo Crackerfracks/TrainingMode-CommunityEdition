@@ -147,7 +147,7 @@ if [ ! -f TM-CE.iso ]; then cp "${iso}" TM-CE.iso; fi
 # Landing Lab's per-fighter ECB tables (game data, kept out of git):
 # LLECB=<file>, or build/llecb.bin when it's there
 if [ -z "${LLECB}" ] && [ -f build/llecb.bin ]; then LLECB=build/llecb.bin; fi
-if [ -z "${LLECB}" ]; then echo "note: no build/llecb.bin, so Landing Lab's other fighters learn in play"; fi
+if [ -z "${LLECB}" ]; then echo "note: no build/llecb.bin, so Landing Gear's other fighters learn in play"; fi
 
 # add TM files to iso
 ${gc_fst} fs TM-CE.iso \
@@ -176,7 +176,7 @@ ${gc_fst} fs TM-CE.iso \
     insert codes.gct build/codes.gct \
     insert Start.dol build/Start.dol \
     insert opening.bnr opening.bnr
-${gc_fst} set-header TM-CE.iso "GTME01" "TM-CE + Landing Lab"
+${gc_fst} set-header TM-CE.iso "GTME01" "TM-CE + Landing Gear"
 
 echo "built TM-CE.iso"
 
@@ -199,7 +199,7 @@ sys.exit(1 if bad else 0)'; then
 fi
 
 # build release: the patch, checked by applying it, in
-# TM-CE-LandingLab-<version>.zip with one folder of the same name
+# TM-CE-LandingGear-<version>.zip with one folder of the same name
 if [ "${2}" = "release" ]; then
     ${xdelta} -fs "${iso}" -e "TM-CE.iso" "TM-CE/patch.xdelta"
     if [ "$(${xdelta} -dc -s "${iso}" TM-CE/patch.xdelta | sha256sum | cut -d' ' -f1)" != \
@@ -207,8 +207,8 @@ if [ "${2}" = "release" ]; then
         echo "Error: the patch doesn't rebuild TM-CE.iso"
         exit 1
     fi
-    version=$(sed -n 's/.*TM_VERSSHORT "TM-CE LL \([0-9.]*\)".*/\1/p' src/events.h)
-    name="TM-CE-LandingLab-${version}"
+    version=$(sed -n 's/.*TM_VERSSHORT "TM-CE LG \([0-9.]*\)".*/\1/p' src/events.h)
+    name="TM-CE-LandingGear-${version}"
     pkg=$(mktemp -d)
     mkdir "${pkg}/${name}"
     cp TM-CE/README.txt TM-CE/patch.xdelta TM-CE/xdelta3.exe TM-CE/build_linux_and_mac.sh \

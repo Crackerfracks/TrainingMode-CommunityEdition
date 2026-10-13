@@ -13,8 +13,8 @@ if %ISO%=="" (
     echo iso: %ISO%
 )
 
-xdelta3 -f -d -s %ISO% patch.xdelta TM-CE-LandingLab.iso || ( echo ERROR: The ISO is not a valid v1.02 NTSC melee iso & goto end )
-echo TM-CE-LandingLab.iso has been successfully created!
+xdelta3 -f -d -s %ISO% patch.xdelta TM-CE-LandingGear.iso || ( echo ERROR: The ISO is not a valid v1.02 NTSC melee iso & goto end )
+echo TM-CE-LandingGear.iso has been successfully created!
 
 :end
 

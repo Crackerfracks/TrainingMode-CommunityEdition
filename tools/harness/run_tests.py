@@ -56,7 +56,7 @@ with jobboard.Job(f"TM-CE test: {TAG}", total=len(PAIRS), unit="fighters", group
             job.log(f"{name}: build failed, see {TAG}_{name}_build.txt", "error"); continue
         shutil.move(f"{C}/TM-CE.iso", ISO)
         # the menu navigation is timed in wall-clock time, so a slow Dolphin can land on the wrong event: a run
-        # counts only if Landing Lab itself logged (its LLCHAR line); otherwise retry, up to 3 tries
+        # counts only if Landing Gear itself logged (its LLCHAR line); otherwise retry, up to 3 tries
         for attempt in range(1, 4):
             job.update(phase=f"running test Dolphin: {name} (try {attempt})")
             subprocess.run(["timeout", "1200", "nice", "-n", "15", f"{U}/run_iso.sh", TAG],
@@ -66,7 +66,7 @@ with jobboard.Job(f"TM-CE test: {TAG}", total=len(PAIRS), unit="fighters", group
             full = [re.sub(r"^.*N\[OSREPORT\]: ", "", l) for l in raw]
             if any(l.startswith("LLCHAR") for l in full):
                 break
-            job.log(f"{name}: try {attempt} never reached Landing Lab (no LLCHAR line; menu navigation missed)", "warn")
+            job.log(f"{name}: try {attempt} never reached Landing Gear (no LLCHAR line; menu navigation missed)", "warn")
         if os.path.exists(ISO): os.remove(ISO)
         open(f"{O}/{TAG}_{name}.log", "w").write("\n".join(full) + "\n")
         if os.environ.get("SHOTS") and os.path.isdir(f"{U}/{TAG}"):

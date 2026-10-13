@@ -2,7 +2,7 @@
  *
  * Holds Falcon's body flashing with the cues.
  *
- * Part of Landing Lab: src/landinglab.c includes it, in order, into one
+ * Part of Landing Gear: src/landinglab.c includes it, in order, into one
  * translation unit, so it sees everything included before it (and mex.h,
  * events.h, landinglab_sim.h).
  *

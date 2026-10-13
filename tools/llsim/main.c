@@ -1,4 +1,4 @@
-/* llsim: Landing Lab's simulation (src/landinglab_sim.h) on a PC.
+/* llsim: Landing Gear's simulation (src/landinglab_sim.h) on a PC.
  *
  * It reads a dump the event wrote to the log (script command "dump":
  * LLDUMP lines with the common fighter table, the fighter's attributes and

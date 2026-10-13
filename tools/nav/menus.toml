@@ -39,7 +39,7 @@ scroll      = "ess_scroll"      # index = row + scroll
 # pages (src/events.c EventPages): 0 Minigames, 1 General, 2 Character-specific
 [menu.event.items]
 "Float Cancelling Training" = { page = 2, index = 6 }
-"Landing Lab"               = { page = 2, index = 7 }
+"Landing Gear"               = { page = 2, index = 7 }
 
 # ---------------------------------------------------------------------------
 # Character select. The cursor moves freely; each portrait is a box in the

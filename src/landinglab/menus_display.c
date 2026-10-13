@@ -3,7 +3,7 @@
  * Holds the Intensity, Cues, Paths, Timers, HUD, Sounds, Game and Presets
  * menus, and the main menu.
  *
- * Part of Landing Lab: src/landinglab.c includes it, in order, into one
+ * Part of Landing Gear: src/landinglab.c includes it, in order, into one
  * translation unit, so it sees everything included before it (and mex.h,
  * events.h, landinglab_sim.h).
  *
@@ -677,7 +677,7 @@ static EventMenu Menu_Game = {
 };
 
 // Settings presets: what every menu is set to, kept on the memory card in
-// Landing Lab's own small file, so TM-CE's save is never touched.
+// Landing Gear's own small file, so TM-CE's save is never touched.
 enum preset_slot
 {
     PS_USER, // the last settings: saved whenever the menu closes
@@ -868,7 +868,7 @@ static EventOption Options_Main[OPT_COUNT] = {
         .kind = OPTKIND_MENU,
         .name = "Controls",
         .menu = &Menu_Controls,
-        .desc = {"Every button Landing Lab uses outside the menu."},
+        .desc = {"Every button Landing Gear uses outside the menu."},
     },
     {
         .kind = OPTKIND_INFO,
@@ -887,7 +887,7 @@ static EventOption Options_Main[OPT_COUNT] = {
 };
 
 static EventMenu Menu_Main = {
-    .name = "Landing Lab",
+    .name = "Landing Gear",
     .option_num = countof(Options_Main),
     .options = Options_Main,
 };

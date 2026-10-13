@@ -1,4 +1,4 @@
-# Landing Lab test scripts, read from TM/llscript.txt on the disc.
+# Landing Gear test scripts, read from TM/llscript.txt on the disc.
 # The step format is in the "Test scripts" part of src/landinglab/scripts.c.
 #
 # Written for Captain Falcon on Battlefield: the floor runs from x -68.4 to

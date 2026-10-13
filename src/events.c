@@ -280,7 +280,7 @@ EventDesc LaserLand = {
     .matchData = &LaserLand_MatchData,
 };
 
-// Landing Lab: predicts NILs and aerial interrupts
+// Landing Gear: predicts NILs and aerial interrupts
 static EventMatchData LandingLab_MatchData = {
     .timer = MATCH_TIMER_HIDE,
     .matchType = MATCH_MATCHTYPE_TIME,
@@ -296,7 +296,7 @@ static EventMatchData LandingLab_MatchData = {
     .timerSeconds = 0,
 };
 EventDesc LandingLab = {
-    .eventName = "Landing Lab\n",
+    .eventName = "Landing Gear\n",
     .eventDescription = "See where you land if you keep holding:\nNIL, aerial interrupt or landing lag.",
     .eventFile = "landinglab",
     .jumpTableIndex = -1,
@@ -1322,7 +1322,7 @@ void EventInit(int page, int eventID, MatchInit *matchData)
         matchData->playerData[0].portNumberOverride = hmn_port;
 
 #ifdef LL_TEST_CHAR
-        // a Landing Lab data capture build's fighter, in place of the one
+        // a Landing Gear data capture build's fighter, in place of the one
         // picked: built in (LLCHAR=CKIND_...), or, built with LLCHAR=file,
         // read from TM/llchar.txt at each start, so one build captures every
         // character with only that file swapped between runs. Only there:

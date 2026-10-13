@@ -1,9 +1,9 @@
-TM-CE + Landing Lab
+TM-CE + Landing Gear
 ===================
 
 An unofficial build of Training Mode - Community Edition v1.4 with one new
-event, Landing Lab: a Captain Falcon trainer for NILs, aerial interrupts,
-wavelands and ledge routes. Not made or supported by the TM-CE team.
+event, Landing Gear: a trainer for NILs, aerial interrupts, wavelands and
+ledge routes, for the whole cast. Not made or supported by the TM-CE team.
 
 You need your own Super Smash Bros. Melee NTSC 1.02 ISO.
 
@@ -15,9 +15,9 @@ Linux / macOS:
     or brew install xdelta), then run:
         ./build_linux_and_mac.sh path/to/melee.iso
 
-Either way you get TM-CE-LandingLab.iso in this folder. Open it in Dolphin.
+Either way you get TM-CE-LandingGear.iso in this folder. Open it in Dolphin.
 
-In game: Event Mode > Character-specific Tech > Landing Lab. Start opens
+In game: Event Mode > Character-specific Tech > Landing Gear. Start opens
 the menu.
 
 How to use it, known limits and where to send feedback:

@@ -1,4 +1,4 @@
-# Landing Lab modules
+# Landing Gear modules
 
 `src/landinglab.c` is the event's one source file as far as the build sees it
 (`build.sh` hands it to hmex, which builds an event from one file). It holds
@@ -24,7 +24,7 @@ Each module starts with a comment saying what it holds and which modules it uses
 - `menus_practice.c`: The Ledge, Jump, Camera, Controls, Developer and Rumble menus.
 - `menus_display.c`: The Intensity, Cues, Paths, Timers, HUD, Sounds, Game and Presets menus, and the main menu.
 - `presets.c`: Settings presets: capture, apply, the built-in ones, and their menu callbacks.
-- `memory_card.c`: Landing Lab's own memory card file: reading and writing the presets.
+- `memory_card.c`: Landing Gear's own memory card file: reading and writing the presets.
 - `camera_views.c`: Saved camera views (Advanced camera mode) and their menu callbacks.
 - `naming.c`: The letter grid for naming views and presets, and the per-frame preset upkeep.
 - `tracking_state.c`: The live tracking state, the prediction buffers, and the timers' cue state.

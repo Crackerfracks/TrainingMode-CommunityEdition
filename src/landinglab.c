@@ -1,6 +1,6 @@
 /* landinglab.c
  *
- * Landing Lab (Captain Falcon).
+ * Landing Gear (Captain Falcon).
  *
  * While Falcon is airborne, this draws where he will touch down if the stick
  * stays where it is and no buttons are pressed. Only NILs, aerial interrupts
@@ -42,7 +42,7 @@
 #include "events.h"
 #include "landinglab_sim.h"
 
-// Landing Lab is one translation unit: the modules below are included here,
+// Landing Gear is one translation unit: the modules below are included here,
 // in this order, and share their statics. Each sees what the ones before it
 // define; order matters. See src/landinglab/README.md.
 

@@ -21,4 +21,7 @@ set Cues/Waveland Cues = 0
 set Ledge/Show Routes = 1
 ledge right
 60
+# off the Script option, or D-pad left would play the script again
+# instead of loading the saved position
+set Dev/Script = 0
 mark hanging, routes shown: start driving the pad

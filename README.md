@@ -253,7 +253,7 @@ Things that went wrong on the way here, all true.
 - The name Landing Gear was suggested on October 11. The AI's notes dropped it, Crackerfracks assumed it had been done, and it was renamed on October 13. For two days the project was called Landing Gear by exactly one person.
 - A 2-core laptop runs every test in this project. It also runs Dolphin, the capture harness and, in two of ten test boots, a window manager reload mid-route.
 - The jump arc preview is one of the oldest features in Landing Gear. Crackerfracks keeps it off. He has said so in writing.
-- Designed by Crackerfracks, a Falcon **main**, whose playtest notes for 0.6.5 ran 3,206 words. This README passed that today.
+- Designed by Crackerfracks, a Falcon **main**, whose playtest notes for 0.6.5 ran 3,206 words. This README passed that on October 13.
 - These jokes were written by Fable, another Claude model, from a list of approved targets. It is on the list.
 </details>
 

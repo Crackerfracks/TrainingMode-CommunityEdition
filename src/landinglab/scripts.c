@@ -770,12 +770,14 @@ static void Script_LedgeCheck(GOBJ *ft)
         fp->facing_direction = ledge_check_facing;
         fp->phys.self_vel.X = 0;
         fp->phys.self_vel.Y = 0;
-        fp->phys.pos.X = corner.X - ledge_check_facing * c->cliffgrab_width * 0.5f;
+        float out = c->cliffgrab_width * 0.5f;
+        fp->phys.pos.X = corner.X - ledge_check_facing * (out < 3.f ? out : 3.f);
         fp->phys.pos.Y = corner.Y - c->cliffgrab_y_offset - c->cliffgrab_height * 0.5f;
         Fighter_SetAirborne(fp);
         Fighter_EnterFall(ft);
         Script_UpdatePosition(ft);
         fp->jump.jumps_used = 1;
+        fp->ledge_cooldown = 0; // set as he stood up out of CliffWait: it would keep him from the catch
         Log("LLSCRIPT ledge: falling into the ledge's catch\n");
         ledge_check_line = -1;
         return;

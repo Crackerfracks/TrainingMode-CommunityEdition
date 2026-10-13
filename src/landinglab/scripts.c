@@ -37,6 +37,18 @@
 //                              window's first (-1: a frame early)
 //   ai <offset> [inputs]       the same for the next aerial interrupt window
 //   land <max> [inputs]        hold the inputs until Falcon is on the ground
+//   playroute [<n>]            while hanging: wait (stick at rest) until the
+//                              ledge's routes are found, then play the nth
+//                              row of the timers (1, the chosen route, if
+//                              none; a later one is chosen first, as the
+//                              Route option would) with the inputs the search
+//                              simulated it with: the drop, the wait, the
+//                              fastfall, the jump and its stick, the hold and
+//                              an AI's aerial on its window's first frame.
+//                              Over at the touchdown. Logs LLPLAY and
+//                              LLROUTE play (the row), to compare with
+//                              LLROUTE follow and the "LandingLab route:"
+//                              lines
 //   shot [label]               freeze the game after the frame before; D-pad
 //                              down goes on, the advance button steps
 //   trace on|off               opt-in LLST1 engine-state records (all states)
@@ -83,6 +95,7 @@ enum script_op_kind
     SOP_AI,
     SOP_LAND,
     SOP_FOLLOW, // count frames of doing what Jump Timing shows, on its frames
+    SOP_PLAY,   // play the count-th row of the ledge's routes (playroute)
     SOP_SHOT,
     SOP_MARK,
     SOP_CMD, // count: which (SCMD_*), label: the rest of the line
@@ -437,6 +450,13 @@ static void Script_Parse(void)
                 op->count = (int)Script_Number(&n);
             ok = ok && op->count > 0;
             inputs = 1;
+        }
+        else if (Script_Is(w, "playroute"))
+        {
+            char *n = Script_Word(&rest);
+            op->kind = SOP_PLAY;
+            op->count = n ? (int)Script_Number(&n) : 1;
+            ok = op->count > 0 && Script_Word(&rest) == 0;
         }
         else if (w[0] >= '0' && w[0] <= '9')
         {

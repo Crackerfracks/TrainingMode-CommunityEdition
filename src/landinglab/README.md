@@ -60,7 +60,7 @@ Each module starts with a comment saying what it holds and which modules it uses
 - `hop_library.c`: The hop library: hops from the ground, built ahead of time per height.
 - `jump_search.c`: The jump search's candidates, solving, the chosen jump's text and meter rows, and the route and jump paths.
 - `markers.c`: The input markers along the paths, and the aerial pickers (Compass_Draw).
-- `ledge_practice.c`: Ledge practice while hanging: route text and menu, slips, ledge drops, Ledge_Think.
+- `ledge_practice.c`: Ledge practice while hanging: route text and menu, slips, ledge drops, Ledge_Think, and the test scripts' playroute.
 - `reset_drill.c`: The drill's resets, and the ledge start and camera callbacks.
 - `assist.c`: The quicktime assist for ledge routes.
 - `slide_off.c`: The slide-off preview.

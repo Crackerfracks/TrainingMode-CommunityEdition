@@ -25,8 +25,9 @@
 // per ledge, a few hundred simulated frames per game frame, and every
 // distinct route kept (up to LR_ROUTES of each kind), best first. The Route
 // option browses them. The main stage's two ledges are searched as the event
-// starts (for a fighter whose hang spot isn't known yet, once it first hangs:
-// Hang_Learn); any other ledge when the fighter first hangs from it.
+// starts, from the fighter's hang spot in lr_hang (for a fighter not in it
+// yet, once it first hangs: Hang_Learn); any other ledge when the fighter
+// first hangs from it.
 
 #define LR_KEEP 3           // route rows shown: the chosen route and the next ones
 #define LR_LEDGES 8         // ledges remembered
@@ -55,10 +56,54 @@ static const float lr_dj_stick[LR_DJ_X] = {1.f, 0.7f, 0.f};
 #define LR_PATH 72          // frames of the shown route's path
 // Where the fighter hangs from a ledge's corner (ftCo_CliffCatch_Phys: the
 // corner plus the CliffWait animation's TransN, its z along the facing).
-// Falcon's is known; any other fighter's comes from its own animation, so
-// it's learned the first time it hangs (Hang_Learn).
+// Each fighter's comes from its own animation: lr_hang has the ones
+// measured, and the first frame of each hang checks it (Hang_Learn).
 #define LR_HANG_X -2.4527f  // Falcon's: toward the stage (out from it, so < 0)
 #define LR_HANG_Y -23.0962f // ... and up (down, so < 0)
+// A hang spot this close to the one in use is the same one: Marth's and
+// Peach's CliffWait sways them by up to 0.2 while they hang.
+#define LR_HANG_TOL 0.25f
+#define LR_HANG_UNKNOWN 9999.f // lr_hang: not measured yet
+#define LR_HANG_NONE {LR_HANG_UNKNOWN, LR_HANG_UNKNOWN}
+
+// Each fighter's hang spot (x, y as LR_HANG_X, LR_HANG_Y) by FTKIND, as
+// LLHANG logged it on the fighter's first hang, so its ledges are searched
+// from the event start. LR_HANG_NONE: learned on the first hang instead.
+static const float lr_hang[FTKIND_SANDBAG + 1][2] = {
+    [FTKIND_MARIO] = LR_HANG_NONE,
+    [FTKIND_FOX] = {-1.9200f, -14.4000f},
+    [FTKIND_FALCON] = {LR_HANG_X, LR_HANG_Y},
+    [FTKIND_DK] = LR_HANG_NONE,
+    [FTKIND_KIRBY] = {-4.6000f, -9.2000f},
+    [FTKIND_BOWSER] = LR_HANG_NONE,
+    [FTKIND_LINK] = LR_HANG_NONE,
+    [FTKIND_SHEIK] = LR_HANG_NONE,
+    [FTKIND_NESS] = LR_HANG_NONE,
+    [FTKIND_PEACH] = {-1.6065f, -17.2500f}, // provisional: her CliffWait sways her (y about -17.25)
+    [FTKIND_POPO] = LR_HANG_NONE,
+    [FTKIND_NANA] = LR_HANG_NONE,
+    [FTKIND_PIKACHU] = LR_HANG_NONE,
+    [FTKIND_SAMUS] = LR_HANG_NONE,
+    [FTKIND_YOSHI] = LR_HANG_NONE,
+    [FTKIND_JIGGLYPUFF] = {-4.7000f, -9.4000f},
+    [FTKIND_MEWTWO] = LR_HANG_NONE,
+    [FTKIND_LUIGI] = LR_HANG_NONE,
+    [FTKIND_MARTH] = {-2.9079f, -23.7265f}, // provisional: the first frame logged; his CliffWait sways y to -23.54
+    [FTKIND_ZELDA] = LR_HANG_NONE,
+    [FTKIND_YOUNGLINK] = LR_HANG_NONE,
+    [FTKIND_DRMARIO] = LR_HANG_NONE,
+    [FTKIND_FALCO] = LR_HANG_NONE,
+    [FTKIND_PICHU] = LR_HANG_NONE,
+    [FTKIND_GAW] = {-1.6256f, -16.1198f},
+    [FTKIND_GANONDORF] = LR_HANG_NONE,
+    [FTKIND_ROY] = LR_HANG_NONE,
+    [FTKIND_MASTERHAND] = LR_HANG_NONE,
+    [FTKIND_CRAZYHAND] = LR_HANG_NONE,
+    [FTKIND_BOY] = LR_HANG_NONE,
+    [FTKIND_GIRL] = LR_HANG_NONE,
+    [FTKIND_GIGABOWSER] = LR_HANG_NONE,
+    [FTKIND_SANDBAG] = LR_HANG_NONE,
+};
 #define LR_GALINT_BIAS 0    // GALINT is read as ledgedash training reads it
 #define LR_PLAIN 9999       // Route_Fail: the message as is
 
@@ -147,7 +192,7 @@ static int route_browse = -1;     // the ledge the Route option browses: where t
 // while hanging
 static int hang_ledge = -1;   // the ledge the fighter hangs from, -1 none
 static float hang_x, hang_y;  // where it hangs from a corner (LR_HANG_X, LR_HANG_Y) ...
-static int hang_known;        // ... once known: Falcon's from the start, another's once it hangs
+static int hang_known;        // ... once known: from lr_hang at the start, or once the fighter hangs
 static LedgeRoute route_show[LR_KEEP]; // the chosen route, then the ones after it
 static int route_show_num;
 static int route_show_rank;   // the chosen route's place in the list, 0 first
@@ -204,12 +249,13 @@ static int Ledge_Find(float cx, float cy, int facing)
 }
 
 // The ledge's hang spot is (x, y). A new one, or one that moved (learned
-// where the fighter really hangs), is searched again from there. The routes
-// of the search before keep showing until this one is done.
+// where the fighter really hangs) by more than LR_HANG_TOL, is searched
+// again from there. The routes of the search before keep showing until
+// this one is done.
 static void Ledge_Move(int i, float x, float y)
 {
     LedgeEntry *L = &ledges[i];
-    if (L->placed && fabs(L->x - x) <= 0.01f && fabs(L->y - y) <= 0.01f)
+    if (L->placed && fabs(L->x - x) <= LR_HANG_TOL && fabs(L->y - y) <= LR_HANG_TOL)
         return;
     L->placed = 1;
     L->x = x;
@@ -242,14 +288,15 @@ static int Ledge_Add(float cx, float cy, int facing, int placed, float x, float 
 }
 
 // Learn where the fighter hangs from the corner it holds (the spot
-// ftCo_CliffCatch_Phys puts it at, read back). Another spot than the one in
-// use moves every ledge to it, and lets ledges that waited for it be
-// searched. Logged as LLHANG, for a table of the cast.
+// ftCo_CliffCatch_Phys puts it at, read back on the hang's first frame).
+// Another spot than the one in use (by more than LR_HANG_TOL) moves every
+// ledge to it, and lets ledges that waited for it be searched. Logged as
+// LLHANG, for lr_hang.
 static void Hang_Learn(FighterData *fp, Vec3 *corner, int facing)
 {
     static int logged;
     float x = (fp->phys.pos.X - corner->X) * facing, y = fp->phys.pos.Y - corner->Y;
-    int same = hang_known && fabs(x - hang_x) <= 0.01f && fabs(y - hang_y) <= 0.01f;
+    int same = hang_known && fabs(x - hang_x) <= LR_HANG_TOL && fabs(y - hang_y) <= LR_HANG_TOL;
     if (!logged || !same)
     {
         char buf[80];
@@ -272,12 +319,13 @@ static void Hang_Learn(FighterData *fp, Vec3 *corner, int facing)
 
 // The main stage's ledges, as Script_PlaceLedge finds them: the outermost
 // ends of the ledge floors. The fighter hangs at a fixed offset from them
-// (hang_x, hang_y); until that's known they wait unsearched.
-static void Ledge_FindMain(void)
+// (hang_x, hang_y, from lr_hang); until that's known they wait unsearched.
+static void Ledge_FindMain(FighterData *fp)
 {
-    hang_known = sim_falcon;
-    hang_x = LR_HANG_X;
-    hang_y = LR_HANG_Y;
+    int kind = fp->kind >= 0 && fp->kind < (int)countof(lr_hang) ? fp->kind : FTKIND_SANDBAG;
+    hang_known = lr_hang[kind][0] != LR_HANG_UNKNOWN;
+    hang_x = hang_known ? lr_hang[kind][0] : LR_HANG_X;
+    hang_y = hang_known ? lr_hang[kind][1] : LR_HANG_Y;
     CollLine *lines = *stc_collline;
     for (int side = -1; side <= 1; side += 2)
     {
@@ -350,6 +398,43 @@ static int Aerial_Rank(int aerial)
     return 5;
 }
 
+// The stick on frame f of a route (the drop is frame 0): the drop away or
+// down; wait frames let go (with fall_away, away); down (down-away) until
+// the jump; on the jump (frame 1 + wait + ff) in, down-in or let go; then
+// in with hold, or let go. Ledge_Try simulates these, and a script's
+// playroute presses them (Route_Play).
+static void Route_Stick(int drop, int wait, int ff, int hold, int dj_x, int fall_away, int facing, int f, float *sx,
+                        float *sy)
+{
+    int dj = 1 + wait + ff;
+    *sx = 0;
+    *sy = 0;
+    if (f == 0)
+    {
+        if (drop == DROP_AWAY)
+            *sx = -facing;
+        else
+            *sy = -1.f;
+    }
+    else if (f < dj && f > wait)
+    {
+        *sy = fall_away ? -0.7f : -1.f;
+        *sx = fall_away ? -0.7f * facing : 0;
+    }
+    else if (f < dj)
+    {
+        if (fall_away)
+            *sx = -facing;
+    }
+    else if (f == dj)
+    {
+        *sx = facing * lr_dj_stick[dj_x];
+        *sy = dj_x == LR_DJ_DIAG ? -0.7f : 0;
+    }
+    else
+        *sx = hold ? facing : 0;
+}
+
 // One route: the drop, wait frames let go, ff frames held down, the double
 // jump (stick in, down-in or let go), then holding toward the stage or not.
 // With fall_away the stick drifts away from the stage until the jump (down-
@@ -380,21 +465,8 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
 
     for (int f = 0; f < dj; f++)
     {
-        float sx = 0, sy = 0;
-        if (f == 0)
-        {
-            if (drop == DROP_AWAY)
-                sx = -L->facing;
-            else
-                sy = -1.f;
-        }
-        else if (f > wait)
-        {
-            sy = fall_away ? -0.7f : -1.f;
-            sx = fall_away ? -0.7f * L->facing : 0;
-        }
-        else if (fall_away)
-            sx = -L->facing;
+        float sx, sy;
+        Route_Stick(drop, wait, ff, hold, dj_x, fall_away, L->facing, f, &sx, &sy);
         st.stick_x = sx;
         st.stick_y = sy;
         // the stick's timer counts frames since it was pulled down
@@ -415,8 +487,7 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
     if (ff > 0 && ff_at < 0)
         return; // held down without a fastfall: the same as waiting
 
-    st.stick_x = L->facing * lr_dj_stick[dj_x];
-    st.stick_y = dj_x == LR_DJ_DIAG ? -0.7f : 0;
+    Route_Stick(drop, wait, ff, hold, dj_x, fall_away, L->facing, dj, &st.stick_x, &st.stick_y);
     Sim_DoubleJump(fp, &st, &s, &step);
     if (path && n < LR_PATH)
     {
@@ -426,8 +497,7 @@ static void Ledge_Try(FighterData *fp, LedgeEntry *L, int drop, int wait, int ff
     if (step.landed || step.ceiling)
         return;
 
-    st.stick_x = hold ? L->facing : 0;
-    st.stick_y = 0;
+    Route_Stick(drop, wait, ff, hold, dj_x, fall_away, L->facing, dj + 1, &st.stick_x, &st.stick_y);
     SimStart ps;
     Sim_ToStart(&s, &st, &ps);
     sim_limit = LR_SIM;

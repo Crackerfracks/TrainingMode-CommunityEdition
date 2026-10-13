@@ -3,64 +3,58 @@
 # tables>, one ISO per fighter (LLCHARFILE: a file holding its CKIND_
 # number), on Battlefield. In the log:
 # - LLHANG fighter <FTKIND> x <x> y <y>: where it hangs from the ledge's
-#   corner (ftCo_CliffCatch_Phys). "learned" after it for any fighter but
-#   Falcon (his is known: x -2.4527 y -23.0962, no "learned"). Both ledges
-#   should give the same x and y, and no second "learned" line should come.
+#   corner (ftCo_CliffCatch_Phys), read on the hang's first frame. One line
+#   for the whole run. "learned" after it only for a fighter not in lr_hang
+#   (ledge_routes.c) or hanging more than 0.25 from it: then its numbers go
+#   in lr_hang. Falcon: x -2.4527 y -23.0962, no "learned". No second
+#   "learned" line should come, and no LLHANG line each frame.
 # - LLROUTES ledge <x> <y> facing <f> found <n> ...: its x, y are the
 #   corner (Battlefield: +-68.4, 0) plus the LLHANG spot. Then LLROUTE 1st,
-#   2nd and 3rd: what the search found from there.
-# - The follow scripts let go away and jump in on the next frame: an
-#   LLROUTE follow line (the best route let go that way), then "LandingLab
-#   route:" lines. Kirby and Jigglypuff: the jump is their first air jump
-#   (state 341); a "Jump missed" slip means it wasn't seen as the jump.
-# A missing LLROUTES line: raise the 900-frame waits (the search runs a few
-# hundred simulated frames per game frame).
+#   2nd and 3rd: what the search found from there. For a fighter in lr_hang
+#   they come soon after the event starts, before the first hang.
+# - playroute plays a row: "LLPLAY row 1 (route r of n) after <w> frames
+#   hanging", "LLROUTE play ..." (the row), LLPLAY lines for the drop, the
+#   fastfall, the jump and the aerial on their frames (e: frames after the
+#   drop), then "LLPLAY row 1 touched down at <e> after the drop (row: land
+#   <land> act <act>)". The follow judges it as a player's attempt:
+#   "LLROUTE follow ..." should be the same route as "LLROUTE play" (same
+#   fields), no "LandingLab route: slip" line, and the result line
+#   "LandingLab route: Ledge NIL|AI <g> GALINT, predicted <p> on the drop"
+#   with g = p and the touchdown at e = land. A slip names the step and how
+#   many frames off; "Landed with lag" / "Missed the stage" mean the route
+#   didn't play out as simulated.
+# Kirby and Jigglypuff: the jump is their first air jump (state 341).
 autorun
 
-script Ledge hang right
+script Ledge route right
 preset load Defaults
 set Dev/Debug Log = 1
 set Ledge/Show Routes = 1
 set Ledge/Route Kind = 2
 set Ledge/Keep Ledge Invincibility = 1
 ledge right
-900
-mark right ledge: expect LLHANG, LLROUTES and LLROUTE 1st to 3rd above
+playroute 1
+90
+mark right route: LLHANG, LLROUTES, then LLROUTE play = LLROUTE follow, touchdown at land, GALINT = predicted
 
-script Ledge hang left
+script Ledge route left
 preset load Defaults
 set Dev/Debug Log = 1
 set Ledge/Show Routes = 1
 set Ledge/Route Kind = 2
 set Ledge/Keep Ledge Invincibility = 1
 ledge left
-900
-mark left ledge: expect LLROUTES and LLROUTE 1st to 3rd above, no new LLHANG learned
+playroute 1
+90
+mark left route: no new LLHANG learned, LLROUTES, then LLROUTE play = LLROUTE follow, touchdown at land, GALINT = predicted
 
-script Ledge follow right
+script Ledge route right 2nd
 preset load Defaults
 set Dev/Debug Log = 1
 set Ledge/Show Routes = 1
 set Ledge/Route Kind = 2
 set Ledge/Keep Ledge Invincibility = 1
 ledge right
-900
-1 s:1,0
-1 X s:-1,0
-land 120 s:-1,0
-60
-mark right follow: expect LLROUTE follow, then LandingLab route lines, no Jump missed
-
-script Ledge follow left
-preset load Defaults
-set Dev/Debug Log = 1
-set Ledge/Show Routes = 1
-set Ledge/Route Kind = 2
-set Ledge/Keep Ledge Invincibility = 1
-ledge left
-900
-1 s:-1,0
-1 X s:1,0
-land 120 s:1,0
-60
-mark left follow: expect LLROUTE follow, then LandingLab route lines, no Jump missed
+playroute 2
+90
+mark right 2nd row: LLROUTE play = LLROUTE follow (the 2nd route), touchdown at land, GALINT = predicted

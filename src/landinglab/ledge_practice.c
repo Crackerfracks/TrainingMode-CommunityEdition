@@ -1,7 +1,7 @@
 /* landinglab/ledge_practice.c
  *
  * Holds ledge practice while hanging: route text and menu, slips, ledge
- * drops, Ledge_Think.
+ * drops, Ledge_Think, and the test scripts' playroute (Route_Play).
  *
  * Part of Landing Lab: src/landinglab.c includes it, in order, into one
  * translation unit, so it sees everything included before it (and mex.h,
@@ -305,7 +305,7 @@ static void Ledge_Think(FighterData *fp, int sid)
 {
     if (!ledges_found)
     {
-        Ledge_FindMain();
+        Ledge_FindMain(fp);
         ledges_found = 1;
     }
 
@@ -324,7 +324,10 @@ static void Ledge_Think(FighterData *fp, int sid)
     if (hanging)
     {
         // learn where the fighter really hangs from the corner it holds
-        // (ftCo_CliffCatch_Phys), and keep the ledge's routes ready
+        // (ftCo_CliffCatch_Phys), and keep the ledge's routes ready. Only on
+        // the hang's first frame (CliffCatch's end, ftCo_CliffCatch_Anim, or
+        // a script or reset putting it there): Marth's and Peach's CliffWait
+        // sways them after it, which would start the search over each frame.
         int facing = fp->facing_direction > 0 ? 1 : -1;
         FtCliffCatch *cliff = (void *)&fp->state_var;
         Vec3 corner;
@@ -332,8 +335,11 @@ static void Ledge_Think(FighterData *fp, int sid)
             GrColl_GetGroundLineEndLeft(cliff->ledge_index, &corner);
         else
             GrColl_GetGroundLineEndRight(cliff->ledge_index, &corner);
-        hang_ledge = Ledge_Add(corner.X, corner.Y, facing, 1, fp->phys.pos.X, fp->phys.pos.Y);
-        Hang_Learn(fp, &corner, facing);
+        int at = Ledge_Find(corner.X, corner.Y, facing);
+        int learn = prev_state_id != ASID_CLIFFWAIT || hang_ledge < 0 || at < 0 || !ledges[at].placed;
+        hang_ledge = Ledge_Add(corner.X, corner.Y, facing, learn, fp->phys.pos.X, fp->phys.pos.Y);
+        if (learn)
+            Hang_Learn(fp, &corner, facing);
         attempt_active = 0;
         route_active = 0;
         route_show_num = 0;
@@ -607,4 +613,132 @@ static void Ledge_Think(FighterData *fp, int sid)
             Drill_Finish(0);
         }
     }
+}
+
+// The test scripts' "playroute": while hanging, play a row of the timers
+// (route_show[row - 1]) with the inputs the search simulated it with
+// (Ledge_Try): the drop away or down, wait frames let go (or drifting
+// away), ff frames held down (down-away), the jump with its stick and X,
+// then holding in or let go, and an AI's aerial on the first frame of its
+// window. Frame k of the route is game frame drop + k, as Ledge_Think
+// counts it (e). A row after the first is chosen first, as the Route option
+// would, so the follow judges that route. It waits, the stick at rest, for
+// the ledge's search to be done and for a frame at rest before the drop
+// (ftCo_8009AA0C). Returns 1 when done: on the ground, or it couldn't.
+#define PLAY_WAIT 3600 // frames playroute waits for the ledge's routes
+#define PLAY_MAX 240   // frames it plays after the drop at most
+static LedgeRoute play_route;
+static int play_drop = -1; // game frame of the drop, -1 not yet
+static int play_ledge;
+static int play_row;
+static int Route_Play(FighterData *fp, ScriptInput *in, int row, int age)
+{
+    char buf[120];
+    int t = event_vars->game_timer;
+    if (age == 0)
+        play_drop = -1;
+    if (play_drop < 0)
+    {
+        if (fp->state_id != ASID_CLIFFWAIT)
+        {
+            Log("LLPLAY not hanging: nothing to play\n");
+            return 1;
+        }
+        LedgeEntry *L = hang_ledge >= 0 ? &ledges[hang_ledge] : 0;
+        FtCliffCatch *cliff = (void *)&fp->state_var;
+        // the routes of this spot's search, as the rows show them
+        int ready = L && L->done && L->have && route_list_ledge == hang_ledge && route_list_version == L->version &&
+                    route_show_num > 0 && Routes_On() && reference_mode != 2;
+        if (!ready || !cliff->timer)
+        {
+            if (age < PLAY_WAIT)
+                return 0;
+            sprintf(buf, "LLPLAY no routes after %d frames\n", age);
+            Log(buf);
+            return 1;
+        }
+        int pick = route_show_rank + (row > 0 ? row : 1) - 1;
+        if (pick >= route_list_num)
+        {
+            sprintf(buf, "LLPLAY no row %d: %d routes\n", row, route_list_num);
+            Log(buf);
+            return 1;
+        }
+        if (pick != route_show_rank)
+        {
+            Options_Ledge[LOPT_PICK].val = pick + 1;
+            Event_ChangeRoutes(0, 0);
+        }
+        play_route = route_show[0];
+        play_ledge = hang_ledge;
+        play_row = row;
+        play_drop = t;
+        sprintf(buf, "LLPLAY row %d (route %d of %d) after %d frames hanging, drop at %d\n", row, pick + 1,
+                route_list_num, age, t);
+        Log(buf);
+        Route_Log("play", L, &play_route, Route_Galint(&play_route, -1, fp->hurt.intang_frames.ledge));
+    }
+
+    LedgeRoute *r = &play_route;
+    int facing = ledges[play_ledge].facing;
+    int k = t - play_drop;
+    // what the frame before did (this frame's own runs after the inputs)
+    if (k > 0)
+    {
+        const char *end = 0;
+        if (k == 1 && fp->state_id == ASID_CLIFFWAIT)
+            end = "the drop didn't let go";
+        else if (fp->state_id == ASID_CLIFFCATCH || fp->state_id == ASID_CLIFFWAIT)
+            end = "grabbed a ledge";
+        else if (fp->phys.air_state == 0)
+            end = "touched down";
+        else if (fp->phys.pos.Y < ledges[play_ledge].y - 60.f)
+            end = "fell";
+        else if (k > PLAY_MAX)
+            end = "ran out of frames";
+        if (end)
+        {
+            sprintf(buf, "LLPLAY row %d %s at %d after the drop (row: land %d act %d)\n", play_row, end, k - 1, r->land,
+                    r->act);
+            Log(buf);
+            return 1;
+        }
+    }
+
+    // the sticks Ledge_Try simulated, and X on the jump
+    float sx, sy;
+    Route_Stick(r->drop, r->wait, r->ff, r->hold, r->dj_x, r->fall_away, facing, k, &sx, &sy);
+    if (k == r->dj)
+        in->buttons |= HSD_BUTTON_X;
+    in->lx = Script_Round(sx * 80.f);
+    in->ly = Script_Round(sy * 80.f);
+
+    if (r->kind == LAND_AI && k == r->press)
+    {
+        // the C-stick keeps the stick's drift; a nair needs A with the
+        // stick under the aerials' threshold, so it holds in only that far
+        float face = fp->facing_direction > 0 ? 1.f : -1.f;
+        if (r->aerial == TS_AIRN)
+        {
+            int n = (int)(common_aerial_stick_x * 80.f);
+            while (n > 0 && n / 80.f >= common_aerial_stick_x)
+                n--;
+            in->buttons |= HSD_BUTTON_A;
+            in->lx = r->hold ? (s8)(n * facing) : 0;
+            in->ly = 0;
+        }
+        else
+        {
+            in->cx = r->aerial == TS_AIRF ? (s8)(80 * face) : r->aerial == TS_AIRB ? (s8)(-80 * face) : 0;
+            in->cy = r->aerial == TS_AIRHI ? 80 : r->aerial == TS_AIRLW ? -80 : 0;
+        }
+    }
+    if (k == 0 || k == r->dj || (r->ff > 0 && k == r->wait + 1) || (r->kind == LAND_AI && k == r->press))
+    {
+        sprintf(buf, "LLPLAY %d e %d %s\n", t, k,
+                k == 0 ? (r->drop == DROP_AWAY ? "drop away" : "drop down") : k == r->dj ? "jump"
+                : r->kind == LAND_AI && k == r->press ? tracked_state_names[r->aerial] : "fastfall");
+        Log(buf);
+    }
+    return 0;
 }

@@ -413,6 +413,7 @@ static int Script_WindowStart(ScriptOp *op, FighterData *fp, int *width)
 }
 
 static void Jump_Follow(ScriptInput *in);
+static int Route_Play(FighterData *fp, ScriptInput *in, int row, int age);
 
 // Runs before the fighters read their controllers (the lab's Record_Think
 // slot), so the inputs count on this very frame.
@@ -468,6 +469,10 @@ static void Script_Think(GOBJ *gobj)
     case SOP_LAND:
         in = op->in;
         done = ++script_wait >= (op->count > 0 ? op->count : LL_SCRIPT_WAIT);
+        break;
+    case SOP_PLAY:
+        memset(&in, 0, sizeof(in));
+        done = Route_Play(fp, &in, op->count, script_wait++);
         break;
     default: // SOP_WL, SOP_AI
     {

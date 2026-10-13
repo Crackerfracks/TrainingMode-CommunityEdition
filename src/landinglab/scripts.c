@@ -752,8 +752,8 @@ static int Script_PlaceLedge(GOBJ *ft, ScriptOp *op)
 
 // Pichu, put straight into CliffWait, stays on the ledge's corner (his
 // TransN isn't there, ftCo_CliffCatch_Phys) and on the next frame stands
-// up on the stage. Then drop him by the ledge, its corner in his grab box
-// (FtCollDesc cliffgrab), and let the game catch it as a player would.
+// up on the stage. Then drop him from above the ledge, just off it, and
+// let the game catch it as a player would.
 static void Script_LedgeCheck(GOBJ *ft)
 {
     FighterData *fp = ft->userdata;
@@ -766,13 +766,13 @@ static void Script_LedgeCheck(GOBJ *ft)
         GrColl_GetGroundLineEndRight(ledge_check_line, &corner);
     if (fp->phys.air_state == 0 && fabs(fp->phys.pos.X - corner.X) < 1.f && fabs(fp->phys.pos.Y - corner.Y) < 1.f)
     {
-        FtCollDesc *c = fp->ftData->coll;
         fp->facing_direction = ledge_check_facing;
         fp->phys.self_vel.X = 0;
         fp->phys.self_vel.Y = 0;
-        float out = c->cliffgrab_width * 0.5f;
-        fp->phys.pos.X = corner.X - ledge_check_facing * (out < 3.f ? out : 3.f);
-        fp->phys.pos.Y = corner.Y - c->cliffgrab_y_offset - c->cliffgrab_height * 0.5f;
+        // where ledgedash training's "falling" start puts a fighter (5 out,
+        // 20 above): falling from there it sweeps past the corner
+        fp->phys.pos.X = corner.X - ledge_check_facing * 5.f;
+        fp->phys.pos.Y = corner.Y + 20.f;
         Fighter_SetAirborne(fp);
         Fighter_EnterFall(ft);
         Script_UpdatePosition(ft);

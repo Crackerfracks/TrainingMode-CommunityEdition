@@ -43,7 +43,7 @@ The full glossary is in [the guide](docs/guide/glossary.md).
 
 ## Install
 
-You bring the Melee. We bring a patch file and a batch script whose name is in all caps. The patch adds one event, and that event is 24,139 lines of C, nearly half of all the C that goes into the game. TM-CE's entire Training Lab is 7,167 lines. Its wavedash event is 714. All 24,139 lines exist to tell you when to press A.
+You bring the Melee. We bring a patch file and a batch script whose name is in all caps. The patch adds one event, and that event is 24,139 lines of C, nearly half of all the C that goes into the game. TM-CE's entire Training Lab is 13,009 lines. Its wavedash event is 806. All 24,139 lines exist to tell you when to press A.
 
 You need your own **Super Smash Bros. Melee NTSC 1.02** ISO. Nothing from the game is included.
 

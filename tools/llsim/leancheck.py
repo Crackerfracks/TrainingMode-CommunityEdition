@@ -9,7 +9,8 @@ each, the fall's ECB is worked out as the event does (Lean_Ecb: the plain
 loop frame, or its mix toward the grid's blends) and compared with the
 game's, next to what the plain pose alone would give, each at its
 animation frame (its LLFALLANIM line's, or the frame in the loop without
-one). Prints the worst bottom and top error per fall and how many frames
+one). Frames still easing in from the pose before (fall_blend) are
+left out. Prints the worst bottom and top error per fall and how many frames
 were off by more than 0.01 unit; -v also lists those frames (state, frame,
 animation frame, sm, side, lean, real and grid bottom and top).
 """
@@ -34,7 +35,7 @@ def mix(plain, levels, lean):
 
 
 def check(path, verbose=False):
-    kind, rows, lens, loops, _, _, _ = read_table(path)
+    kind, rows, lens, loops, _, _, _, blend = read_table(path)
     loops = [l or 8 for l in loops]
     grid = {}
     for fall, back, k, words in read_leans(path, loops):
@@ -43,9 +44,12 @@ def check(path, verbose=False):
     for fall, ts in enumerate((TS_FALL, TS_FALLAERIAL)):
         loop = loops[fall]
         worst = {'grid': [0, 0, 0], 'plain': [0, 0, 0]}
-        n = sides = 0
+        n = sides = easing = 0
         for f in read_lean_frames(path):
             if f[0] != ts or f[1] != FREE or not f[5]:
+                continue
+            if f[2] < blend:
+                easing += 1  # still easing in from the last pose (fall_blend), not the grid's to check
                 continue
             frame, game_side, side = f[2], f[3], f[4]
             lean = bits_float(f[6][0])
@@ -71,7 +75,8 @@ def check(path, verbose=False):
         if not n:
             print('  state %d: no free frames' % ts)
             continue
-        print('  state %d: %d free frames (%d leaning), grid %d levels' % (ts, n, sides, len(grid.get((fall, 0, 0), []))))
+        print('  state %d: %d free frames (%d leaning), grid %d levels%s' % (ts, n, sides, len(grid.get((fall, 0, 0), [])),
+              ', %d easing in left out' % easing if easing else ''))
         for name in ('plain', 'grid'):
             w = worst[name]
             print('    %-5s worst bottom %.4f top %.4f, %d frames off > 0.01' % (name, w[0], w[1], w[2]))

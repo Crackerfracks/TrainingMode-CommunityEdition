@@ -13,7 +13,7 @@
  *
  * The ECB table is Falcon's baked one unless -t names a capture's log
  * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it
- * (and its LLFALLANIM lines give the falls' lean step, Step_Load).
+ * (and its LLFALLANIM lines give the falls' lean step and blend-in, Step_Load).
  * -p names a packed TM/llecb.bin (tools/llsim/ecbpack.py) to load the
  * dump's fighter from, as the event does for every fighter but Falcon.
  * The fall leans in use (Falcon's, or a packed fighter's own) stay, as in
@@ -135,13 +135,15 @@ static void Dump_Load(const char *path)
 // moved the animation a frame (step 1) and how many moved it 2 after a
 // frame that leant, 1 otherwise (step 2), the lean from the LLLEANECB line
 // before. The rule that explains more wins; 1 with no LLFALLANIM lines.
-static int Step_Load(const char *path, const int *loops)
+// blend gets the falls' blend-in (fall_blend), the state.blend seen most.
+static int Step_Load(const char *path, const int *loops, int *blend)
 {
     FILE *f = fopen(path, "r");
     if (!f)
         return 1;
     char line[512];
     int lean_ts = -1, lean_frame = 0, prev_ts = -1, prev_frame = 0, prev_anim = 0, pairs = 0, fits[2] = {0, 0};
+    int blends[64] = {0};
     float lean = 0, prev_lean = 0;
     while (fgets(line, sizeof(line), f))
     {
@@ -156,6 +158,15 @@ static int Step_Load(const char *path, const int *loops)
         }
         else if ((t = strstr(line, "LLFALLANIM ")) && sscanf(t + 11, "%d %d %d %x", &ts, &frame, &sid, &bits) == 4)
         {
+            unsigned w5, w6;
+            float b;
+            if (sscanf(t + 11, "%*d %*d %*d %*x %x %x", &w5, &w6) == 2)
+            {
+                memcpy(&b, &w6, sizeof(b));
+                int bi = (int)(b + 0.5f);
+                if ((ts == 4 || ts == 5) && bi > 0 && bi < 64)
+                    blends[bi]++;
+            }
             float a;
             memcpy(&a, &bits, sizeof(a));
             int anim = (int)(a + 0.5f), fall = ts == 4 ? 0 : ts == 5 ? 1 : -1; // TS_FALL, TS_FALLAERIAL
@@ -171,6 +182,10 @@ static int Step_Load(const char *path, const int *loops)
         }
     }
     fclose(f);
+    *blend = 0;
+    for (int i = 1; i < 64; i++)
+        if (blends[i] > blends[*blend])
+            *blend = i;
     int step = fits[1] > fits[0] ? 2 : 1;
     if (pairs)
         fprintf(stderr, "llsim: %s: falls step %d (of %d frame pairs, step 1 explains %d, step 2 %d)\n", path, step, pairs,
@@ -217,7 +232,9 @@ static void Table_Load(const char *path, int keep_lean)
     }
     if (table_char != dump_char)
         fprintf(stderr, "llsim: warning: %s is char %d's table, the dump is char %d's\n", path, table_char, dump_char);
-    llsim_step(Step_Load(path, loops));
+    int blend = 0;
+    llsim_step(Step_Load(path, loops, &blend));
+    llsim_blend(blend);
 }
 
 static void Packed_Load(const char *path)
@@ -237,7 +254,8 @@ static void Packed_Load(const char *path)
         fprintf(stderr, "llsim: %s has no table for char %d\n", path, dump_char);
         exit(1);
     }
-    fprintf(stderr, "llsim: char %d: %d rows from %s, falls step %d\n", dump_char, rows, path, llsim_fall_step());
+    fprintf(stderr, "llsim: char %d: %d rows from %s, falls step %d blend %d\n", dump_char, rows, path, llsim_fall_step(),
+            llsim_fall_blend());
 }
 
 int main(int argc, char **argv)

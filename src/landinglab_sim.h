@@ -285,6 +285,23 @@ typedef struct EcbSample
     u8 seen;        // times this frame has been seen (stops at 255)
 } EcbSample;
 
+// A pose's ECB, for a fall's blend-in (fall_blend).
+typedef struct PoseEcb
+{
+    float bottom, top, side_y, front, back;
+    u8 has_bottom;
+} PoseEcb;
+
+static void Pose_From(const EcbSample *e, PoseEcb *p)
+{
+    p->bottom = e->bottom;
+    p->top = e->top;
+    p->side_y = e->side_y;
+    p->front = e->front;
+    p->back = e->back;
+    p->has_bottom = e->has_bottom;
+}
+
 static EcbSample *ecb_table;      // [TS_COUNT][LL_STATE_FRAMES]
 static s16 state_len[TS_COUNT];   // frames a state lasts before ending by itself, 0 = not seen
 static s8 state_next[TS_COUNT];   // state that followed when it ended, -1 = not seen
@@ -324,6 +341,12 @@ static u8 fall_loop[3] = {LL_FALL_LOOP, LL_FALL_LOOP, LL_FALL_LOOP};
 // one that leant (lean > 0): 2 for Peach and DK, 1 for the rest (their
 // LLFALLANIM lines). Unleaning, they move 1. From the packed table.
 static u8 fall_step = 1;
+
+// How many frames Fall and FallAerial blend in from the pose before them
+// (state.blend; LLFALLANIM's last field): 10 for Peach, 16 for DK, 0 for
+// the rest. Frame k of the fall eases the pose so far toward the fall's own
+// by 1/(blend - k) (fit to the bf9 captures). From the packed table.
+static u8 fall_blend = 0;
 
 static int Fall_Index(int ts)
 {
@@ -1068,6 +1091,8 @@ static void Ecb_Record(FighterData *fp, int ts, int frame)
 {
     if (frame >= LL_STATE_FRAMES)
         return;
+    if (Is_Fall(ts) && frame < fall_blend)
+        return; // still blending in from the pose before: not the fall's own
     Ecb_Fill(fp, Ecb_Slot(ts, Is_Fall(ts) ? Fall_Anim(fp, ts) : frame));
 }
 
@@ -2384,6 +2409,8 @@ typedef struct SimStart
     int skip_line;
     float lean;          // a fall's blend toward its leaning pose (mv.co.fall.x4)
     int anim;            // a fall's animation frame in its loop (Fall_Anim)
+    PoseEcb pose;        // the pose's ECB on the starting frame (a fall's blend-in)
+    int pose_ok;         // pose is known
     Vec2 drift;          // Falcon Dive's own drift speed (mv.ca.specialhi.vel)
     float special_lag;   // the helpless fall's landing lag (mv.co.fallspecial.landing_lag)
     int dodge_late;      // an airdodge's first frame, pressed in a late window
@@ -2412,6 +2439,9 @@ typedef struct SimState
     float lean;      // a fall's blend toward its leaning pose
     int lean_side;   // LEAN_FORWARD, LEAN_BACK or LEAN_NONE
     int anim;        // a fall's animation frame in its loop: the pose
+    PoseEcb pose[2]; // the pose's ECB on the last two frames (fall_blend)
+    int pose_ok;     // how many of them are known
+    PoseEcb blend;   // a fall's pose while it blends in
     float locked_bottom; // bottom kept while the lock lasts
     float face;          // facing: Falcon Dive can turn him around
     Vec2 drift;          // Falcon Dive's drift speed (x: Ness's double jump's)
@@ -2431,6 +2461,7 @@ typedef struct SimStep
     int fastfall_started;
     EcbSample *ecb;       // learned ECB for this frame
     EcbSample lean_ecb;   // ... when it's a leaning fall's mix, it's kept here
+    EcbSample blend_ecb;  // ... when a fall blends in from the pose before
 } SimStep;
 
 // Aerials, as bits in the masks below
@@ -3077,6 +3108,7 @@ static void Sim_ForFighter(int kind)
     sim_falcon = falcon;
     fall_loop[0] = fall_loop[1] = fall_loop[2] = LL_FALL_LOOP;
     fall_step = 1;
+    fall_blend = 0;
     Learned_Clear();
     lean_rows = falcon ? lean_ecb : lean_own;
     lean_count = 0;
@@ -3164,7 +3196,8 @@ static int Ecb_Unpack(const u8 *b, int size)
     }
     for (int i = 0; i < 3; i++)
         fall_loop[i] = b[at + i] ? b[at + i] : LL_FALL_LOOP;
-    fall_step = b[at + 3] > 1 ? b[at + 3] : 1;
+    fall_step = (b[at + 3] & 3) > 1 ? b[at + 3] & 3 : 1;
+    fall_blend = b[at + 3] >> 2;
     at += 4;
     for (int i = 0; i < rows; i++, at += LLE_ROW)
     {
@@ -3320,6 +3353,60 @@ static int Lean_IsPlain(FighterData *fp, int ts, float vx)
     return Lean_FromFighter(fp, ts) < 0.002f || Lean_Target(fp, vx, fp->facing_direction, &target) == LEAN_NONE;
 }
 
+// A fall's first frames ease from the last pose into the fall's
+// (state.blend, 10 for Peach and 16 for DK): each frame closes 1/(blend-k)
+// of the gap, starting from where the last pose was heading. The pose
+// history is kept for every state so a fall knows where it starts.
+static float Blend_Field(float *at, float to, int left)
+{
+    *at += (to - *at) / left;
+    return *at;
+}
+
+static EcbSample *Fall_Blend(SimState *s, EcbSample *e, EcbSample *out)
+{
+    EcbSample *res = e;
+    if (Is_Fall(s->ts) && s->frame < fall_blend && e->has_bottom && e->has_shape)
+    {
+        PoseEcb *b = &s->blend;
+        if (s->frame == 0)
+        {
+            PoseEcb *p = &s->pose[0], *q = &s->pose[1];
+            if (s->pose_ok >= 2)
+            {
+                b->top = 2 * p->top - q->top;
+                b->side_y = 2 * p->side_y - q->side_y;
+                b->front = 2 * p->front - q->front;
+                b->back = 2 * p->back - q->back;
+            }
+            else if (s->pose_ok == 1)
+                *b = *p;
+            else
+                Pose_From(e, b);
+            if (s->pose_ok >= 2 && p->has_bottom && q->has_bottom)
+                b->bottom = 2 * p->bottom - q->bottom;
+            else if (s->pose_ok >= 1 && p->has_bottom)
+                b->bottom = p->bottom;
+            else
+                b->bottom = e->bottom;
+            b->has_bottom = 1;
+        }
+        int left = fall_blend - s->frame;
+        *out = *e;
+        out->bottom = Blend_Field(&b->bottom, e->bottom, left);
+        out->top = Blend_Field(&b->top, e->top, left);
+        out->side_y = Blend_Field(&b->side_y, e->side_y, left);
+        out->front = Blend_Field(&b->front, e->front, left);
+        out->back = Blend_Field(&b->back, e->back, left);
+        res = out;
+    }
+    s->pose[1] = s->pose[0];
+    Pose_From(res, &s->pose[0]);
+    if (s->pose_ok < 2)
+        s->pose_ok++;
+    return res;
+}
+
 static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
 {
     CollData *cd = &fp->coll_data;
@@ -3356,6 +3443,10 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->skip_line = cd->ignore_line;
     s->lean = Lean_FromFighter(fp, ts);
     s->anim = Is_Fall(ts) ? Fall_Anim(fp, ts) : 0;
+    EcbSample live = {0};
+    Ecb_Fill(fp, &live);
+    Pose_From(&live, &s->pose);
+    s->pose_ok = 1;
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
     s->dodge_late = 0;
@@ -3404,6 +3495,8 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->lean = start->lean;
     s->lean_side = LEAN_NONE;
     s->anim = start->anim;
+    s->pose[0] = s->pose[1] = s->blend = start->pose;
+    s->pose_ok = start->pose_ok;
     s->locked_bottom = start->locked_bottom;
     s->face = start->facing;
     s->drift = start->drift;
@@ -3532,6 +3625,8 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     EcbSample *e = Ecb_Get(s->ts, Is_Fall(s->ts) ? s->anim : s->frame);
     if (Is_Fall(s->ts))
         e = Lean_Ecb(e, s->ts, s->lean_side, s->frame, s->anim, s->lean, &out->lean_ecb);
+    if (fall_blend)
+        e = Fall_Blend(s, e, &out->blend_ecb);
     out->ecb = e;
 
     if (s->ts == TS_ESCAPEAIR && !e->aerial_lag)
@@ -4145,6 +4240,7 @@ static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, fl
     s->skip_line = -1;
     s->lean = 0;
     s->anim = 0;
+    s->pose_ok = 0; // the grounded pose isn't the jump's
     s->drift = (Vec2){0, 0};
     s->special_lag = 0;
     s->dodge_late = 0;
@@ -4228,6 +4324,8 @@ static void Sim_ToStart(SimState *s, SimStart *start, SimStart *out)
     out->ecb_lock = s->lock;
     out->lean = s->lean;
     out->anim = s->anim;
+    out->pose = Is_Fall(s->ts) && s->frame < fall_blend ? s->blend : s->pose[0];
+    out->pose_ok = s->pose_ok > 0;
     out->facing = s->face;
     out->drift = s->drift;
     out->special_lag = s->special_lag;

@@ -171,6 +171,7 @@ void llsim_table_begin(int keep_lean)
     memset(state_len, 0, sizeof(state_len));
     memset(state_next, -1, sizeof(state_next));
     fall_step = 1;
+    fall_blend = 0;
     if (!keep_lean)
         Lean_Drop();
 }
@@ -213,6 +214,17 @@ void llsim_step(int step)
 int llsim_fall_step(void)
 {
     return fall_step;
+}
+
+// The falls' blend-in (fall_blend), as a capture's LLFALLANIM lines show it.
+void llsim_blend(int blend)
+{
+    fall_blend = blend > 0 && blend < 64 ? blend : 0;
+}
+
+int llsim_fall_blend(void)
+{
+    return fall_blend;
 }
 
 int llsim_len(int ts, int len, int next)

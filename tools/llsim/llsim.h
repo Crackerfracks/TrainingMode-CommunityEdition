@@ -18,6 +18,8 @@ int llsim_len(int ts, int len, int next);
 void llsim_loops(const int *loops);
 void llsim_step(int step);
 int llsim_fall_step(void);
+void llsim_blend(int blend);
+int llsim_fall_blend(void);
 void llsim_ecb_print(int fighter_kind);
 int llsim_packed(const unsigned char *file, int size, int fighter_kind);
 

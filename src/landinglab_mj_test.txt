@@ -1,0 +1,97 @@
+# Kirby's and Jigglypuff's air jump checks: build with
+# LLSCRIPT=src/landinglab_mj_test.txt LLCHAR=file LLECB=<packed tables with
+# their air jumps (MJMP)>, one ISO per fighter (LLCHARFILE, CKIND_ of Kirby
+# or Jigglypuff), with them allowed in the event. The event predicts from
+# the live state every frame, so an air jump it moves wrongly (rise, drift,
+# turn, length, the fall after, the next jump held up) shows as
+# "LandingLab drift at +N" lines; none should appear before the landing.
+# Each landing line says what was predicted against what happened.
+autorun
+
+script MJ rise
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 120 right
+2
+1 X
+80
+land 200
+90
+
+script MJ back
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 120 right
+2
+1 X s:-1,0
+80
+land 200
+90
+
+script MJ drift
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air -30 110 right
+2
+1 X s:1,0
+30 s:1,0
+30 s:-0.6,0
+land 200
+90
+
+# jumps 2 to 5 come out with the stick just held up, each once the last
+# one's command flag allows it; the fifth runs out into FallAerial
+script MJ held up
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 60 right 0 0 2
+2
+200 s:0,1
+land 200
+90
+
+script MJ last
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 100 right 0 0 5
+2
+1 X
+120
+land 200
+90
+
+script MJ fastfall
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 120 right
+2
+1 X
+30
+3 s:0,-1
+land 200
+90
+
+script MJ nair early
+preset load Defaults
+set Dev/Debug Log = 1
+start 0 0 right
+60
+air 0 120 right
+2
+1 X
+5
+1 A
+land 200
+90

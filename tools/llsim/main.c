@@ -10,6 +10,10 @@
  *       against its log
  *   llsim ecb <dump> [-t <capture>]
  *       the ECB table in use, as the game's LLECB and LLLEN lines
+ *   llsim jumps <dump> [sx sy gap]
+ *       air jumps from standing still in the air (Kirby's and Jigglypuff's
+ *       five), one every gap frames (default 30) with the stick at sx, sy,
+ *       as LLJUMPS lines frame by frame
  *
  * The ECB table is Falcon's baked one unless -t names a capture's log
  * (src/landinglab_capture.txt), whose LLECB and LLLEN lines replace it
@@ -261,7 +265,7 @@ static void Packed_Load(const char *path)
 int main(int argc, char **argv)
 {
     const char *table = 0, *packed = 0;
-    char *pos[4];
+    char *pos[6];
     int npos = 0, keep_lean = 1, loops[3] = {0, 0, 0}, set_loops = 0;
     for (int i = 1; i < argc; i++)
     {
@@ -273,18 +277,20 @@ int main(int argc, char **argv)
             set_loops = sscanf(argv[++i], "%d,%d,%d", &loops[0], &loops[1], &loops[2]) == 3;
         else if (!strcmp(argv[i], "-nolean"))
             keep_lean = 0;
-        else if (npos < 4)
+        else if (npos < 6)
             pos[npos++] = argv[i];
     }
     int check = npos >= 2 && !strcmp(pos[0], "check"), ecb = npos == 2 && !strcmp(pos[0], "ecb");
-    if (!check && !ecb)
+    int jumps = npos >= 2 && !strcmp(pos[0], "jumps");
+    if (!check && !ecb && !jumps)
     {
         fprintf(stderr, "usage: llsim check <dump> [wlground] [-t <capture>] [-p <llecb.bin>] [-loops A,B,C] [-nolean]\n"
-                        "       llsim ecb <dump> [-t <capture>] [-p <llecb.bin>]\n");
+                        "       llsim ecb <dump> [-t <capture>] [-p <llecb.bin>]\n"
+                        "       llsim jumps <dump> [sx sy gap] [-t <capture>] [-p <llecb.bin>]\n");
         return 2;
     }
     Dump_Load(pos[1]);
-    if (dump_stage < 0 || !llsim_ready(dump_char, npos > 2 ? atoi(pos[2]) : 1))
+    if (dump_stage < 0 || !llsim_ready(dump_char, check && npos > 2 ? atoi(pos[2]) : 1))
     {
         fprintf(stderr, "llsim: %s has no LLDUMP begin or collision\n", pos[1]);
         return 1;
@@ -299,6 +305,8 @@ int main(int argc, char **argv)
         llsim_nolean();
     if (ecb)
         llsim_ecb_print(dump_char);
+    else if (jumps)
+        llsim_jumps(npos > 2 ? (float)atof(pos[2]) : 0, npos > 3 ? (float)atof(pos[3]) : 0, npos > 4 ? atoi(pos[4]) : 30);
     else
         llsim_check();
     return 0;

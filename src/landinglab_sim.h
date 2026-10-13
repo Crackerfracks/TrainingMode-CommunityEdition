@@ -25,6 +25,7 @@
 #define COMMON_RUN_STICK 0x58       // float: stick x * facing >= this turns a dash into a run
 #define COMMON_RUN_TAPER 0x5C       // float: how much a run's speed-up eases off toward its top speed
 #define COMMON_DASHRUN_FRICTION 0x60 // float: friction multiplier while a dash or run turns or slows
+#define COMMON_TAP_JUMP_STICK 0x70  // float: stick y >= this jumps (tap_jump_threshold)
 #define COMMON_JUMP_BACK_STICK 0x78 // float: stick x * facing <= -this jumps backwards
 #define COMMON_DODGE_DEADZONE 0x32C // Vec2: stick inside both is a neutral airdodge
 #define COMMON_DODGE_FORCE 0x338    // float: airdodge starting speed
@@ -33,7 +34,7 @@
 #define COMMON_FALL_LEAN_DEADZONE 0x444 // float: |x speed / drift max| above this leans the fall pose
 #define COMMON_FALL_LEAN_RATE 0x448     // float: how fast the lean moves to its target each frame
 #define COMMON_AIR_FRICTION_OOB 0x1FC   // float: air friction while faster than the drift max
-#define COMMON_UPB_DRIFT_STICK 0x258    // float: |stick x| below this stops a Falcon Dive's drift
+#define COMMON_UPB_DRIFT_STICK 0x258    // float: |stick x| below this stops a Falcon Dive's drift (and an air jump's of Kirby's)
 #define COMMON_DROP_STICK 0x464         // float: stick y <= -this drops through a platform out of shield
 #define COMMON_DROP_WINDOW 0x468        // frames the flick may take to get there (the decomp types it float)
 #define COMMON_SPOT_STICK 0x314         // float: stick y <= this is a spotdodge
@@ -83,12 +84,18 @@ enum TrackedState
     TS_FALLSPECIAL, // helpless fall: after a Falcon Dive, or an airdodge that ran out
     TS_UPB,         // Falcon Dive started on the ground, once he's airborne
     TS_UPBA,        // Falcon Dive started in the air
+    TS_MJ1,         // Kirby's and Jigglypuff's air jumps, 1 to 5 (their own states)
+    TS_MJ2,
+    TS_MJ3,
+    TS_MJ4,
+    TS_MJ5,
 
     TS_COUNT
 };
 
 #define ASID_CAPTAIN_SPECIALHI 353    // Falcon's own states start at 341
 #define ASID_CAPTAIN_SPECIALAIRHI 354
+#define ASID_MULTIJUMP1 341 // Kirby's and Jigglypuff's JumpAerialF1 (ftKb_MS_, ftPr_MS_), F2 .. F5 after it
 
 static const int tracked_state_ids[TS_COUNT] = {
     ASID_JUMPF,
@@ -106,12 +113,17 @@ static const int tracked_state_ids[TS_COUNT] = {
     ASID_FALLSPECIAL,
     ASID_CAPTAIN_SPECIALHI,
     ASID_CAPTAIN_SPECIALAIRHI,
+    ASID_MULTIJUMP1,
+    ASID_MULTIJUMP1 + 1,
+    ASID_MULTIJUMP1 + 2,
+    ASID_MULTIJUMP1 + 3,
+    ASID_MULTIJUMP1 + 4,
 };
 
 static const char *tracked_state_names[TS_COUNT] = {
     "JumpF", "JumpB", "DJumpF", "DJumpB", "Fall", "FallAerial",
     "Nair", "Fair", "Bair", "Uair", "Dair", "Airdodge",
-    "FallSpecial", "UpB", "UpBAir",
+    "FallSpecial", "UpB", "UpBAir", "AirJump1", "AirJump2", "AirJump3", "AirJump4", "AirJump5",
 };
 
 // The panel's name for a state the event doesn't track, or 0 for its number.
@@ -164,6 +176,15 @@ static int Tracked_IsUpB(int ts)
 // Falcon Dive, and its table isn't his (Sim_ForFighter).
 static int sim_falcon = 1;
 
+// Is it Kirby or Jigglypuff, with their five air jumps (fp->multi_jump_desc,
+// their special attributes)? Only theirs are 341 .. 345.
+static int sim_mj;
+
+static int Is_MultiJump(int ts)
+{
+    return ts >= TS_MJ1 && ts <= TS_MJ5;
+}
+
 static int Tracked_Index(int state_id)
 {
     if (state_id == ASID_FALLSPECIALF || state_id == ASID_FALLSPECIALB)
@@ -171,7 +192,7 @@ static int Tracked_Index(int state_id)
     for (int i = 0; i < TS_COUNT; i++)
     {
         if (tracked_state_ids[i] == state_id)
-            return Tracked_IsUpB(i) && !sim_falcon ? -1 : i;
+            return (Tracked_IsUpB(i) && !sim_falcon) || (Is_MultiJump(i) && !sim_mj) ? -1 : i;
     }
     return -1;
 }
@@ -185,13 +206,13 @@ static int Tracked_IsAerial(int ts)
 // it: no aerial, airdodge or jump.
 static int Tracked_IsHelpless(int ts)
 {
-    return ts >= TS_FALLSPECIAL;
+    return ts == TS_FALLSPECIAL || Tracked_IsUpB(ts);
 }
 
 // Jump, double jump, fall and helpless fall collision pass the drop-through
-// callback (ftCo_80096CC8); aerials, the airdodge (ft_80081D0C) and Falcon
-// Dive (ft_CheckGroundAndLedge) collide without it and always land on
-// platforms.
+// callback (ftCo_80096CC8); aerials, the airdodge (ft_80081D0C), Falcon
+// Dive and Kirby's and Jigglypuff's air jumps (ft_CheckGroundAndLedge,
+// ft_80082F28) collide without it and always land on platforms.
 static int Tracked_UsesPlatformDrop(int ts)
 {
     return ts <= TS_FALLAERIAL || ts == TS_FALLSPECIAL;
@@ -200,7 +221,9 @@ static int Tracked_UsesPlatformDrop(int ts)
 // The state the game enters when this one's animation runs out, or -1 if it
 // loops or isn't tracked. Jump and aerials go to Fall (ftCo_Fall_Enter),
 // double jump goes to FallAerial (ftCo_FallAerial_Enter), the airdodge and
-// Falcon Dive go to FallSpecial (ftCo_80096900). Once a state has been seen
+// Falcon Dive go to FallSpecial (ftCo_80096900). Kirby's and Jigglypuff's
+// air jumps go to Fall with jumps left, FallAerial after the last
+// (ftCo_JumpAerialF1_Anim; max_jumps 6: jump 5). Once a state has been seen
 // ending, state_next (below) holds what really followed.
 static int Tracked_NaturalNext(int ts)
 {
@@ -213,9 +236,14 @@ static int Tracked_NaturalNext(int ts)
     case TS_AIRB:
     case TS_AIRHI:
     case TS_AIRLW:
+    case TS_MJ1:
+    case TS_MJ2:
+    case TS_MJ3:
+    case TS_MJ4:
         return TS_FALL;
     case TS_JUMPAERIALF:
     case TS_JUMPAERIALB:
+    case TS_MJ5:
         return TS_FALLAERIAL;
     case TS_ESCAPEAIR:
     case TS_UPB:
@@ -1213,7 +1241,9 @@ static void Dj_Clear(void)
 }
 
 // Yoshi's turn, counted down each frame of the jump; he switches sides
-// when it's halfway done. The jump's first frame counts too.
+// when it's halfway done. The jump's first frame counts too. Kirby's and
+// Jigglypuff's air jumps turn the same way (ft_800CB6EC), their turn frames
+// first in their attributes too (Fighter_x2D0_t x0).
 static void Dj_Turn(FighterData *fp, int *turn, float *face)
 {
     if (*turn <= 0)
@@ -2414,7 +2444,8 @@ typedef struct SimStart
     Vec2 drift;          // Falcon Dive's own drift speed (mv.ca.specialhi.vel)
     float special_lag;   // the helpless fall's landing lag (mv.co.fallspecial.landing_lag)
     int dodge_late;      // an airdodge's first frame, pressed in a late window
-    int dj_turn;         // Yoshi's double jump: turn frames left (mv.co.jumpaerial.x0)
+    int dj_turn;         // Yoshi's double jump: turn frames left (mv.co.jumpaerial.x0), Kirby's and Jigglypuff's air jumps too
+    int jumps;           // jumps used (fp->jump.jumps_used): which of Kirby's and Jigglypuff's air jumps is next
 } SimStart;
 
 // The simulated fighter between two frames.
@@ -2448,6 +2479,7 @@ typedef struct SimState
     float special_lag;   // landing lag once helpless
     int dodge_late;      // landing on the airdodge's second frame is perfect too
     int dj_turn;         // Yoshi's double jump: turn frames left
+    int jumps;           // jumps used
 } SimState;
 
 // What happened on one simulated frame.
@@ -2559,6 +2591,7 @@ static float common_run_friction;
 static float common_run_stick;
 static float common_run_taper;
 static float common_dashrun_friction;
+static float common_tap_jump_stick;
 static float common_jump_back_stick;
 static Vec2 common_dodge_deadzone;
 static float common_dodge_force;
@@ -2594,13 +2627,12 @@ static int Common_Frames(int offset)
     return n >= 0 && n < 256 ? n : (int)Common_Float(offset);
 }
 
-// ftCommon_CalcSelfAccel_DriftFrom with the stick held at stick_x
-static float Drift_Accel(FighterData *fp, float vel, float stick_x)
+// ftCommon_CalcSelfAccel_AccelToVelClampedFrom: accel toward target, air
+// friction past it, never past the air speed max
+static float Drift_AccelTo(FighterData *fp, float vel, float accel, float target)
 {
     float friction = fp->attr.aerial_friction;
-    float target = stick_x * fp->attr.aerial_drift_max;
     float max_vel = fp->attr.horizontal_air_mobility_constant;
-    float accel;
 
     if (target == 0)
     {
@@ -2612,12 +2644,6 @@ static float Drift_Accel(FighterData *fp, float vel, float stick_x)
             accel = -accel;
         return accel;
     }
-
-    accel = stick_x * fp->attr.aerial_drift_stick_mult;
-    if (stick_x > 0)
-        accel += fp->attr.aerial_drift_base;
-    else
-        accel -= fp->attr.aerial_drift_base;
 
     if (!(vel * accel < 0))
     {
@@ -2642,6 +2668,30 @@ static float Drift_Accel(FighterData *fp, float vel, float stick_x)
         }
     }
     return accel;
+}
+
+// ftCommon_CalcSelfAccel_DriftFrom with the stick held at stick_x
+static float Drift_Accel(FighterData *fp, float vel, float stick_x)
+{
+    float target = stick_x * fp->attr.aerial_drift_max;
+    float accel = stick_x * fp->attr.aerial_drift_stick_mult;
+    if (stick_x > 0)
+        accel += fp->attr.aerial_drift_base;
+    else
+        accel -= fp->attr.aerial_drift_base;
+    return Drift_AccelTo(fp, vel, accel, target);
+}
+
+// Kirby's and Jigglypuff's air jumps drift by the stick alone, no base
+// accel, both scaled by their own multipliers, and not at all near the
+// middle (ftCo_JumpAerialF1_Phys, ft_80084E1C)
+static float Mj_DriftAccel(FighterData *fp, float vel, float stick_x)
+{
+    FtMultiJumpDesc *mj = fp->multi_jump_desc;
+    if (fabs(stick_x) < common_upb_drift_stick)
+        return Drift_AccelTo(fp, vel, 0, 0);
+    return Drift_AccelTo(fp, vel, stick_x * (fp->attr.aerial_drift_stick_mult * mj->aerial_drift_stick_mult_mult),
+                         stick_x * (fp->attr.aerial_drift_max * mj->aerial_drift_max_mult));
 }
 
 // Falcon Dive's drift speed with the stick held at stick_x
@@ -3103,6 +3153,7 @@ static void Sim_ForFighter(int kind)
 {
     int falcon = kind == FTKIND_FALCON;
     sim_djc = Djc_Kind(kind);
+    sim_mj = kind == FTKIND_KIRBY || kind == FTKIND_JIGGLYPUFF;
     if (falcon == sim_falcon)
         return;
     sim_falcon = falcon;
@@ -3134,13 +3185,17 @@ static void Sim_ForFighter(int kind)
 // byte and six floats (as LeanEcb, in its order). "DJMV", a
 // double-jump-cancel fighter's double jump movement: u16 frames forward,
 // u16 backward, then each frame's two floats (DjMove x and y), forward ones
-// first. Blocks start and end on 32 bytes, as the disc reads them.
+// first. "MJMP", Kirby's and Jigglypuff's air jumps (TS_MJ1 on): u16
+// states, u16 rows, each state's s16 frames and s16 next state (as LLLEN),
+// then rows as above with the jump's index (0 for TS_MJ1) for the state.
+// Blocks start and end on 32 bytes, as the disc reads them.
 #define LLE_FIGHTERS 32
 #define LLE_DIR_BYTES (32 + LLE_FIGHTERS * 16)
 #define LLE_ROW 24
 #define LLE_LEAN_ROW 28
 #define LLE_TAG_LEAN 0x4C45414E // "LEAN"
 #define LLE_TAG_DJMV 0x444A4D56 // "DJMV"
+#define LLE_TAG_MJMP 0x4D4A4D50 // "MJMP"
 
 static u32 Pack_U32(const u8 *b)
 {
@@ -3180,6 +3235,21 @@ static int Ecb_Find(const u8 *dir, int kind, int *offset, int *size)
     return 0;
 }
 
+// A packed row's ECB (u8 state, u8 frame, u8 flags, pad, five floats).
+static void Pack_Ecb(const u8 *r, EcbSample *e)
+{
+    int flags = r[2];
+    e->bottom = Pack_F32(r + 4);
+    e->top = Pack_F32(r + 8);
+    e->side_y = Pack_F32(r + 12);
+    e->front = Pack_F32(r + 16);
+    e->back = Pack_F32(r + 20);
+    e->has_bottom = (flags & BAKED_BOTTOM) != 0;
+    e->has_shape = (flags & BAKED_SHAPE) != 0;
+    e->aerial_lag = (flags & BAKED_LAG) != 0;
+    e->seen = 1;
+}
+
 // A fighter's block in place of what's learned; the rows it took.
 static int Ecb_Unpack(const u8 *b, int size)
 {
@@ -3201,19 +3271,10 @@ static int Ecb_Unpack(const u8 *b, int size)
     at += 4;
     for (int i = 0; i < rows; i++, at += LLE_ROW)
     {
-        int ts = b[at], frame = b[at + 1], flags = b[at + 2];
+        int ts = b[at], frame = b[at + 1];
         if (ts >= TS_COUNT || frame >= LL_STATE_FRAMES)
             continue;
-        EcbSample *e = &ecb_table[ts * LL_STATE_FRAMES + frame];
-        e->bottom = Pack_F32(b + at + 4);
-        e->top = Pack_F32(b + at + 8);
-        e->side_y = Pack_F32(b + at + 12);
-        e->front = Pack_F32(b + at + 16);
-        e->back = Pack_F32(b + at + 20);
-        e->has_bottom = (flags & BAKED_BOTTOM) != 0;
-        e->has_shape = (flags & BAKED_SHAPE) != 0;
-        e->aerial_lag = (flags & BAKED_LAG) != 0;
-        e->seen = 1;
+        Pack_Ecb(b + at, &ecb_table[ts * LL_STATE_FRAMES + frame]);
     }
     int leans = 0;
     while (at + 8 <= size && Pack_U32(b + at) != 0)
@@ -3242,6 +3303,24 @@ static int Ecb_Unpack(const u8 *b, int size)
                 l->front = Pack_F32(b + r + 20);
                 l->back_x = Pack_F32(b + r + 24);
             }
+        }
+        else if (tag == LLE_TAG_MJMP && len >= 4)
+        {
+            int n = Pack_S16(b + data), mj_rows = Pack_S16(b + data + 2) & 0xFFFF, r = data + 4;
+            if (n < 0 || n > TS_MJ5 - TS_MJ1 + 1 || 4 + n * 4 + mj_rows * LLE_ROW > len)
+                continue;
+            for (int j = 0; j < n; j++, r += 4)
+            {
+                state_len[TS_MJ1 + j] = Pack_S16(b + r);
+                state_next[TS_MJ1 + j] = Pack_S16(b + r + 2);
+            }
+            for (int i = 0; i < mj_rows; i++, r += LLE_ROW)
+            {
+                int j = b[r], frame = b[r + 1];
+                if (j < n && frame < LL_STATE_FRAMES)
+                    Pack_Ecb(b + r, &ecb_table[(TS_MJ1 + j) * LL_STATE_FRAMES + frame]);
+            }
+            rows += mj_rows;
         }
         else if (tag == LLE_TAG_DJMV && len >= 4)
         {
@@ -3451,8 +3530,11 @@ static void Sim_FromFighter(FighterData *fp, int ts, int frame, SimStart *s)
     s->special_lag = 0;
     s->dodge_late = 0;
     s->dj_turn = 0;
+    s->jumps = fp->jump.jumps_used;
     if (Tracked_IsUpB(ts))
         s->drift = Upb_Drift(fp);
+    else if (Is_MultiJump(ts))
+        s->dj_turn = fp->state_var.state_var1; // mv.co.jumpaerial.x0, as Yoshi's
     else if (Dj_Animated(ts))
     {
         // mv.co.jumpaerial: Yoshi's turn count, then Ness's drift speed
@@ -3503,6 +3585,7 @@ static void Sim_Init(SimStart *start, SimState *s)
     s->special_lag = start->special_lag;
     s->dodge_late = start->dodge_late;
     s->dj_turn = start->dj_turn;
+    s->jumps = start->jumps;
 }
 
 // One frame, in the game's order: animation (the state can end), interrupt
@@ -3513,6 +3596,30 @@ static void Sim_Init(SimStart *start, SimState *s)
 // parts).
 static int sim_steps; // simulated frames, to spread the ledge route search over game frames
 static float sim_dodge_y;
+
+// Kirby's and Jigglypuff's air jumps after their first come out with the
+// stick just held up, no flick (ftCo_800D730C), from a jump or fall, or
+// from one of those jumps once its animation sets cmd_vars[0] (its table
+// keeps that in aerial_lag, as Ecb_Fill reads it; on its first frame the
+// check was the state's before). X or Y held would too, but the prediction
+// presses nothing.
+static int Mj_Held(FighterData *fp, SimStart *start, SimState *s, SimStep *out)
+{
+    if (!sim_mj || s->jumps < 2 || s->jumps >= fp->attr.max_jumps || start->stick_y < common_tap_jump_stick)
+        return 0;
+    if (Is_MultiJump(s->ts))
+    {
+        if (s->frame == 0)
+            return 0;
+        EcbSample *e = Ecb_Get(s->ts, s->frame);
+        if (!e->seen)
+            out->unlearned = 1;
+        return e->aerial_lag;
+    }
+    return s->ts == TS_JUMPF || s->ts == TS_JUMPB || Is_Fall(s->ts);
+}
+
+static void Mj_Enter(FighterData *fp, SimState *s, float stick_x);
 
 static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, float dodge_x, SimStep *out)
 {
@@ -3561,9 +3668,14 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     }
 
     // Yoshi's double jump turning him around (its animation callback, so
-    // before an interrupt)
-    if (sim_djc == DJC_YOSHI && Dj_Animated(s->ts) && s->frame > 0)
+    // before an interrupt), and Kirby's and Jigglypuff's air jumps
+    if (((sim_djc == DJC_YOSHI && Dj_Animated(s->ts)) || Is_MultiJump(s->ts)) && s->frame > 0)
         Dj_Turn(fp, &s->dj_turn, &s->face);
+
+    // their next air jump, the stick held up (ftCo_JumpAerial_IASA and the
+    // falls' check it after aerials and the airdodge)
+    if (press < 0 && Mj_Held(fp, start, s, out))
+        Mj_Enter(fp, s, start->stick_x);
 
     // interrupt: ftCo_AttackAir_EnterFromMsid keeps the fastfall and starts
     // the aerial's animation on this frame, before physics and collision.
@@ -3666,7 +3778,8 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
     }
     else
     {
-        // physics (ft_80084DB0)
+        // physics (ft_80084DB0; Kirby's and Jigglypuff's air jumps,
+        // ft_80084E1C, differ only in the drift)
         if (!s->fastfall && s->vy < 0 && start->stick_y <= -common_fastfall_stick && s->tilt_timer < common_fastfall_window)
         {
             s->fastfall = 1;
@@ -3681,7 +3794,10 @@ static void Sim_Step(FighterData *fp, SimStart *start, SimState *s, int press, f
             if (s->vy < -fp->attr.terminal_velocity)
                 s->vy = -fp->attr.terminal_velocity;
         }
-        s->vx += Drift_Accel(fp, s->vx, start->stick_x);
+        if (Is_MultiJump(s->ts))
+            s->vx += Mj_DriftAccel(fp, s->vx, start->stick_x);
+        else
+            s->vx += Drift_Accel(fp, s->vx, start->stick_x);
     }
     s->x += s->vx;
     s->y += s->vy;
@@ -4245,6 +4361,7 @@ static int Sim_GroundJumpAt(FighterData *fp, int short_hop, float x, float y, fl
     s->special_lag = 0;
     s->dodge_late = 0;
     s->dj_turn = 0;
+    s->jumps = 1; // ftCommon_8007D5D4
     return until;
 }
 
@@ -4260,13 +4377,59 @@ static int Dj_State(float stick_x)
     return TS_JUMPAERIALB;
 }
 
+// Kirby's or Jigglypuff's air jump n, n the jumps used so far
+// (ftCo_800D74A4): its own state (x2C + n - 1), the stick's x speed and its
+// own rise (x14[n - 1]); with the stick back past x4 it turns them around.
+// No fastfall, and the stick timer goes on (ftCo_800CBAC4). Only the first
+// locks the ECB bottom for 10 frames (ftCommon_8007D5D4 before it,
+// ftCo_800D730C). s is on the new state's first frame.
+static void Mj_Enter(FighterData *fp, SimState *s, float stick_x)
+{
+    FtMultiJumpDesc *mj = fp->multi_jump_desc;
+    int n = s->jumps < 1 ? 1 : s->jumps > 5 ? 5 : s->jumps;
+    int ts = TS_MJ1 + n - 1;
+    s->ts = ts;
+    s->frame = 0;
+    s->len = state_len[ts];
+    s->len_estimated = 0;
+    if (s->len == 0)
+    {
+        s->len = LL_GUESS_JUMP_LEN;
+        s->len_estimated = 1;
+    }
+    s->vx = stick_x * mj->vel_stick_x_mult;
+    s->vy = mj->jump_vel_y[n - 1];
+    s->fastfall = 0;
+    s->ecb_pending = 0;
+    if (n == 1)
+    {
+        s->lock = 10;
+        s->locked_bottom = s->bottom;
+    }
+    s->dj_turn = 0;
+    if (stick_x * s->face < -mj->turn_stick_x_min)
+    {
+        s->dj_turn = mj->turn_frames;
+        Dj_Turn(fp, &s->dj_turn, &s->face); // counted on entry too
+    }
+    s->jumps = n + 1;
+}
+
 // A double jump pressed on this frame from a jump or fall
 // (ftCo_JumpAerial_Enter_Basic): its speed replaces the old one, the ECB
 // bottom stays where it was for 10 frames (ftCommon_8007D5D4) and the stick
 // timer resets, then the frame plays out with the usual air physics.
-// start's stick is the one held on this frame.
+// start's stick is the one held on this frame. Kirby and Jigglypuff do
+// their next air jump instead (Mj_Enter).
 static void Sim_DoubleJump(FighterData *fp, SimStart *start, SimState *s, SimStep *out)
 {
+    if (sim_mj)
+    {
+        Mj_Enter(fp, s, start->stick_x);
+        s->frame = -1;
+        Sim_Step(fp, start, s, -1, 0, out);
+        return;
+    }
     int ts = Dj_State(start->stick_x * start->facing);
     s->ts = ts;
     s->frame = -1;
@@ -4299,6 +4462,7 @@ static void Sim_DoubleJump(FighterData *fp, SimStart *start, SimState *s, SimSte
     s->lock = 10;
     s->locked_bottom = s->bottom;
     s->ecb_pending = 0;
+    s->jumps = 2; // ftCommon_8007D5D4, then ftCo_800CBAC4
     Sim_Step(fp, start, s, -1, 0, out);
 }
 
@@ -4331,6 +4495,7 @@ static void Sim_ToStart(SimState *s, SimStart *start, SimStart *out)
     out->special_lag = s->special_lag;
     out->dodge_late = 0;
     out->dj_turn = s->dj_turn;
+    out->jumps = s->jumps;
 }
 
 // The common numbers, the tables and the stage caches' room, once at the
@@ -4349,6 +4514,7 @@ static void Sim_Setup(void)
     common_run_stick = Common_Float(COMMON_RUN_STICK);
     common_run_taper = Common_Float(COMMON_RUN_TAPER);
     common_dashrun_friction = Common_Float(COMMON_DASHRUN_FRICTION);
+    common_tap_jump_stick = Common_Float(COMMON_TAP_JUMP_STICK);
     common_jump_back_stick = Common_Float(COMMON_JUMP_BACK_STICK);
     common_dodge_deadzone.X = Common_Float(COMMON_DODGE_DEADZONE);
     common_dodge_deadzone.Y = Common_Float(COMMON_DODGE_DEADZONE + 4);

@@ -278,7 +278,7 @@ static int prev_wl_late;       // last frame's prediction: a late window on its 
 
 static int Jump_Or_Fall(int ts)
 {
-    return ts >= 0 && ts <= TS_FALLAERIAL;
+    return (ts >= 0 && ts <= TS_FALLAERIAL) || Is_MultiJump(ts);
 }
 
 #define LL_NEAR_MISS 4 // how far from a window a press still counts as aimed at it

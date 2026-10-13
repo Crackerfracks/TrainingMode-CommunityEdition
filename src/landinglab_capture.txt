@@ -72,7 +72,11 @@ hover 0 100
 1 L
 90
 
-# more air jumps, from a fresh jump (only Kirby and Jigglypuff have them)
+# more air jumps, from a fresh jump (only Kirby and Jigglypuff have them):
+# all five, each run out into its fall (states 15-19 in the table: their
+# length and the frame their command flag lets the next one out, LLECB's
+# flag 4), the next one from that fall. X just pressed takes the first;
+# the later ones come out with X held (ftCo_800D730C)
 hover off
 land 200
 90
@@ -80,11 +84,15 @@ land 200
 hover 0 100
 refill
 1 X
-40
+90
 1 X
-40
+90
 1 X
-40
+90
+1 X
+90
+1 X
+90
 
 # the specials, each from a fresh jump: neutral, side both ways, down, up
 hover off

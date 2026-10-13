@@ -145,6 +145,10 @@ int llsim_ready(int fighter_kind, int wlground)
     stc_ftcommon = &common_ptr;
 
     fighter.special_attributes = special_buf;
+    // Kirby's and Jigglypuff's air jumps read their special attributes
+    // (ftKb and ftPr OnLoad: x2D0 = dat_attrs)
+    if (fighter_kind == FTKIND_KIRBY || fighter_kind == FTKIND_JIGGLYPUFF)
+        fighter.multi_jump_desc = (FtMultiJumpDesc *)special_buf;
     fighter.kind = fighter_kind;
     fighter.facing_direction = 1;
     fighter.input.timer_trigger_any_ignore_hitlag = LL_TIMER_MAX;
@@ -234,6 +238,43 @@ int llsim_len(int ts, int len, int next)
     state_len[ts] = len;
     state_next[ts] = next;
     return 1;
+}
+
+// Jumps in the air from standing still at (0, 100) in a fall with one jump
+// used: the next jump pressed on frame 2 and every gap frames after while
+// any are left (none with gap 0), the stick held at (sx, sy) throughout.
+// One LLJUMPS line a frame: frame, state, jumps used, facing, position and
+// speed, to set against a trace of the same inputs (script trace on).
+void llsim_jumps(float sx, float sy, int gap)
+{
+    SimStart st;
+    SimState s;
+    SimStep step;
+    EcbSample *e = Ecb_Get(TS_FALL, 0);
+    memset(&st, 0, sizeof(st));
+    st.pos = (Vec2){0, 100};
+    st.facing = 1;
+    st.bottom = e->has_bottom ? e->bottom : 2.f;
+    st.locked_bottom = st.bottom;
+    st.ecb = (SimEcb){st.bottom, st.bottom + 16.f, st.bottom + 8.f, -3.f, 3.f};
+    st.ts = TS_FALL;
+    st.frame = -1;
+    st.tilt_timer = LL_TIMER_MAX;
+    st.trigger_timer = LL_TIMER_MAX;
+    st.skip_line = -1;
+    st.jumps = 1;
+    st.stick_x = sx;
+    st.stick_y = sy;
+    Sim_Init(&st, &s);
+    for (int k = 1; k <= 200; k++)
+    {
+        if (gap > 0 && k >= 2 && (k - 2) % gap == 0 && s.jumps < fighter.attr.max_jumps)
+            Sim_DoubleJump(&fighter, &st, &s, &step);
+        else
+            Sim_Step(&fighter, &st, &s, -1, 0, &step);
+        OSReport("LLJUMPS %d %s %d %d %.4f %.4f %.5f %.5f%s\n", k, tracked_state_names[s.ts], s.jumps, s.face > 0 ? 1 : -1,
+                 s.x, s.y, s.vx, s.vy, step.unlearned ? " unlearned" : "");
+    }
 }
 
 static u32 Float_Bits(float f)

@@ -86,7 +86,7 @@ static void Log_Camera(FighterData *fp)
         // bottom, to check against the frames that follow
         static int last_sid = -1;
         int ts = Tracked_Index(fp->state_id);
-        if (fp->state_id != last_sid && (ts == TS_JUMPAERIALF || ts == TS_JUMPAERIALB))
+        if (fp->state_id != last_sid && (Is_DoubleJump(ts) || Is_MultiJump(ts)))
         {
             int last = p->land_frame ? p->land_frame : p->num;
             for (int k0 = 0; k0 <= last; k0 += 10)

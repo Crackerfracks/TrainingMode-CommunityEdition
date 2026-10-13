@@ -280,6 +280,7 @@ static void Ledge_Start(LedgeEntry *L, SimStart *s)
     s->tilt_timer = LL_TIMER_MAX;
     s->trigger_timer = LL_TIMER_MAX;
     s->skip_line = -1;
+    s->jumps = 1; // the ledge gives the jumps back
 }
 
 // The order an aerial is offered in when several interrupt in the same way:

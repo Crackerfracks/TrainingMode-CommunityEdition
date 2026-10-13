@@ -21,6 +21,7 @@ int llsim_fall_step(void);
 void llsim_blend(int blend);
 int llsim_fall_blend(void);
 void llsim_ecb_print(int fighter_kind);
+void llsim_jumps(float sx, float sy, int gap);
 int llsim_packed(const unsigned char *file, int size, int fighter_kind);
 
 #endif

@@ -15,6 +15,10 @@ animations move 2 frames after a frame that leant) and blend-in
 (fall_blend: their falls ease in from the last pose). For the
 double-jump-cancel fighters, the LLDJMV lines give their double jump's
 movement frame by frame (DjMove), from the first jump of each kind.
+Kirby's and Jigglypuff's air jumps (states 15-19, TS_MJ1..5) go in their
+own section (MJMP), so the main block reads as before; a log from before
+the event tracked them gives them from its LLSPEC lines (states 341-345)
+instead, their lengths only where one was seen ending in a fall.
 Falcon Dive's slots (13, 14) are Falcon's own, so another fighter's are
 left out, as are his leans (baked in the event). Insert the result with
 LLECB=<out.bin> ./build.sh.
@@ -23,13 +27,17 @@ import re
 import struct
 import sys
 
-TS_COUNT = 15
+TS_COUNT = 15  # the main block's states; the air jumps' are in MJMP
 TS_FALL, TS_FALLAERIAL = 4, 5
 FREE = 9999  # LLLEANECB's tag for a fall that isn't held
 TS_JUMPAERIALF, TS_JUMPAERIALB = 2, 3
 DJC = {8: 'Ness', 9: 'Peach', 14: 'Yoshi', 16: 'Mewtwo'}  # internal kinds (Djc_Kind)
 NESS = 8
 TS_UPB, TS_UPBA = 13, 14
+TS_MJ1, MJ_STATES = 15, 5  # Kirby's and Jigglypuff's air jumps, TS_MJ1..TS_MJ5
+MJ = {4: 'Kirby', 15: 'Jigglypuff'}  # internal kinds (sim_mj)
+ASID_MJ1 = 341  # their JumpAerialF1, F2 .. F5 after it
+ASID_TS = {29: TS_FALL, 32: TS_FALLAERIAL}  # ASID_FALL, ASID_FALLAERIAL
 FALCON = 2
 FIGHTERS = 32
 DIR_BYTES = 32 + FIGHTERS * 16
@@ -39,6 +47,8 @@ ECB = re.compile(r'LLECB (\d+) (\d+) (\d+) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]
 LEN = re.compile(r'LLLEN (\d+) (-?\d+) (-?\d+)\s*$')
 LOOP = re.compile(r'LLLOOP (\d+) (\d+) (\d+)\s*$')
 BEGIN = re.compile(r'LLECB begin char (\d+)')
+SPEC = re.compile(r'LLSPEC (\d+) (\d+) (\d+) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8})\s*$')
+SPECLEN = re.compile(r'LLSPECLEN (\d+) (-?\d+) (-?\d+)\s*$')
 FALLANIM = re.compile(r'LLFALLANIM (\d+) (-?\d+) (\d+) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8})\s*$')
 LEAN = re.compile(r'LLLEANECB (\d+) (-?\d+) (\d+) (-?\d+) (\d+) (\d+) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8}) ([0-9a-f]{8})\s*$')
 
@@ -185,14 +195,24 @@ def read_leans(path, loops):
 
 
 def read_table(path):
-    kind, rows, lens, loops = None, {}, {}, (0, 0, 0)
+    kind, rows, lens, loops, spec, spec_lens = None, {}, {}, (0, 0, 0), {}, {}
     for line in open(path, errors='replace'):
         m = BEGIN.search(line)
         if m:
             # the last table in the log wins
-            kind, rows, lens, loops = int(m.group(1)), {}, {}, (0, 0, 0)
+            kind, rows, lens, loops, spec, spec_lens = int(m.group(1)), {}, {}, (0, 0, 0), {}, {}
             continue
         if kind is None:
+            continue
+        m = SPEC.search(line)
+        if m:
+            sid, frame, flags = (int(g) for g in m.groups()[:3])
+            spec[(sid, frame)] = (flags, [int(g, 16) for g in m.groups()[3:]])
+            continue
+        m = SPECLEN.search(line)
+        if m:
+            sid, n, nxt = (int(g) for g in m.groups())
+            spec_lens[sid] = (n, nxt)
             continue
         m = ECB.search(line)
         if m:
@@ -213,6 +233,10 @@ def read_table(path):
         rows = {k: v for k, v in rows.items() if k[0] not in (TS_UPB, TS_UPBA)}
         for ts in (TS_UPB, TS_UPBA):
             lens[ts] = (0, -1)
+    if kind in MJ:
+        read_spec_jumps(path, rows, lens, spec, spec_lens)
+    else:
+        rows = {k: v for k, v in rows.items() if k[0] < TS_COUNT}
     if kind != FALCON and loops == (0, 0, 0):
         print('ecbpack: %s has no LLLOOP line: its falls loop as Falcon\'s (8)' % path)
     leans = read_leans(path, [l or 8 for l in loops]) if kind != FALCON else []
@@ -222,19 +246,43 @@ def read_table(path):
     return kind, rows, lens, loops, leans, dj, step, blend
 
 
+def read_spec_jumps(path, rows, lens, spec, spec_lens):
+    """Kirby's and Jigglypuff's air jumps from a log's LLSPEC lines, for each
+    one its own LLECB rows don't have (a log from before the event tracked
+    them). LLSPECLEN gives the most frames seen and the last state after, so
+    the length is only kept when that was a fall (the jump ran out)."""
+    for j in range(MJ_STATES):
+        ts, sid = TS_MJ1 + j, ASID_MJ1 + j
+        if any(k[0] == ts for k in rows):
+            continue
+        got = {(ts, f): v for (s, f), v in spec.items() if s == sid}
+        if not got:
+            print('ecbpack: %s has no air jump %d (state %d): capture it whole' % (path, j + 1, sid))
+            continue
+        rows.update(got)
+        n, nxt = spec_lens.get(sid, (0, -1))
+        if nxt in ASID_TS:
+            lens[ts] = (n, ASID_TS[nxt])
+        else:
+            lens[ts] = (0, -1)
+            print('ecbpack: %s: air jump %d (state %d) was never seen ending (last went to %d after %d frames): its length is left out'
+                  % (path, j + 1, sid, nxt, n))
+
+
 def pad32(b):
     return b + b'\0' * (-len(b) % 32)
 
 
 def block(rows, lens, loops, leans, dj, step, blend):
-    out = struct.pack('>HH', len(rows), TS_COUNT)
+    out = struct.pack('>HH', sum(1 for k in rows if k[0] < TS_COUNT), TS_COUNT)
     for ts in range(TS_COUNT):
         n, nxt = lens.get(ts, (0, -1))
         out += struct.pack('>hh', n, nxt)
     # the old pad byte: the step in its low 2 bits (1 as 0), the blend above
     out += struct.pack('>4B', *loops, (step if step > 1 else 0) | blend << 2)
     for (ts, frame), (flags, words) in sorted(rows.items()):
-        out += struct.pack('>BBBx5I', ts, frame, flags, *words)
+        if ts < TS_COUNT:
+            out += struct.pack('>BBBx5I', ts, frame, flags, *words)
     if leans:
         data = struct.pack('>Hxx', len(leans))
         for fall, back, k, words in leans:
@@ -245,6 +293,14 @@ def block(rows, lens, loops, leans, dj, step, blend):
         for x, y in dj[0] + dj[1]:
             data += struct.pack('>II', x, y)
         out += section(b'DJMV', data)
+    mj = sorted((k, v) for k, v in rows.items() if TS_MJ1 <= k[0] < TS_MJ1 + MJ_STATES)
+    if mj:
+        data = struct.pack('>HH', MJ_STATES, len(mj))
+        for ts in range(TS_MJ1, TS_MJ1 + MJ_STATES):
+            data += struct.pack('>hh', *lens.get(ts, (0, -1)))
+        for (ts, frame), (flags, words) in mj:
+            data += struct.pack('>BBBx5I', ts - TS_MJ1, frame, flags, *words)
+        out += section(b'MJMP', data)
     return pad32(out)
 
 
@@ -277,6 +333,9 @@ def main():
         at += len(b)
         filled = sum(1 for ts in range(TS_COUNT) if any(k[0] == ts for k in rows))
         dj_note = ', double jump %d/%d frames' % (len(dj[0]), len(dj[1])) if kind in DJC else ''
+        if kind in MJ:
+            dj_note = ', air jumps %s' % ' '.join('%d/%d' % (sum(1 for k in rows if k[0] == ts), lens.get(ts, (0, -1))[0])
+                                                  for ts in range(TS_MJ1, TS_MJ1 + MJ_STATES))
         print('kind %2d: %4d rows, %2d of %d states, falls loop %s step %d blend %d, %4d lean rows%s, %s' % (kind, len(rows), filled, TS_COUNT, loops, step, blend, len(leans), dj_note, path))
     header = pad32(b'LLE1' + struct.pack('>I', len(tables)))
     directory += b'\0' * (FIGHTERS * 16 - len(directory))

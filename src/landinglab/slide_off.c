@@ -72,6 +72,7 @@ static void Slide_Path(FighterData *fp, int side, float x, float y, float v, flo
     st.tilt_timer = LL_TIMER_MAX;
     st.trigger_timer = LL_TIMER_MAX;
     st.skip_line = -1;
+    st.jumps = 1; // leaving the ground uses one (ftCommon_8007D5D4)
     SimState s;
     SimStep step;
     Sim_Init(&st, &s);

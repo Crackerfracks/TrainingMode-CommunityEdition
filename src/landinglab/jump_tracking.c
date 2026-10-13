@@ -307,6 +307,7 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
         f->trigger_timer = LL_TIMER_MAX;
         f->ecb_lock = 9;
         f->skip_line = -1;
+        f->jumps = 1; // leaving the ground uses one (ftCommon_8007D5D4)
         SimState s;
         SimStep step;
         Sim_Init(f, &s);

@@ -203,9 +203,9 @@ static void Gl_Steps(FighterData *fp, float x, float vx, int ts, int frame, int 
             }
             ts = next;
             frame = 0;
-            len = state_len[ts];
+            len = ts >= 0 ? state_len[ts] : 0;
         }
-        vx += Drift_Accel(fp, vx, stick);
+        vx += Is_MultiJump(ts) ? Mj_DriftAccel(fp, vx, stick) : Drift_Accel(fp, vx, stick);
         x += vx;
         out[k] = x;
         stick = rest;
@@ -226,10 +226,16 @@ static void Gl_DjPaths(FighterData *fp)
     {
         float dj_x = jt_stick_xy[st][0];
         int ts = Dj_State(dj_x * fp->facing_direction);
+        float vx = dj_x * fp->attr.air_jump_h_multiplier;
+        if (sim_mj)
+        {
+            // Kirby's and Jigglypuff's first air jump, after the hop (Mj_Enter)
+            ts = TS_MJ1;
+            vx = dj_x * fp->multi_jump_desc->vel_stick_x_mult;
+        }
         int len = state_len[ts] ? state_len[ts] : LL_GUESS_JUMP_LEN;
         // Gt_Variant holds the x of a sideways double jump, lets go of an up one
-        Gl_Steps(fp, 0, dj_x * fp->attr.air_jump_h_multiplier, ts, -1, len, dj_x, st != JT_UP ? dj_x : 0,
-                 &gl_dj[st * GL_X], GL_X);
+        Gl_Steps(fp, 0, vx, ts, -1, len, dj_x, st != JT_UP ? dj_x : 0, &gl_dj[st * GL_X], GL_X);
     }
 }
 

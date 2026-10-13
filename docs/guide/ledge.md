@@ -74,7 +74,7 @@ Drop Drill drills the first possible ledge drop. A DRP lane counts down to the f
 
 ## The 15 GALINT reference
 
-Captain Falcon on Battlefield only. Crackerfracks found this one by hand and has been insufferable about it since. Practice 15 GALINT runs it through Assist; keep your hands off the stick until Falcon is back on the ledge. The inputs, a frame at a time from the first hang:
+Captain Falcon on Battlefield only. Crackerfracks found this one by hand. It is the only route in the event with two menu rows to itself. Practice 15 GALINT runs it through Assist; keep your hands off the stick until Falcon is back on the ledge. The inputs, a frame at a time from the first hang:
 
 1. Hold right (away from the stage) for one frame.
 2. Hold left, press jump, one frame. Let go of jump.

@@ -2,7 +2,7 @@
 
 The Camera menu sets the camera mode and lets you save and name camera views for each stage.
 
-Eight saved views per stage, each with a name up to 12 letters long. You can name one FALCON CAM. Nobody will stop you.
+Eight saved views per stage, each with a name up to 12 letters long. FALCON CAM is ten.
 
 <!-- GIF: ../media/cam-advanced.gif (cam-advanced, Battlefield): the camera in Advanced mode, panning with the C-stick while A is held, then zooming with Y -->
 

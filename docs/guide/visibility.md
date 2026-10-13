@@ -2,7 +2,7 @@
 
 Visibility settings make cues, paths and timers fainter or bolder, and fade them out as you learn them.
 
-Auto Fade dims each cue as you start hitting it. Get consistent enough and the event quietly leaves the room.
+Auto Fade dims each cue as you start hitting it. Get consistent enough and all that's left on screen is Melee.
 
 <!-- GIF: ../media/everything.gif (everything-jump, Battlefield): the same AI at Intensity 1 Faint, 3 Standard and 5 Boldest, side by side -->
 

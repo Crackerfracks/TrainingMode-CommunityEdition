@@ -67,7 +67,7 @@ The ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596
 3. A pink strip of frame cells appears in the corner. When a solid cell reaches the white gate, press A.
 4. You land on the top platform on the frame you pressed. That's an aerial interrupt.
 
-Miss it and the strip turns slate blue, the color of quiet disappointment. Do it again. That's the whole event; everything else is about doing it in more places.
+Miss it and the strip turns slate blue. Do it again. That's the whole event. The other 24,000 lines are for doing it in more places.
 
 <!-- <img src="docs/media/first-minute.gif" width="480"> (first-minute, Battlefield: run off the left platform, double jump, nair AI onto the top platform, at defaults) -->
 
@@ -133,7 +133,7 @@ Hold L or R all the way down and press D-pad up or down: the quick menu opens ov
 | --- | --- |
 | Defaults | AI and waveland cues, the Fixed Strip, landing-spot brackets, the controller. Where everyone should start. |
 | Minimal | The AI cue and the Fixed Strip. Waveland cues, the landing spot, the waveland and wavedash timers, frame dots, the controller and the info panel go off. For when you mostly have it and want the screen back. |
-| Everything | Every cue, path, timer and sound with a plain on switch. For screenshots and regret. |
+| Everything | Every cue, path, timer and sound with a plain on switch. For screenshots, and for seeing what 0.6.5 looked like. |
 | Ledge Drill | Ledge routes of both kinds, back to the same ledge after every try. |
 | Preset 1 to 4, User Custom | Yours, saved to the memory card. |
 
@@ -210,19 +210,19 @@ The D-pad does nothing while a trigger is partway in, so shielding can't freeze 
 ## FAQ
 
 **Is this cheating?**
-Only if you can get the pink path to show up in bracket. If you can, open an issue. That's a much bigger bug than anything in here.
+Only if you can get the pink path to show up in bracket. If you can, open an issue with the stage, the fighter and the frame you pressed on.
 
 **Which fighters work?**
-All of them. Every slot on the character select, Zelda and Sheik both, Ice Climbers as Popo. It was Captain Falcon only until 0.9.19, because Crackerfracks plays Falcon and that was the whole meeting. The other 24 took four days and a laptop.
+All of them. Every slot on the character select, Zelda and Sheik both, Ice Climbers as Popo. It was Captain Falcon only until 0.9.19. Crackerfracks plays Falcon, and the question of anyone else did not come up. The other 24 took four days and a laptop.
 
 **Do falling AIs count?**
-They're real aerial interrupts. They also save about a frame, in situations so specific they'd need their own ruleset, so the default AI Filter (Useful) hides any AI that saves fewer than 4 frames, which is nearly all of them. Set it to All if you collect useless things.
+They're real aerial interrupts. They save about a frame. The default AI Filter (Useful) hides any AI that saves fewer than 4 frames, which is nearly every falling one. Set it to All if a frame is a frame.
 
 **Why is it called Landing Gear?**
-It was Landing Lab until October 13. LG, if you like, is also Lag Gone. The two-day gap between the name being suggested and the name being used is in the Confessions.
+It was Landing Lab until October 13. LG also expands to Lag Gone. The two days between the name being suggested and the name being used are in the Confessions.
 
 **Why is it on the Character-specific Tech page?**
-That's where it was filed when it was Falcon only, and it's the last event on the page. The name is the game's, not a limit.
+That's where it was filed when it was Falcon only, and nobody moved it. It's the last event on the page and it works for everyone.
 
 **Does it work on console?**
 It's only been tested in Dolphin. If you try it on a console, tell us what happened.
@@ -241,19 +241,22 @@ Things that went wrong on the way here, all true.
 <summary>Read them</summary>
 
 - The first definition of an aerial interrupt in this project was "landing in the autocancel window." That's a different thing. Correcting it took one message. The code took longer.
-- Until October 12 the event was one C file, 18,370 lines long. It is now 50 files. The compiled output is byte for byte the same, so nothing was fixed; it's just easier to see what wasn't.
+- Until October 12 the event was one C file, 18,370 lines long. It is now 50 files, and the compiled output is byte for byte the same, so every bug survived the move and most of them now have a file of their own.
 - The AI's test runs pressed menu buttons on a timer, blind. When the laptop lagged, the presses landed in Float Cancelling Training instead, and the character-select cursor had been dropping on Donkey Kong instead of Falcon the entire time. Reading the cursor out of game memory fixed it. Crackerfracks had to suggest that.
+- While testing 0.8.4, the AI pressed D-pad down every five seconds, which toggles Frame Advance. It froze its own game, then filed the freeze as a bug.
 - One test session on the laptop idled out and killed its own capture halfway through Zelda. Another capture pressed down-B partway through and turned Zelda into Sheik, so the file held half of each.
 - On October 13 the AI's own bug scan found that when Zelda turned into Sheik in play, the trainer kept using Zelda's data for Sheik. It reloads now. Nobody had noticed.
 - Pichu, placed on the ledge by a test script, would not hang. He stood up on the ledge's corner and walked off. He now falls into the ledge from the spot TM-CE's own ledgedash training starts a fall, which took five commits.
+- The ledge route search once advised drifting away from the stage after the double jump. Falcon would like it known he did not consent.
 - Peach's double jump keeps rising for about 50 frames. The ledge route search looks 45 frames past the jump and finds nothing. Peach is still rising.
 - Version 0.6.5 turned every effect on at once: paths, dots, rings, strips, glows, ticks and a controller, all moving at the same time. A friend saw the GIFs and said "busy." The defaults have been quieter since.
-- Jump Timing from the ground was scrapped in 0.8.4. Its replacement, a guide painted on the floor, knew five ground speeds. Melee has more than five. It lives behind an `#ifdef` until after 1.0, thinking about what it did.
+- Jump Timing from the ground was scrapped in 0.8.4. Its replacement, a guide painted on the floor, knew five ground speeds. Melee has more than five. It lives behind an `#ifdef` until after 1.0.
 - The AI told Crackerfracks that nothing of its was running on his laptop while he played. Something was.
 - The name Landing Gear was suggested on October 11. The AI's notes dropped it, Crackerfracks assumed it had been done, and it was renamed on October 13. For two days the project was called Landing Gear by exactly one person.
 - A 2-core laptop runs every test in this project. It also runs Dolphin, the capture harness and, in two of ten test boots, a window manager reload mid-route.
 - The jump arc preview is one of the oldest features in Landing Gear. Crackerfracks keeps it off. He has said so in writing.
-- Designed by Crackerfracks, a Falcon **main**, whose playtest notes for 0.6.5 ran 3,206 words. This README passed that on October 13.
+- Designed by Crackerfracks, a Falcon **main**, who asked us not to use his replays as reference footage. Request granted.
+- His playtest notes for 0.6.5 ran 3,206 words. This README passed that on October 13.
 - These jokes were written by Fable, another Claude model, from a list of approved targets. It is on the list.
 </details>
 

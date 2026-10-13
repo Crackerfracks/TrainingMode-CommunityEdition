@@ -132,6 +132,26 @@ def count(lines, key):
 threading.Thread(target=sample_temps, daemon=True).start()
 time.sleep(1)
 
+def stale_stage():
+    """Why the staged capture build in CAP isn't this checkout's, or None. capall is staged by hand
+    (build.sh test with LLSCRIPT=src/landinglab_capture.txt LLCHAR=file, then copied in), so a
+    stale one silently captures the old script and code: check before every run."""
+    want, have = f"{C}/src/landinglab_capture.txt", f"{CAP}/landinglab_capture.txt"
+    if not os.path.exists(have) or open(want, "rb").read() != open(have, "rb").read():
+        return f"{have} differs from {want}"
+    dat = f"{CAP}/build/landinglab.dat"
+    srcs = glob.glob(f"{C}/src/landinglab*.[ch]") + glob.glob(f"{C}/src/landinglab/*.[ch]")
+    newest = max(srcs, key=os.path.getmtime) if srcs else None
+    if not os.path.exists(dat) or (newest and os.path.getmtime(newest) > os.path.getmtime(dat)):
+        return f"{dat} is older than {newest}: restage capall from this checkout"
+    return None
+
+
+why = stale_stage()
+if why and os.environ.get("STALE_OK") != "1":
+    sys.exit(f"capture_all: the staged capture build is stale ({why}); restage it, or STALE_OK=1 to run anyway")
+
+
 with jobboard.Job(f"TM-CE capture v{RUN}", total=len(CHARS), unit="chars", group="TM-CE", stale_after=300, owner_label="Landing trainer research", replaces=REPLACES,
                   description="Builds a capture ISO per character, plays its jump/aerial/airdodge animations "
                               "on Battlefield, logs ECB + specials per frame to llsim-capture/<char>_bf{RUN}.log (one build, character swapped via TM/llchar.txt)",

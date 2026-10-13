@@ -14,7 +14,7 @@ them elsewhere.
 | `gamearea.py` | prints the render area to grab (Hyprland window, or the largest window on Xvfb when `HEADLESS=1`) |
 | `pad.py` | one-shot pipe-controller inputs (`A`, `stick X Y S`, `wait S`, hotkeys) |
 | `run_tests.py TAG SCRIPT name:ckind ...` | one test build per fighter (LLCHAR=file), run, log to `llsim-capture/TAG_name.log` |
-| `RUN=9 capture_all.py [CHAR ...]` | the table capture for all 26 fighters or the ones named (`*_bfRUN.log`); a log whose fighter changes mid-capture is failed and set aside |
+| `RUN=9 capture_all.py [CHAR ...]` | the table capture for all 26 fighters or the ones named (`*_bfRUN.log`); a log whose fighter changes mid-capture is failed and set aside. Refuses to start when the staged build in `capall` is older than the checkout's event code or its capture script differs (restage, or `STALE_OK=1`) |
 | `nav_boot_test.py [N]` | N boots into Landing Lab with nav (Fox/Mario, `hyprctl reload` on boots 3 and 8); passed 10/10 on 2026-10-12 |
 
 Long runs go detached (`systemd-run --user --collect`), post to the job board, and wait while Stephen's own

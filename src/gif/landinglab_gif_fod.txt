@@ -7,6 +7,7 @@ script jump-timing
 preset load Defaults
 set Jump/Show = 1
 air -40 70 right 0 0 0 0
+sync jump-timing
 mark clip jump-timing in
 follow 80
 land 150
@@ -18,6 +19,7 @@ preset load Defaults
 set Jump/Show = 1
 start -55 0 right
 90
+sync jump-timing-run
 mark clip jump-timing-run in
 6 s:1,0
 follow 60 s:1,0

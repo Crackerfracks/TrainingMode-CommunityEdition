@@ -9,6 +9,7 @@ script first-minute
 preset load Defaults
 start 28 0 right
 60
+sync first-minute
 mark clip first-minute in
 10 X
 ai 0 A

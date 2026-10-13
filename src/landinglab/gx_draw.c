@@ -266,10 +266,22 @@ static void Namer_Draw(void)
 
 static void Hud_GX(GOBJ *gobj, int pass)
 {
-    if (pass != 2 || capture_clean)
+    if (pass != 2)
         return;
     HUDCamData *hud = event_vars->hudcam_gobj->userdata;
-    if (hud->hide)
+    if (sync_frames > 0)
+    {
+        // a script's sync mark, over everything, for the GIF cutter
+        COBJ *prev = COBJ_GetCurrent();
+        CObj_SetCurrent(event_vars->hudcam_gobj->hsd_object);
+        quad_num = 0;
+        Hud_Rect(-3 * SAFE_W, -3 * SAFE_H, 3 * SAFE_W, 3 * SAFE_H, (GXColor){255, 0, 255, 255});
+        Quad_Flush();
+        CObj_SetCurrent(prev);
+        sync_frames--;
+        return;
+    }
+    if (capture_clean || hud->hide)
         return;
 
     FighterData *fp = Fighter_GetGObj(0)->userdata;

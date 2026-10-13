@@ -6,6 +6,7 @@ script wavedash
 preset load Defaults
 start -20 0 right
 60
+sync wavedash
 mark clip wavedash in
 1 X
 3
@@ -22,6 +23,7 @@ preset load Defaults
 set Timers/Wavedash = 2
 start -20 0 right
 60
+sync wd-pips
 mark clip wd-pips in
 1 X
 3
@@ -34,6 +36,7 @@ preset load Defaults
 set Timers/Wavedash = 3
 start -20 0 right
 60
+sync wd-ring
 mark clip wd-ring in
 1 X
 3
@@ -47,9 +50,11 @@ preset load Defaults
 set Speed/Game Speed = 3
 start -20 0 right
 60
+sync wd-slow
 mark clip wd-slow in
 1 X
 3
 1 L s:1,-0.35
 60
 mark clip wd-slow out
+set Speed/Game Speed = 0

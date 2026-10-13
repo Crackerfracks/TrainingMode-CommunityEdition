@@ -25,6 +25,7 @@ static int script_trace; // defined with the scripts below
 // Legacy scripts log everything; state traces respect the requested log level.
 static int Log_Level(void) { return script_cur >= 0 && !script_trace && !reference_mode ? LOG_ALL : Options_Dev[DOPT_LOG].val; }
 static int capture_clean; // hide everything the event draws (D-pad up in Frame Advance, with the Debug Log on)
+static int sync_frames;   // a script's sync step: frames left of the whole screen magenta, for cutting GIFs from a frame dump
 
 static void Log_Camera(FighterData *fp)
 {

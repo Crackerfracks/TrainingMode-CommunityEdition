@@ -11,6 +11,7 @@ preset load Defaults
 set Jump/Show = 1
 start -50 27.2 right
 90
+sync hero
 mark clip hero in
 follow 70 s:1,0
 land 120
@@ -23,6 +24,7 @@ set Jump/Show = 1
 set Timers/Fixed Strip = 1
 start -50 27.2 right
 90
+sync strip-cells
 mark clip strip-cells in
 follow 70 s:1,0
 land 120
@@ -35,6 +37,7 @@ set Jump/Show = 1
 set Timers/Fixed Strip = 2
 start -50 27.2 right
 90
+sync strip-highway
 mark clip strip-highway in
 follow 70 s:1,0
 land 120
@@ -47,6 +50,7 @@ set Jump/Show = 1
 set Timers/Fixed Strip = 3
 start -50 27.2 right
 90
+sync strip-dial
 mark clip strip-dial in
 follow 70 s:1,0
 land 120
@@ -59,6 +63,7 @@ set Jump/Show = 1
 set Timers/Fixed Strip = 4
 start -50 27.2 right
 90
+sync strip-conveyor
 mark clip strip-conveyor in
 follow 70 s:1,0
 land 120
@@ -71,6 +76,7 @@ set Jump/Show = 1
 set Timers/Near You = 1
 start -50 27.2 right
 90
+sync near-bubble
 mark clip near-bubble in
 follow 70 s:1,0
 land 120
@@ -83,6 +89,7 @@ set Jump/Show = 1
 set Timers/Near You = 2
 start -50 27.2 right
 90
+sync near-halo
 mark clip near-halo in
 follow 70 s:1,0
 land 120
@@ -95,6 +102,7 @@ set Jump/Show = 1
 set Timers/Near You = 3
 start -50 27.2 right
 90
+sync near-pincers
 mark clip near-pincers in
 follow 70 s:1,0
 land 120
@@ -107,6 +115,7 @@ set Jump/Show = 1
 set Timers/Near You = 4
 start -50 27.2 right
 90
+sync near-ecbfill
 mark clip near-ecbfill in
 follow 70 s:1,0
 land 120
@@ -119,6 +128,7 @@ set Jump/Show = 1
 set Timers/Near You = 5
 start -50 27.2 right
 90
+sync near-lights
 mark clip near-lights in
 follow 70 s:1,0
 land 120
@@ -131,6 +141,7 @@ set Jump/Show = 1
 set Timers/Near You = 6
 start -50 27.2 right
 90
+sync near-oldstrip
 mark clip near-oldstrip in
 follow 70 s:1,0
 land 120
@@ -143,6 +154,7 @@ set Jump/Show = 1
 set Timers/Note Travel = 1
 start -50 27.2 right
 90
+sync travel-catchup
 mark clip travel-catchup in
 follow 70 s:1,0
 land 120
@@ -154,6 +166,7 @@ preset load Everything
 set Jump/Show = 1
 start -50 27.2 right
 90
+sync everything-jump
 mark clip everything-jump in
 follow 70 s:1,0
 land 120
@@ -166,6 +179,7 @@ script ai-plain
 preset load Defaults
 start 0 0 right
 60
+sync ai-plain
 mark clip ai-plain in
 10 X
 20
@@ -175,36 +189,31 @@ land 120
 40
 mark clip ai-plain out
 
-# The same AI, frozen on the press and stepped (glossary: the frame the ECB
-# touches). Frame Advance on; each shot is a frame step in the clip.
-script ai-frames
+# The same AI at 1/4 speed (glossary: the frame the ECB touches). Each game
+# frame is drawn 4 times: the cut is 4 dump frames per game frame.
+script ai-slow
 preset load Defaults
 set Paths/Frame Dots = 1
 start 0 0 right
 60
-mark clip ai-frames in
 10 X
 20
 1 X
-ai -2
-shot step
-1
-shot step
-1 A
-shot step (the press)
-1
-shot step
-1
-shot step
+set Speed/Game Speed = 4
+sync ai-slow
+mark clip ai-slow in
+ai 0 A
 land 120
-30
-mark clip ai-frames out
+20
+mark clip ai-slow out
+set Speed/Game Speed = 0
 
 # Paths page: input markers and frame dots on the path (defaults).
 script paths
 preset load Defaults
 start 0 0 right
 60
+sync paths
 mark clip paths in
 10 X
 20
@@ -220,6 +229,7 @@ preset load Defaults
 set HUD/Controller Look = 0
 start 38 0 right
 60
+sync pad-ring
 mark clip pad-ring in
 10 X
 ai 0 A
@@ -232,6 +242,7 @@ preset load Defaults
 set HUD/Controller Size = 1
 start 38 0 right
 60
+sync pad-ring-medium
 mark clip pad-ring-medium in
 10 X
 ai 0 A
@@ -244,6 +255,7 @@ preset load Defaults
 set HUD/Controller Size = 2
 start 38 0 right
 60
+sync pad-ring-large
 mark clip pad-ring-large in
 10 X
 ai 0 A
@@ -257,6 +269,7 @@ set HUD/Controller Look = 1
 set HUD/Controller Size = 1
 start 38 0 right
 60
+sync pad-crest
 mark clip pad-crest in
 10 X
 ai 0 A
@@ -270,6 +283,7 @@ set HUD/Controller Look = 2
 set HUD/Controller Size = 1
 start 38 0 right
 60
+sync pad-classic
 mark clip pad-classic in
 10 X
 ai 0 A
@@ -284,6 +298,7 @@ set HUD/Controller Size = 1
 set HUD/Controller Cues = 1
 start 38 0 right
 60
+sync padcue-ring
 mark clip padcue-ring in
 10 X
 ai 0 A
@@ -298,6 +313,7 @@ set HUD/Controller Size = 1
 set HUD/Controller Cues = 2
 start 38 0 right
 60
+sync padcue-gauge
 mark clip padcue-gauge in
 10 X
 ai 0 A
@@ -311,6 +327,7 @@ preset load Defaults
 set HUD/Controller Size = 1
 start 38 27.2 right
 60
+sync shield-drop
 mark clip shield-drop in
 40 R
 20 R s:0,-0.3
@@ -325,6 +342,7 @@ script ledge-route
 preset load Defaults
 set Ledge/Keep Ledge Invincibility = 1
 ledge right
+sync ledge-route
 mark clip ledge-route in
 playroute 1
 90
@@ -335,6 +353,7 @@ preset load Defaults
 set Ledge/Route Sort = 1
 set Ledge/Keep Ledge Invincibility = 1
 ledge right
+sync ledge-sort-easiest
 mark clip ledge-sort-easiest in
 playroute 1
 90
@@ -344,23 +363,52 @@ script everything-ledge
 preset load Everything
 set Ledge/Keep Ledge Invincibility = 1
 ledge right
+sync everything-ledge
 mark clip everything-ledge in
 playroute 1
 90
 mark clip everything-ledge out
 
-# Assist: Assist stops on each step of the route and waits for the input;
-# the script gives each one late, so the wait shows. Assist Wait 1 s.
-script assist
+# Assist: Assist stops on each step of the route and waits for the input.
+# These only set up and hang; the script ends, then the pad (pad.py) plays
+# the route with each input a little late, so the wait shows. Cut to the
+# touchdown plus 40 frames. assist.gif (README) is assist-1s.
+script assist-5s
+preset load Ledge Drill
+set Ledge/Assist = 1
+set Ledge/Assist Wait = 0
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+sync assist-5s
+mark clip assist-5s in: the script ends here; drive the route by pad, each input late
+
+script assist-1s
 preset load Ledge Drill
 set Ledge/Assist = 1
 set Ledge/Assist Wait = 3
 set Ledge/Keep Ledge Invincibility = 1
 ledge right
-mark clip assist in
-playroute 1
-120
-mark clip assist out
+sync assist-1s
+mark clip assist-1s in: the script ends here; drive the route by pad, each input late
+
+script assist-01s
+preset load Ledge Drill
+set Ledge/Assist = 1
+set Ledge/Assist Wait = 6
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+sync assist-01s
+mark clip assist-01s in: the script ends here; drive the route by pad, each input late
+
+# Quick menu (README): stand on Battlefield and end; then by pad: hold R
+# fully with D-pad up to open it, right twice to flip cards, down into the
+# settings, change one, let go of R, then play out with the stick.
+script quick-menu
+preset load Defaults
+start -10 0 right
+30
+sync quick-menu
+mark clip quick-menu in: the script ends here; the rest is by pad
 
 # Camera: the same jump in each mode (Advanced: slid toward the platform).
 script cam-normal
@@ -368,6 +416,7 @@ preset load Defaults
 set Camera/Camera Mode = 0
 start 0 0 right
 60
+sync cam-normal
 mark clip cam-normal in
 10 X
 20
@@ -382,6 +431,7 @@ preset load Defaults
 set Camera/Camera Mode = 1
 start 0 0 right
 60
+sync cam-zoom
 mark clip cam-zoom in
 10 X
 20
@@ -396,6 +446,7 @@ preset load Defaults
 set Camera/Camera Mode = 2
 start 0 0 right
 60
+sync cam-fixed
 mark clip cam-fixed in
 10 X
 20
@@ -411,6 +462,7 @@ set Camera/Camera Mode = 3
 view shift 1 0 15
 start 0 0 right
 60
+sync cam-advanced
 mark clip cam-advanced in
 10 X
 20
@@ -426,6 +478,7 @@ preset load Minimal
 set Jump/Show = 1
 start -50 27.2 right
 90
+sync preset-minimal
 mark clip preset-minimal in
 follow 70 s:1,0
 land 120
@@ -437,6 +490,7 @@ preset load Ledge Drill
 set Jump/Show = 1
 start -50 27.2 right
 90
+sync preset-ledgedrill
 mark clip preset-ledgedrill in
 follow 70 s:1,0
 land 120
@@ -449,6 +503,7 @@ script lcancel
 preset load Defaults
 start 0 0 right
 60
+sync lcancel
 mark clip lcancel in
 3 X
 2
@@ -464,6 +519,7 @@ script fastfall
 preset load Defaults
 start 0 0 right
 60
+sync fastfall
 mark clip fastfall in
 10 X
 22
@@ -476,35 +532,9 @@ preset load Defaults
 set Speed/Game Speed = 3
 start 0 0 right
 60
+sync jumpsquat
 mark clip jumpsquat in
 10 X
 40
 mark clip jumpsquat out
-
-# Cast (one run per fighter, LLCHAR=file): a rising aerial interrupt with
-# nair onto the right platform from a full hop under it, and one onto the
-# top platform from a double jump. Keep whichever lands the fighter while
-# still rising; drop a fighter neither works for and say so.
-script cast-side
-preset load Defaults
-start 38 0 right
-60
-mark clip cast-side in
-10 X
-ai 0 A
-land 120
-40
-mark clip cast-side out
-
-script cast-top
-preset load Defaults
-start 0 0 right
-60
-mark clip cast-top in
-10 X
-20
-1 X
-ai 0 A
-land 120
-40
-mark clip cast-top out
+set Speed/Game Speed = 0

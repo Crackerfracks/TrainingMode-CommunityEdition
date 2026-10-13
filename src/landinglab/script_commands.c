@@ -246,6 +246,14 @@ static void Script_Cmd(ScriptOp *op)
     case SCMD_DUMPECB:
         Ecb_Dump(Fighter_GetGObj(0)->userdata);
         break;
+    case SCMD_SYNC:
+    {
+        char buf[96];
+        sync_frames = 2;
+        sprintf(buf, "LLSYNC %s at %d\n", op->label, event_vars->game_timer);
+        Log(buf);
+        break;
+    }
     case SCMD_REFILL:
         // the jumps back, once (a double jump to capture): left alone
         // otherwise, so a double jump still falls into FallAerial

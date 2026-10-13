@@ -1,0 +1,47 @@
+# The cast on Battlefield: build once with LLCHAR=file and run once per
+# fighter (TM/llchar.txt), as tools/harness/run_tests.py does. A rising
+# aerial interrupt with nair onto the right platform from a full hop under
+# it, and one onto the top platform from a double jump; keep whichever
+# lands the fighter while still rising (trace on: vy > 0 on the landing),
+# and say which fighters neither works for. Then the ledge route, for the
+# fighters that have one (no LLROUTE play line: none).
+autorun
+script cast-side
+preset load Defaults
+start 38 0 right
+60
+trace on
+sync cast-side
+mark clip cast-side in
+10 X
+ai 0 A
+land 120
+40
+mark clip cast-side out
+trace off
+
+script cast-top
+preset load Defaults
+start 0 0 right
+60
+trace on
+sync cast-top
+mark clip cast-top in
+10 X
+20
+1 X
+ai 0 A
+land 120
+40
+mark clip cast-top out
+trace off
+
+script cast-ledge
+preset load Defaults
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+sync cast-ledge
+mark clip cast-ledge in
+playroute 1
+90
+mark clip cast-ledge out

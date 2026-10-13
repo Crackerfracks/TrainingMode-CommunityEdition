@@ -53,6 +53,9 @@
 //                              down goes on, the advance button steps
 //   trace on|off               opt-in LLST1 engine-state records (all states)
 //   mark [label]               only write a line to the log
+//   sync [label]               the whole screen magenta for two drawn frames
+//                              (LLSYNC in the log): where a GIF's frame dump
+//                              lines up with the log
 //   autorun                    (anywhere) play All, or the only script, as
 //                              soon as the event starts
 // Steps that do what the menu would, so a test needs no menuing:
@@ -118,6 +121,7 @@ enum script_cmd
     SCMD_CAPTURE,
     SCMD_DUMPECB,
     SCMD_REFILL,
+    SCMD_SYNC,
 };
 
 typedef struct ScriptInput
@@ -425,10 +429,10 @@ static void Script_Parse(void)
         else if (Script_Is(w, "set") || Script_Is(w, "get") || Script_Is(w, "closemenu") || Script_Is(w, "preset") ||
                  Script_Is(w, "card") || Script_Is(w, "chord") || Script_Is(w, "view") || Script_Is(w, "fadereset") ||
                  Script_Is(w, "bake") || Script_Is(w, "trace") || Script_Is(w, "dump") || Script_Is(w, "hover") ||
-                 Script_Is(w, "capture") || Script_Is(w, "dumpecb") || Script_Is(w, "refill"))
+                 Script_Is(w, "capture") || Script_Is(w, "dumpecb") || Script_Is(w, "refill") || Script_Is(w, "sync"))
         {
             op->kind = SOP_CMD;
-            op->count = Script_Is(w, "dumpecb") ? SCMD_DUMPECB : Script_Is(w, "refill") ? SCMD_REFILL : w[0] == 'h' ? SCMD_HOVER : Script_Is(w, "capture") ? SCMD_CAPTURE
+            op->count = Script_Is(w, "sync") ? SCMD_SYNC : Script_Is(w, "dumpecb") ? SCMD_DUMPECB : Script_Is(w, "refill") ? SCMD_REFILL : w[0] == 'h' ? SCMD_HOVER : Script_Is(w, "capture") ? SCMD_CAPTURE
                       : w[0] == 'd' ? SCMD_DUMP : w[0] == 't' ? SCMD_TRACE : w[0] == 'b' ? SCMD_BAKE : w[0] == 'f' ? SCMD_FADE : w[0] == 's' ? SCMD_SET : w[0] == 'g' ? SCMD_GET : w[0] == 'v' ? SCMD_VIEW : w[1] == 'l' ? SCMD_CLOSEMENU : w[0] == 'p' ? SCMD_PRESET : w[1] == 'a' ? SCMD_CARD : SCMD_CHORD;
             op->label = Script_Trim(rest);
         }

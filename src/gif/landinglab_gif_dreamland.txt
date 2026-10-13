@@ -8,6 +8,7 @@ script nil
 preset load Defaults
 set Cues/NIL Cues = 1
 air 20 75 right 0 0 1 0
+sync nil
 mark clip nil in
 land 150 s:0.6,0
 40
@@ -22,6 +23,7 @@ set Paths/Landing Path = 1
 set Timers/Fixed Strip = 0
 set Timers/Landing Spot = 0
 air 20 75 right 0 0 1 0
+sync spot-path
 mark clip spot-path in
 land 150 s:0.6,0
 40
@@ -32,6 +34,7 @@ preset load Defaults
 set Cues/NIL Cues = 1
 set Timers/Fixed Strip = 0
 air 20 75 right 0 0 1 0
+sync spot-timer
 mark clip spot-timer in
 land 150 s:0.6,0
 40
@@ -44,6 +47,7 @@ set Cues/Platform Glow = 1
 set Timers/Fixed Strip = 0
 set Timers/Landing Spot = 0
 air 20 75 right 0 0 1 0
+sync spot-glow
 mark clip spot-glow in
 land 150 s:0.6,0
 40

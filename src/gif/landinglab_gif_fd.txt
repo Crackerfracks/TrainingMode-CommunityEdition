@@ -1,0 +1,55 @@
+# Final Destination GIFs, Falcon: the wavedash timer. Tune the airdodge to
+# the frame after jumpsquat (the timer's hit) from the log.
+autorun
+
+script wavedash
+preset load Defaults
+start -20 0 right
+60
+mark clip wavedash in
+1 X
+3
+1 L s:1,-0.35
+40
+1 X
+3
+1 L s:-1,-0.35
+40
+mark clip wavedash out
+
+script wd-pips
+preset load Defaults
+set Timers/Wavedash = 2
+start -20 0 right
+60
+mark clip wd-pips in
+1 X
+3
+1 L s:1,-0.35
+40
+mark clip wd-pips out
+
+script wd-ring
+preset load Defaults
+set Timers/Wavedash = 3
+start -20 0 right
+60
+mark clip wd-ring in
+1 X
+3
+1 L s:1,-0.35
+40
+mark clip wd-ring out
+
+# glossary "wavedash" and "jumpsquat" at half speed
+script wd-slow
+preset load Defaults
+set Speed/Game Speed = 3
+start -20 0 right
+60
+mark clip wd-slow in
+1 X
+3
+1 L s:1,-0.35
+60
+mark clip wd-slow out

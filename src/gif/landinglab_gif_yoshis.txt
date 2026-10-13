@@ -1,0 +1,17 @@
+# Yoshi's Story GIFs, Falcon. Side platforms about y 23.45, x 15.75 to
+# 43.75 (and the left one mirrored); top platform about y 42, x -15.75 to
+# 15.75. Positions are a first guess: tune x until the AI lands.
+autorun
+
+# README "Your first minute": stand under the right platform, full hop,
+# nair when the strip fills: a rising AI.
+script first-minute
+preset load Defaults
+start 28 0 right
+60
+mark clip first-minute in
+10 X
+ai 0 A
+land 120
+40
+mark clip first-minute out

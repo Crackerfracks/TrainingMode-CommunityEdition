@@ -1,0 +1,50 @@
+# Dream Land GIFs, Falcon. Side platforms about y 30.14, x 30.25 to 61.4
+# (and mirrored); top platform about y 51.4, x -19 to 19. Positions are a
+# first guess: tune them until the landing is the one named.
+autorun
+
+# NIL: drift down onto the right platform from above, no aerial.
+script nil
+preset load Defaults
+set Cues/NIL Cues = 1
+air 20 75 right 0 0 1 0
+mark clip nil in
+land 150 s:0.6,0
+40
+mark clip nil out
+
+# Spot cues compared on the same NIL: the path alone, the landing spot
+# timer alone, Platform Glow alone.
+script spot-path
+preset load Defaults
+set Cues/NIL Cues = 1
+set Paths/Landing Path = 1
+set Timers/Fixed Strip = 0
+set Timers/Landing Spot = 0
+air 20 75 right 0 0 1 0
+mark clip spot-path in
+land 150 s:0.6,0
+40
+mark clip spot-path out
+
+script spot-timer
+preset load Defaults
+set Cues/NIL Cues = 1
+set Timers/Fixed Strip = 0
+air 20 75 right 0 0 1 0
+mark clip spot-timer in
+land 150 s:0.6,0
+40
+mark clip spot-timer out
+
+script spot-glow
+preset load Defaults
+set Cues/NIL Cues = 1
+set Cues/Platform Glow = 1
+set Timers/Fixed Strip = 0
+set Timers/Landing Spot = 0
+air 20 75 right 0 0 1 0
+mark clip spot-glow in
+land 150 s:0.6,0
+40
+mark clip spot-glow out

@@ -1,0 +1,510 @@
+# Battlefield GIFs, Falcon (and the cast scripts at the end, one run per
+# fighter). Floor y 0 from x -68.4 to 68.4; side platforms y 27.2, x 20 to
+# 57.6 (and -20 to -57.6); top platform y 54.4, x -18.8 to 18.8.
+autorun
+
+# hero / timers / near-you / note-travel / everything: one jump, the looks
+# changed. Run off the left platform's inner edge, double jump, rising nair
+# onto the top platform, on the frames Jump Timing shows.
+script hero
+preset load Defaults
+set Jump/Show = 1
+start -50 27.2 right
+90
+mark clip hero in
+follow 70 s:1,0
+land 120
+40
+mark clip hero out
+
+script strip-cells
+preset load Defaults
+set Jump/Show = 1
+set Timers/Fixed Strip = 1
+start -50 27.2 right
+90
+mark clip strip-cells in
+follow 70 s:1,0
+land 120
+40
+mark clip strip-cells out
+
+script strip-highway
+preset load Defaults
+set Jump/Show = 1
+set Timers/Fixed Strip = 2
+start -50 27.2 right
+90
+mark clip strip-highway in
+follow 70 s:1,0
+land 120
+40
+mark clip strip-highway out
+
+script strip-dial
+preset load Defaults
+set Jump/Show = 1
+set Timers/Fixed Strip = 3
+start -50 27.2 right
+90
+mark clip strip-dial in
+follow 70 s:1,0
+land 120
+40
+mark clip strip-dial out
+
+script strip-conveyor
+preset load Defaults
+set Jump/Show = 1
+set Timers/Fixed Strip = 4
+start -50 27.2 right
+90
+mark clip strip-conveyor in
+follow 70 s:1,0
+land 120
+40
+mark clip strip-conveyor out
+
+script near-bubble
+preset load Defaults
+set Jump/Show = 1
+set Timers/Near You = 1
+start -50 27.2 right
+90
+mark clip near-bubble in
+follow 70 s:1,0
+land 120
+40
+mark clip near-bubble out
+
+script near-halo
+preset load Defaults
+set Jump/Show = 1
+set Timers/Near You = 2
+start -50 27.2 right
+90
+mark clip near-halo in
+follow 70 s:1,0
+land 120
+40
+mark clip near-halo out
+
+script near-pincers
+preset load Defaults
+set Jump/Show = 1
+set Timers/Near You = 3
+start -50 27.2 right
+90
+mark clip near-pincers in
+follow 70 s:1,0
+land 120
+40
+mark clip near-pincers out
+
+script near-ecbfill
+preset load Defaults
+set Jump/Show = 1
+set Timers/Near You = 4
+start -50 27.2 right
+90
+mark clip near-ecbfill in
+follow 70 s:1,0
+land 120
+40
+mark clip near-ecbfill out
+
+script near-lights
+preset load Defaults
+set Jump/Show = 1
+set Timers/Near You = 5
+start -50 27.2 right
+90
+mark clip near-lights in
+follow 70 s:1,0
+land 120
+40
+mark clip near-lights out
+
+script near-oldstrip
+preset load Defaults
+set Jump/Show = 1
+set Timers/Near You = 6
+start -50 27.2 right
+90
+mark clip near-oldstrip in
+follow 70 s:1,0
+land 120
+40
+mark clip near-oldstrip out
+
+script travel-catchup
+preset load Defaults
+set Jump/Show = 1
+set Timers/Note Travel = 1
+start -50 27.2 right
+90
+mark clip travel-catchup in
+follow 70 s:1,0
+land 120
+40
+mark clip travel-catchup out
+
+script everything-jump
+preset load Everything
+set Jump/Show = 1
+start -50 27.2 right
+90
+mark clip everything-jump in
+follow 70 s:1,0
+land 120
+40
+mark clip everything-jump out
+
+# A plain rising AI with no Jump Timing: what the cues alone look like
+# (Cues page top, glossary "aerial interrupt").
+script ai-plain
+preset load Defaults
+start 0 0 right
+60
+mark clip ai-plain in
+10 X
+20
+1 X
+ai 0 A
+land 120
+40
+mark clip ai-plain out
+
+# The same AI, frozen on the press and stepped (glossary: the frame the ECB
+# touches). Frame Advance on; each shot is a frame step in the clip.
+script ai-frames
+preset load Defaults
+set Paths/Frame Dots = 1
+start 0 0 right
+60
+mark clip ai-frames in
+10 X
+20
+1 X
+ai -2
+shot step
+1
+shot step
+1 A
+shot step (the press)
+1
+shot step
+1
+shot step
+land 120
+30
+mark clip ai-frames out
+
+# Paths page: input markers and frame dots on the path (defaults).
+script paths
+preset load Defaults
+start 0 0 right
+60
+mark clip paths in
+10 X
+20
+1 X s:1,0
+ai 0 c:1,0
+land 120
+40
+mark clip paths out
+
+# HUD: the controller display beside the percent, each look and size.
+script pad-ring
+preset load Defaults
+set HUD/Controller Look = 0
+start 38 0 right
+60
+mark clip pad-ring in
+10 X
+ai 0 A
+land 120
+40
+mark clip pad-ring out
+
+script pad-ring-medium
+preset load Defaults
+set HUD/Controller Size = 1
+start 38 0 right
+60
+mark clip pad-ring-medium in
+10 X
+ai 0 A
+land 120
+40
+mark clip pad-ring-medium out
+
+script pad-ring-large
+preset load Defaults
+set HUD/Controller Size = 2
+start 38 0 right
+60
+mark clip pad-ring-large in
+10 X
+ai 0 A
+land 120
+40
+mark clip pad-ring-large out
+
+script pad-crest
+preset load Defaults
+set HUD/Controller Look = 1
+set HUD/Controller Size = 1
+start 38 0 right
+60
+mark clip pad-crest in
+10 X
+ai 0 A
+land 120
+40
+mark clip pad-crest out
+
+script pad-classic
+preset load Defaults
+set HUD/Controller Look = 2
+set HUD/Controller Size = 1
+start 38 0 right
+60
+mark clip pad-classic in
+10 X
+ai 0 A
+land 120
+40
+mark clip pad-classic out
+
+script padcue-ring
+preset load Defaults
+set HUD/Controller Look = 1
+set HUD/Controller Size = 1
+set HUD/Controller Cues = 1
+start 38 0 right
+60
+mark clip padcue-ring in
+10 X
+ai 0 A
+land 120
+40
+mark clip padcue-ring out
+
+script padcue-gauge
+preset load Defaults
+set HUD/Controller Look = 1
+set HUD/Controller Size = 1
+set HUD/Controller Cues = 2
+start 38 0 right
+60
+mark clip padcue-gauge in
+10 X
+ai 0 A
+land 120
+40
+mark clip padcue-gauge out
+
+# Shield on the right platform: the shield drop zone shaded in the gate.
+script shield-drop
+preset load Defaults
+set HUD/Controller Size = 1
+start 38 27.2 right
+60
+mark clip shield-drop in
+40 R
+20 R s:0,-0.3
+20 R s:0,-0.6
+10 R s:0.3,-0.7
+land 60
+40
+mark clip shield-drop out
+
+# Ledge: hang on the right ledge, the route list and its path, then play it.
+script ledge-route
+preset load Defaults
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+mark clip ledge-route in
+playroute 1
+90
+mark clip ledge-route out
+
+script ledge-sort-easiest
+preset load Defaults
+set Ledge/Route Sort = 1
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+mark clip ledge-sort-easiest in
+playroute 1
+90
+mark clip ledge-sort-easiest out
+
+script everything-ledge
+preset load Everything
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+mark clip everything-ledge in
+playroute 1
+90
+mark clip everything-ledge out
+
+# Assist: Assist stops on each step of the route and waits for the input;
+# the script gives each one late, so the wait shows. Assist Wait 1 s.
+script assist
+preset load Ledge Drill
+set Ledge/Assist = 1
+set Ledge/Assist Wait = 3
+set Ledge/Keep Ledge Invincibility = 1
+ledge right
+mark clip assist in
+playroute 1
+120
+mark clip assist out
+
+# Camera: the same jump in each mode (Advanced: slid toward the platform).
+script cam-normal
+preset load Defaults
+set Camera/Camera Mode = 0
+start 0 0 right
+60
+mark clip cam-normal in
+10 X
+20
+1 X
+ai 0 A
+land 120
+40
+mark clip cam-normal out
+
+script cam-zoom
+preset load Defaults
+set Camera/Camera Mode = 1
+start 0 0 right
+60
+mark clip cam-zoom in
+10 X
+20
+1 X
+ai 0 A
+land 120
+40
+mark clip cam-zoom out
+
+script cam-fixed
+preset load Defaults
+set Camera/Camera Mode = 2
+start 0 0 right
+60
+mark clip cam-fixed in
+10 X
+20
+1 X
+ai 0 A
+land 120
+40
+mark clip cam-fixed out
+
+script cam-advanced
+preset load Defaults
+set Camera/Camera Mode = 3
+view shift 1 0 15
+start 0 0 right
+60
+mark clip cam-advanced in
+10 X
+20
+1 X
+ai 0 A
+land 120
+40
+mark clip cam-advanced out
+
+# Presets: the same jump under each built-in.
+script preset-minimal
+preset load Minimal
+set Jump/Show = 1
+start -50 27.2 right
+90
+mark clip preset-minimal in
+follow 70 s:1,0
+land 120
+40
+mark clip preset-minimal out
+
+script preset-ledgedrill
+preset load Ledge Drill
+set Jump/Show = 1
+start -50 27.2 right
+90
+mark clip preset-ledgedrill in
+follow 70 s:1,0
+land 120
+40
+mark clip preset-ledgedrill out
+
+# Glossary loops: L-cancel (a fair landed on the floor, L on time),
+# fastfall, a full hop's jumpsquat.
+script lcancel
+preset load Defaults
+start 0 0 right
+60
+mark clip lcancel in
+3 X
+2
+1 c:1,0
+# tune: the L press 3-5 frames before the touchdown (the window is 7)
+14
+1 L
+land 60
+40
+mark clip lcancel out
+
+script fastfall
+preset load Defaults
+start 0 0 right
+60
+mark clip fastfall in
+10 X
+22
+land 120 s:0,-1
+30
+mark clip fastfall out
+
+script jumpsquat
+preset load Defaults
+set Speed/Game Speed = 3
+start 0 0 right
+60
+mark clip jumpsquat in
+10 X
+40
+mark clip jumpsquat out
+
+# Cast (one run per fighter, LLCHAR=file): a rising aerial interrupt with
+# nair onto the right platform from a full hop under it, and one onto the
+# top platform from a double jump. Keep whichever lands the fighter while
+# still rising; drop a fighter neither works for and say so.
+script cast-side
+preset load Defaults
+start 38 0 right
+60
+mark clip cast-side in
+10 X
+ai 0 A
+land 120
+40
+mark clip cast-side out
+
+script cast-top
+preset load Defaults
+start 0 0 right
+60
+mark clip cast-top in
+10 X
+20
+1 X
+ai 0 A
+land 120
+40
+mark clip cast-top out

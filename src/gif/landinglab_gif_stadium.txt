@@ -1,0 +1,105 @@
+# Pokemon Stadium GIFs, Falcon. Side platforms about y 25, x 25 to 55 (and
+# mirrored). Positions are a first guess.
+autorun
+
+# Perfect waveland: full hop up through the right platform, airdodge into
+# it on the way down. Defaults (Waveland timer: Ticks), then the looks, then
+# Body Flash and Platform Glow.
+script waveland
+preset load Defaults
+start 40 0 right
+60
+mark clip waveland in
+10 X
+wl 0 L s:1,0
+land 120
+40
+mark clip waveland out
+
+script wl-rails
+preset load Defaults
+set Timers/Waveland = 2
+start 40 0 right
+60
+mark clip wl-rails in
+10 X
+wl 0 L s:1,0
+land 120
+40
+mark clip wl-rails out
+
+script wl-chevrons
+preset load Defaults
+set Timers/Waveland = 3
+start 40 0 right
+60
+mark clip wl-chevrons in
+10 X
+wl 0 L s:1,0
+land 120
+40
+mark clip wl-chevrons out
+
+script wl-plain
+preset load Defaults
+set Cues/Body Flash = 0
+set Cues/Platform Glow = 0
+start 40 0 right
+60
+mark clip wl-plain in
+10 X
+wl 0 L s:1,0
+land 120
+40
+mark clip wl-plain out
+
+script wl-flash
+preset load Defaults
+set Cues/Body Flash = 1
+set Cues/Platform Glow = 0
+start 40 0 right
+60
+mark clip wl-flash in
+10 X
+wl 0 L s:1,0
+land 120
+40
+mark clip wl-flash out
+
+script wl-flash-glow
+preset load Defaults
+set Cues/Body Flash = 1
+set Cues/Platform Glow = 1
+start 40 0 right
+60
+mark clip wl-flash-glow in
+10 X
+wl 0 L s:1,0
+land 120
+40
+mark clip wl-flash-glow out
+
+# Airdodge down and sideways onto the platform and slide (glossary
+# "waveland"), and the slide-off line.
+script slide-off
+preset load Defaults
+set Paths/Slide-off Line = 1
+start 30 0 right
+60
+mark clip slide-off in
+10 X
+wl 0 L s:1,-0.3
+land 120
+40
+mark clip slide-off out
+
+script everything-wl
+preset load Everything
+start 40 0 right
+60
+mark clip everything-wl in
+10 X
+wl 0 L s:1,0
+land 120
+40
+mark clip everything-wl out

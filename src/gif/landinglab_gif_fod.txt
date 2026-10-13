@@ -1,0 +1,26 @@
+# Fountain of Dreams GIFs, Falcon: Jump Timing. The side platforms move, so
+# only follow steps here: they press what Jump Timing shows when it shows.
+autorun
+
+# Fall past a platform, then the double jump and nair Jump Timing plans.
+script jump-timing
+preset load Defaults
+set Jump/Show = 1
+air -40 70 right 0 0 0 0
+mark clip jump-timing in
+follow 80
+land 150
+40
+mark clip jump-timing out
+
+script jump-timing-run
+preset load Defaults
+set Jump/Show = 1
+start -55 0 right
+90
+mark clip jump-timing-run in
+6 s:1,0
+follow 60 s:1,0
+land 150
+40
+mark clip jump-timing-run out

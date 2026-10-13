@@ -305,13 +305,14 @@ EventDesc LandingLab = {
     // physics drives, (Ness, Peach, Yoshi, Mewtwo) one its animation moves,
     // or (Kirby, Jigglypuff) five air jumps, checked in game
     // (src/landinglab_djc_test.txt, src/landinglab_mj_test.txt); aerials in
-    // the common states (not yet: Game & Watch's own aerials)
+    // the common states, and Game & Watch's own (src/landinglab_gw_test.txt):
+    // the whole cast
     .allowed_characters = {
         .hmn = CSSID_CAPTAIN_FALCON | CSSID_DOCTOR_MARIO | CSSID_MARIO | CSSID_LUIGI | CSSID_BOWSER |
                CSSID_DONKEY_KONG | CSSID_GANONDORF | CSSID_FALCO | CSSID_FOX | CSSID_ICE_CLIMBERS |
                CSSID_SAMUS | CSSID_ZELDA | CSSID_LINK | CSSID_YOUNG_LINK | CSSID_PICHU | CSSID_PIKACHU |
                CSSID_MARTH | CSSID_ROY | CSSID_YOSHI | CSSID_MEWTWO | CSSID_NESS | CSSID_PEACH |
-               CSSID_KIRBY | CSSID_JIGGLYPUFF,
+               CSSID_KIRBY | CSSID_JIGGLYPUFF | CSSID_GAME_AND_WATCH,
         .cpu = -1,
     },
 #ifdef LL_TEST_CHAR

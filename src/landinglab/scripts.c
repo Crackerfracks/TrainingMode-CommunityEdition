@@ -690,6 +690,10 @@ static void Script_PlaceAir(GOBJ *ft, ScriptOp *op)
     Script_ResetTracking();
 }
 
+// The ledge Script_PlaceLedge hung the fighter on, watched for a few
+// frames (Script_LedgeCheck).
+static int ledge_check_line = -1, ledge_check_facing, ledge_check_left;
+
 // Hang Falcon on a ledge of the main stage as if he'd just grabbed it:
 // CliffWait with the full ledge intangibility and his double jump back, the
 // way ledgedash.c places a player (Fighter_PlaceOnLedge).
@@ -735,31 +739,49 @@ static int Script_PlaceLedge(GOBJ *ft, ScriptOp *op)
     Coll_CheckLedge(&fp->coll_data);
     Fighter_MoveToCliff(ft);
     Script_UpdatePosition(ft);
-    Vec3 corner;
-    if (op->facing > 0)
-        GrColl_GetGroundLineEndLeft(best, &corner);
-    else
-        GrColl_GetGroundLineEndRight(best, &corner);
-    if (fp->phys.pos.Y > corner.Y - 1.f)
-    {
-        // Pichu: put straight into CliffWait he stays on the corner (no
-        // TransN yet, ftCo_CliffCatch_Phys) and stands up on the stage. Drop
-        // him by the ledge instead, its corner in his grab box
-        // (FtCollDesc cliffgrab), and let the game catch it.
-        FtCollDesc *c = fp->ftData->coll;
-        fp->phys.pos.X = corner.X - op->facing * c->cliffgrab_width * 0.5f;
-        fp->phys.pos.Y = corner.Y - c->cliffgrab_y_offset - c->cliffgrab_height * 0.5f;
-        Fighter_EnterFall(ft);
-        Script_UpdatePosition(ft);
-        Log("LLSCRIPT ledge: falling into the ledge's catch\n");
-    }
-    else
-        Fighter_ApplyIntang(ft, (*stc_ftcommon)->cliff_invuln_time + 1);
+    Fighter_ApplyIntang(ft, (*stc_ftcommon)->cliff_invuln_time + 1);
+    ledge_check_line = best;
+    ledge_check_facing = op->facing;
+    ledge_check_left = 3;
     fp->jump.jumps_used = 1;
     Script_ResetTimers(fp);
     Script_FixCamera(ft);
     Script_ResetTracking();
     return 1;
+}
+
+// Pichu, put straight into CliffWait, stays on the ledge's corner (his
+// TransN isn't there, ftCo_CliffCatch_Phys) and on the next frame stands
+// up on the stage. Then drop him by the ledge, its corner in his grab box
+// (FtCollDesc cliffgrab), and let the game catch it as a player would.
+static void Script_LedgeCheck(GOBJ *ft)
+{
+    FighterData *fp = ft->userdata;
+    if (ledge_check_line < 0)
+        return;
+    Vec3 corner;
+    if (ledge_check_facing > 0)
+        GrColl_GetGroundLineEndLeft(ledge_check_line, &corner);
+    else
+        GrColl_GetGroundLineEndRight(ledge_check_line, &corner);
+    if (fp->phys.air_state == 0 && fabs(fp->phys.pos.X - corner.X) < 1.f && fabs(fp->phys.pos.Y - corner.Y) < 1.f)
+    {
+        FtCollDesc *c = fp->ftData->coll;
+        fp->facing_direction = ledge_check_facing;
+        fp->phys.self_vel.X = 0;
+        fp->phys.self_vel.Y = 0;
+        fp->phys.pos.X = corner.X - ledge_check_facing * c->cliffgrab_width * 0.5f;
+        fp->phys.pos.Y = corner.Y - c->cliffgrab_y_offset - c->cliffgrab_height * 0.5f;
+        Fighter_SetAirborne(fp);
+        Fighter_EnterFall(ft);
+        Script_UpdatePosition(ft);
+        fp->jump.jumps_used = 1;
+        Log("LLSCRIPT ledge: falling into the ledge's catch\n");
+        ledge_check_line = -1;
+        return;
+    }
+    if (--ledge_check_left <= 0)
+        ledge_check_line = -1;
 }
 
 static void Script_Next(void);

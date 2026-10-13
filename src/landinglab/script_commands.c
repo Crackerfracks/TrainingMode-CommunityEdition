@@ -438,6 +438,8 @@ static void Script_Think(GOBJ *gobj)
     int done = 0;
     ScriptOp *op;
 
+    Script_LedgeCheck(ft);
+
     for (;;)
     {
         if (!Script_Instant(ft, 1))

@@ -1,0 +1,24 @@
+# Ledge HUD after frame advance and save states (the 2026-10-06 report:
+# cues off but AI, near the ledge, Frame Advance or a save state, and
+# garbage drew over the version text, and the toggles stopped working
+# until a restart). Build with LLSCRIPT=src/landinglab_ledge_hud_test.txt,
+# Falcon on Battlefield. The script only sets things up and hangs him on
+# the right ledge; once it ends (script_cur back to -1, so the D-pad saves
+# and loads again) the pad drives the rest by hand:
+# - D-pad down: Frame Advance on; the advance button 10 times; D-pad down off
+# - hold D-pad right 15 frames (save), drop (stick down 1 frame), wait 40,
+#   D-pad left (load); three times, then once more with Frame Advance on
+# - after each step a whole-screen capture: the version text in the bottom
+#   right corner should be clean, the route rows and input chips where they
+#   were, and a quick toggle (L+R with D-pad) should still change things.
+autorun
+
+script Ledge HUD after frame advance and saves
+preset load Defaults
+set Dev/Debug Log = 1
+set Cues/NIL Cues = 0
+set Cues/Waveland Cues = 0
+set Ledge/Show Routes = 1
+ledge right
+60
+mark hanging, routes shown: start driving the pad

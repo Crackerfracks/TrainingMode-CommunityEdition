@@ -66,7 +66,10 @@ static JumpRoute *Jump_Pick(int e)
         for (int i = 0; i < jt_best_n[k]; i++)
         {
             JumpRoute *x = &jt_best[k][i];
-            if (Jump_First(x) - e - 1 < Jump_Lead() && !x->seen && !(jt_ground && gt_still))
+            // a hop from the ground has no Warning cutoff: it's pressed when
+            // the player chooses, so a hop now is as useful moving as standing
+            int ground_hop = jt_ground && (x->hop == GT_SH || x->hop == GT_FH);
+            if (Jump_First(x) - e - 1 < Jump_Lead() && !x->seen && !(jt_ground && gt_still) && !ground_hop)
                 continue;
             if (!best || Jump_Better(x, best))
                 best = x;
@@ -564,6 +567,8 @@ static void Row_JumpEnd(MeterRow *row)
     }
 }
 
+static void Jump_KeepHop(FighterData *fp, JumpRoute *was, int d); // at the end, after the candidate counts
+
 // Each frame, before the search: is Falcon in a fall to search, and is the
 // anchor still right for it. It is taken again when he comes back to a fall
 // after leaving one, when the stick or his path leaves what it assumed, and
@@ -613,9 +618,16 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
                 OSReport("LLJUMPG %d reanchor sid %d was %d e %d dx %.4f v %.4f model %.4f\n", event_vars->game_timer,
                          sid, gt_sid, e, fp->phys.pos.X - gt_steps[at].x, fp->phys.self_vel_ground.X, gt_steps[at].v);
             int had = jt_have && jt_active && jt_ground && !gt_still && gt_edge >= 0 && !jt_route.hop;
+            // ... and a hop shown (standing or moving) is tried again on its
+            // own press frame from the new anchor, so it stays up while he
+            // walks instead of dropping out each time the anchor moves
+            int had_hop = jt_have && jt_active && jt_ground && (jt_route.hop == GT_SH || jt_route.hop == GT_FH);
+            int hop_at = had_hop ? (gt_still ? event_vars->game_timer + 1 : jt_route_abs + jt_route.hp) : 0;
             JumpRoute was = jt_route;
             int j = (jt_route_abs + was.d) - (jt_anchor + gt_edge);
             Jump_AnchorGround(fp, sid);
+            if (had_hop && !gt_still)
+                Jump_KeepHop(fp, &was, hop_at - 1 - jt_anchor);
             if (had && gt_edge >= 0 && j >= 0 && gt_edge + j < jt_cache_n)
             {
                 JumpCand c = {gt_edge + j, was.stick, was.hold, GT_RUNOFF, -1, 0};
@@ -809,4 +821,33 @@ static int Jump_Total(void)
 static int Jump_Stride(void)
 {
     return jt_ground ? GT_STRIDE : JT_STICKS * 2;
+}
+
+// A hop that was up, tried again from a new ground anchor at frame d (its
+// press is d + 1): its variant found by matching the route, as Gt_Variant
+// lays them out. Kept, and marked seen, only if it still lands as before.
+static void Jump_KeepHop(FighterData *fp, JumpRoute *was, int d)
+{
+    if (d < 0 || d >= jt_cache_n || (gt_edge >= 0 && d >= gt_edge))
+        return;
+    for (int v = 0; v < GT_STILL_CANDIDATES; v++)
+    {
+        JumpCand c;
+        if (Gt_Variant(v, &c) <= 0)
+            continue;
+        if (c.hop != was->hop || c.hold != was->hold || c.hj != was->hj || (c.hj >= 0 && c.stick != was->stick))
+            continue;
+        c.d = d;
+        JumpRoute found[JT_TRY];
+        int found_n;
+        Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+        for (int i = 0; i < found_n; i++)
+        {
+            if (!Jump_OnTarget(&found[i]) || found[i].kind != was->kind || found[i].aerial != was->aerial)
+                continue;
+            found[i].seen = 1;
+            Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+        }
+        return;
+    }
 }

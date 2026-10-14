@@ -95,8 +95,13 @@ static void Jump_Solve(FighterData *fp)
     int t0 = OSGetTick();
     while (jt_next < total && sim_steps - start < JT_BUDGET)
     {
-        if (!(jt_ground && gt_still) && jt_next < (e + Jump_Lead()) * Jump_Stride())
-            jt_next = (e + Jump_Lead()) * Jump_Stride();
+        // on the ground the search starts at the next frame: a hop is the
+        // player's to time, so it shows the soonest that works, as standing
+        // still shows a hop now (Stephen, 0.9.28: moving, the Warning lead
+        // pushed every hop 20 frames out, and none matched the standing plan)
+        int lead = jt_ground ? 0 : Jump_Lead();
+        if (!(jt_ground && gt_still) && jt_next < (e + lead) * Jump_Stride())
+            jt_next = (e + lead) * Jump_Stride();
         if (jt_next >= total)
             break;
         JumpCand c;

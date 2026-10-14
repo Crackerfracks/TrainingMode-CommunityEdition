@@ -369,8 +369,10 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
             return;
         // the squat slides on: past the floor's end he falls instead of
         // hopping (Game & Watch's hop pressed on the run-off frame,
-        // 2026-10-14)
-        for (int i = 0; i < until - 1; i++)
+        // 2026-10-14). Only with an end ahead: the hop library's endless
+        // floor isn't the stage's (Floor_Under), and checking there turned
+        // every hop down (batch8)
+        for (int i = 0; i < until - 1 && gt_edge >= 0; i++)
         {
             Vec2 spot;
             float x0, x1;

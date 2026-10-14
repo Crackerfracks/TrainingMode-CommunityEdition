@@ -13,6 +13,7 @@
  */
 
 // The jumps still ahead, and the best of them of the kind Kind asks for.
+static int jt_squat; // in the jumpsquat this frame (Jump_Update)
 static void Jump_Prune(int e)
 {
     for (int k = 0; k < 2; k++)
@@ -20,9 +21,14 @@ static void Jump_Prune(int e)
         int n = 0;
         for (int i = 0; i < jt_best_n[k]; i++)
         {
-            // a hop with a double jump stays through the jumpsquat
+            // a hop with a double jump stays through the jumpsquat, once
+            // the hop is pressed; until then it goes when its hop has gone
+            // by, a frame late in case the squat shows a frame after the
+            // press (repro3, 2026-10-14: walking, the route up was one whose
+            // hop was 4-5 frames gone, kept for its double jump)
             JumpRoute *r = &jt_best[k][i];
-            if ((r->hop == GT_SH || r->hop == GT_FH) && r->hj >= 0 ? r->dj > e : Jump_First(r) > e)
+            int hop_dj = (r->hop == GT_SH || r->hop == GT_FH) && r->hj >= 0;
+            if (hop_dj ? r->dj > e && (jt_squat || r->hp >= e) : Jump_First(r) > e)
                 jt_best[k][n++] = *r;
         }
         jt_best_n[k] = n;
@@ -588,6 +594,7 @@ static void Jump_KeepHop(FighterData *fp, JumpRoute *was, int d); // at the end,
 static void Jump_Update(FighterData *fp, int ts, int tracked_air)
 {
     int e = event_vars->game_timer - jt_anchor;
+    jt_squat = fp->state_id == ASID_KNEEBEND;
     if (fp->state_id == ASID_KNEEBEND)
         gt_squat_short = fp->state_var.state_var1 != 0; // let go of the jump: a short hop
     if (fp->state_id == ASID_KNEEBEND && jt_active && jt_ground && (gt_still || (jt_have && jt_route.hop == GT_SH) ||
@@ -774,7 +781,9 @@ static void Jump_Follow(ScriptInput *in)
         follow_set_t = t;
         OSReport("LLFOLLOW %d hop %s\n", t, r->hop == GT_SH ? "SH" : "FH");
     }
-    if ((!r->hop || r->hj >= 0) && t == abs + r->dj)
+    // a double jump is pressed in the air only: on the ground it would be a
+    // hop with the stick tilted (repro3: a route whose hop went by)
+    if ((!r->hop || r->hj >= 0) && t == abs + r->dj && fp->phys.air_state == 1)
     {
         in->buttons |= HSD_BUTTON_X;
         in->lx = (s8)(jt_stick_xy[r->stick][0] * 80.f);

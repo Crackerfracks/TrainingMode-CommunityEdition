@@ -711,6 +711,19 @@ static void Jump_Follow(ScriptInput *in)
         follow_hold_x = -1000;
     if (follow_hold_x != -1000)
         in->lx = follow_hold_x;
+    // what follow sees, each time it changes (0.9.28 FoD: plans were found
+    // but follow never pressed, so say whether a route was up and when)
+    static int seen_state = -1, seen_abs = -1, seen_dj = -1;
+    int state = (jt_active ? 1 : 0) | (jt_have ? 2 : 0) | (route_active ? 4 : 0) | (hang_ledge >= 0 ? 8 : 0);
+    if (state != seen_state || (jt_have && (jt_route_abs != seen_abs || jt_route.dj != seen_dj)))
+    {
+        OSReport("LLFOLLOWSEE %d active %d have %d route %d hang %d ground %d still %d abs %d hop %d hp %d hj %d dj %d press %d kind %d e %d\n",
+                 t, jt_active, jt_have, route_active, hang_ledge >= 0, jt_ground, gt_still, jt_route_abs, jt_route.hop,
+                 jt_route.hp, jt_route.hj, jt_route.dj, jt_route.press, jt_route.kind, Jump_E());
+        seen_state = state;
+        seen_abs = jt_route_abs;
+        seen_dj = jt_route.dj;
+    }
     if (!Jump_Showing())
         return;
     JumpRoute *r = &jt_route;

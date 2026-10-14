@@ -46,7 +46,13 @@ static int Cv_Claims(int kind)
     return kind == CELL_PRESS || kind == CELL_ACT || kind == CELL_LAND || kind == CELL_TAIL;
 }
 
-// The rows to draw, in the belt's order (kind, then lane).
+// The rows to draw, in the belt's order (kind, then lane), a preload last:
+// it takes the far share of each frame it's over.
+static int Cv_Place(MeterRow *r)
+{
+    return r->parked ? 9 : Cv_Rank(r);
+}
+
 static int Cv_Order(int *order)
 {
     int n = 0;
@@ -55,7 +61,7 @@ static int Cv_Order(int *order)
         if (meter[i].gap)
             continue;
         int j = n++;
-        while (j > 0 && Cv_Rank(&meter[order[j - 1]]) > Cv_Rank(&meter[i]))
+        while (j > 0 && Cv_Place(&meter[order[j - 1]]) > Cv_Place(&meter[i]))
         {
             order[j] = order[j - 1];
             j--;
@@ -216,7 +222,14 @@ static void Conveyor_Draw(FighterData *fp)
         for (int j = 0; j < n; j++)
         {
             MeterRow *r = &meter[order[j]];
-            slot[j][k] = k < r->len && Cv_Claims(r->cell[k]) ? cnt[k]++ : -1;
+            // a preload hovers most of a frame up, so it takes its share of
+            // the frame over each note too (Stephen, 0.9.28: moving, Jump
+            // Timing's hop notes came up beside the wavedash's preload and
+            // it hovered into them)
+            int claims = k < r->len && Cv_Claims(r->cell[k]);
+            if (r->parked && k > 0 && k - 1 < r->len && Cv_Claims(r->cell[k - 1]))
+                claims = 1;
+            slot[j][k] = claims ? cnt[k]++ : -1;
         }
     }
     for (int j = 0; j < n; j++)
@@ -230,13 +243,27 @@ static void Conveyor_Draw(FighterData *fp)
             int kind = r->cell[k];
             if (slot[j][k] < 0 && !(kind == CELL_LAG && cnt[k] == 0))
                 continue;
+            if (r->parked && !Cv_Claims(kind))
+                continue; // only the room it hovers into, kept clear above a note
             int e = k;
             while (e + 1 < CV_ROWS && e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k] &&
                    r->alpha[e + 1] == r->alpha[k] && slot[j][e + 1] == slot[j][k] &&
                    (slot[j][k] < 0 ? cnt[e + 1] == 0 : cnt[e + 1] == cnt[k]))
                 e++;
             float sx0 = bl + 0.15f, sx1 = br - 0.15f;
-            if (slot[j][k] >= 0)
+            int most = slot[j][k] >= 0 ? cnt[k] : 1;
+            if (r->parked && slot[j][k] >= 0)
+            {
+                // the preload is last in the belt's order: the far share, as narrow as the most crowded frame it
+                // hovers over, so it keeps one place and clears the rest
+                for (int f = k; f <= e + 1 && f < CV_ROWS; f++)
+                    if (cnt[f] > most)
+                        most = cnt[f];
+                float share = (CV_W - 0.3f) / most;
+                sx1 = br - 0.15f - (most > 1 ? 0.06f : 0);
+                sx0 = sx1 - share + (most > 1 ? 0.12f : 0);
+            }
+            else if (slot[j][k] >= 0)
             {
                 float share = (CV_W - 0.3f) / cnt[k];
                 sx0 = bl + 0.15f + slot[j][k] * share + (cnt[k] > 1 ? 0.06f : 0);
@@ -250,7 +277,7 @@ static void Conveyor_Draw(FighterData *fp)
             // (a dark shadow was lost on the dark belt, 0.9.14 test)
             // (0.9.15 test: right under the note it was hidden, so the note
             // also leans left off it while it hovers)
-            float lean = -0.4f * lift;
+            float lean = most > 1 ? 0 : -0.4f * lift; // (not into a neighbour's share)
             if (lift > 0 && kind != CELL_LAG)
                 Hud_Frame(sx0, y0 + 0.05f, sx1, y1 - 0.05f, 1.5f * PX, Color_Over(color_white, 0.5f * (1.f - r->settle / 4.f)));
             float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f);

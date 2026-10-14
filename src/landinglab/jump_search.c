@@ -231,6 +231,8 @@ static void Jump_Publish(FighterData *fp)
     // JT_SETTLE frames ago, or when it no longer works. (Stephen, 0.8.3: the
     // route changed every frame as the search found slightly better ones.)
     JumpRoute *cur = jt_have ? Jump_Find(&jt_route, jt_route_abs) : 0;
+    if (cur && b && Jump_HopGone(cur, e))
+        cur = 0; // its press has come: the next hop takes over
     if (cur && (!b || (b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))))
         b = cur;
     jt_have = b != 0;

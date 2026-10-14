@@ -14,6 +14,15 @@
 
 // The jumps still ahead, and the best of them of the kind Kind asks for.
 static int jt_squat; // in the jumpsquat this frame (Jump_Update)
+
+// Moving, a hop whose press frame has come with no squat yet: Jump_Prune
+// keeps it that frame, in case the squat shows a frame late, but the next
+// search's hop (the same one a frame on) is the one to show (repro3c,
+// 2026-10-14: the one up was always a frame gone, and follow never pressed)
+static int Jump_HopGone(JumpRoute *r, int e)
+{
+    return jt_ground && !gt_still && !jt_squat && (r->hop == GT_SH || r->hop == GT_FH) && r->hp <= e;
+}
 static void Jump_Prune(int e)
 {
     for (int k = 0; k < 2; k++)
@@ -77,6 +86,8 @@ static JumpRoute *Jump_Pick(int e)
             int ground_hop = jt_ground && (x->hop == GT_SH || x->hop == GT_FH);
             if (Jump_First(x) - e - 1 < Jump_Lead() && !x->seen && !(jt_ground && gt_still) && !ground_hop)
                 continue;
+            if (Jump_HopGone(x, e))
+                continue; // kept a frame for the press, not to show
             if (!best || Jump_Better(x, best))
                 best = x;
             break; // best first: the rest of this kind are worse

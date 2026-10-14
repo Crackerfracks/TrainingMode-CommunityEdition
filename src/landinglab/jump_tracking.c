@@ -765,7 +765,7 @@ static void Jump_Follow(ScriptInput *in)
     int abs = jt_route_abs;
     if (jt_ground && gt_still)
         abs = t - r->hp; // standing still: the plan's hop is always on the next frame
-    if (r->kind == LAND_AI && ((r->hop && r->hj < 0 && t == abs + r->hp) || ((!r->hop || r->hj >= 0) && t == abs + r->dj)))
+    if (r->kind == LAND_AI && (!r->hop || r->hj >= 0) && t == abs + r->dj)
     {
         follow_aerial_t = abs + r->press;
         follow_aerial = r->aerial;
@@ -774,6 +774,15 @@ static void Jump_Follow(ScriptInput *in)
     // once: a standing plan's hop is always "now", and jump held on is a full hop
     if ((r->hop == GT_SH || r->hop == GT_FH) && t == abs + r->hp && t > follow_set_t + 10)
     {
+        // a hop with no double jump: its aerial counts from this press, once
+        // (gifrun7: standing, the plan's hop stays "now" through the squat,
+        // and Game & Watch's Bair slid a frame later each frame of it)
+        if (r->kind == LAND_AI && r->hj < 0)
+        {
+            follow_aerial_t = abs + r->press;
+            follow_aerial = r->aerial;
+            follow_face = Jump_Facing(r);
+        }
         in->buttons |= HSD_BUTTON_X;
         follow_fh_until = r->hop == GT_FH ? t + 6 : -1;
         if (!r->hold && r->hj < 0)

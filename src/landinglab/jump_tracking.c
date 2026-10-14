@@ -424,6 +424,7 @@ static void Jump_Extend(FighterData *fp, int ts, int e)
             keep[k][keep_n[k]++] = r;
         }
     }
+    int had = jt_have;
     if (jt_ground)
         Jump_AnchorGround(fp, fp->state_id);
     else
@@ -434,6 +435,14 @@ static void Jump_Extend(FighterData *fp, int ts, int e)
             jt_best[k][i] = keep[k][i];
         jt_best_n[k] = keep_n[k];
     }
+    // the one shown stays up, however near its jump now is: anchoring
+    // again forgot it, and the Warning cutoff hid it, so a double jump due
+    // more than the extension away vanished before its frame (FoD's air
+    // routes, 2026-10-14)
+    jt_have = had;
+    JumpRoute *cur = had ? Jump_Find(&jt_route, jt_route_abs) : 0;
+    if (cur)
+        cur->seen = 1;
 }
 
 // A standstill plan with a double jump, carried into the air: on the
@@ -661,7 +670,11 @@ static void Jump_Update(FighterData *fp, int ts, int tracked_air)
                      jt_tries, dx, dy, ts, jt_prev_ts);
         }
         // off the floor's end: the run-off's jumps are carried into the fall
-        int runoff = jt_active && jt_ground && !gt_still && gt_edge >= 0;
+        // a hop isn't a run-off, even with a floor's end ahead: its plan's
+        // double jump is seeded as standing still's is (Ice Climbers lost
+        // their SH+DJ route on the takeoff, 2026-10-14)
+        int hopped = ts == TS_JUMPF || ts == TS_JUMPB;
+        int runoff = jt_active && jt_ground && !gt_still && gt_edge >= 0 && !hopped;
         int seed = (jt_ground && !runoff) || !jt_active;
         if (!seed && e >= 0)
             Jump_Carry(fp, ts, e);

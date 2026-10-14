@@ -290,7 +290,10 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
         SimStart *f = &gt_fall;
         memset(f, 0, sizeof(*f));
         f->pos = (Vec2){x, y};
-        f->vel = (Vec2){v, 0};
+        // ftCo_Fall_Enter clamps the speed to the drift max (ftCommon_ClampAirDrift):
+        // Marth's 1.8 run goes over at 0.9 (2026-10-14 cast run)
+        float max = fp->attr.aerial_drift_max;
+        f->vel = (Vec2){v > max ? max : v < -max ? -max : v, 0};
         f->stick_x = jt_stick_x;
         f->stick_y = fp->input.lstick.Y;
         f->facing = fp->facing_direction;

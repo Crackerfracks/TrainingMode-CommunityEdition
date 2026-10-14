@@ -367,6 +367,16 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
         int until = Sim_GroundJumpAt(fp, c->hop == GT_SH, g->x, g->y, g->v, jt_stick_x, 1, &ps, slide);
         if (until - 1 > (int)countof(slide))
             return;
+        // the squat slides on: past the floor's end he falls instead of
+        // hopping (Game & Watch's hop pressed on the run-off frame,
+        // 2026-10-14)
+        for (int i = 0; i < until - 1; i++)
+        {
+            Vec2 spot;
+            float x0, x1;
+            if (!Floor_Under(slide[i], g->y + 3.f, &spot, &x0, &x1) || fabs(spot.Y - g->y) > 3.f)
+                return;
+        }
         ps.stick_x = hold ? jt_stick_x : 0;
         ps.stick_y = 0;
         off = d + until;

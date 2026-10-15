@@ -148,11 +148,35 @@ static void Markers_Flush(int side)
 // The aerial picker: at the start of an aerial interrupt's window, a small
 // C-stick face with the directions that interrupt there lit (the middle for
 // a nair), forward turned the way Falcon faces. Queued from the stage's
-// drawing and drawn on the HUD, above its frame.
+// drawing and drawn on the HUD, above its frame. Only while the AI cue is
+// on, and never over Falcon's own body: a picker whose spot falls inside his
+// body box slides to the nearer side of it, its stem following (visual
+// audit, 2026-10-15: at Medium it was as big as his torso).
 static void Compass_Draw(void)
 {
+    if (!Cues_Ai())
+    {
+        compass_num = 0;
+        return;
+    }
     float S = Marker_Scale();
     float r = 0.95f * S;
+    float rr = r + 0.15f * S; // with its dark rim
+    // his body as Pin_Path boxes it: 10 wide, from just under his feet to 20 up
+    Box body = {0, 0, 0, 0};
+    int have_body = 0;
+    GOBJ *gobj = Fighter_GetGObj(0);
+    if (gobj)
+    {
+        FighterData *fp = gobj->userdata;
+        float ax, ay, bx, by;
+        if (Hud_FromWorld(fp->phys.pos.X - 5.f, fp->phys.pos.Y - 1.f, &ax, &ay) &&
+            Hud_FromWorld(fp->phys.pos.X + 5.f, fp->phys.pos.Y + 20.f, &bx, &by))
+        {
+            body = (Box){(ax < bx ? ax : bx) - 0.4f, (ay < by ? ay : by) - 0.4f, (ax < bx ? bx : ax) + 0.4f, (ay < by ? by : ay) + 0.4f};
+            have_body = 1;
+        }
+    }
     for (int i = 0; i < compass_num; i++)
     {
         Compass *c = &compass[i];
@@ -160,6 +184,17 @@ static void Compass_Draw(void)
         if (!Hud_FromWorld(c->x, c->y, &px, &py))
             continue;
         float cx = px, cy = py + 1.2f * S + r;
+        Box pick = {cx - rr, py, cx + rr, cy + rr};
+        if (have_body && Box_Hit(&pick, &body))
+        {
+            // to the nearer side, or the other if that is off the screen
+            float lim = SAFE_W - rr;
+            int go_left = cx < (body.x0 + body.x1) / 2;
+            float left = body.x0 - rr - 0.2f, right = body.x1 + rr + 0.2f;
+            cx = go_left ? left : right;
+            if (cx < -lim || cx > lim)
+                cx = go_left ? right : left;
+        }
         Hud_Seg(px, py, cx, cy - r, 0.1f, Color_Fill(color_plate, 0.7f));
         Hud_Seg(px, py, cx, cy - r, 0.05f, Color_Fill(c->color, 0.7f));
         Hud_Disc(cx, cy, r + 0.15f * S, Color_Fill(color_plate, 0.85f));

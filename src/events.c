@@ -1723,18 +1723,12 @@ void TM_CreateWatermark(void)
     text->trans.Y = 446;
 
     // print string
-    int shadow = Text_AddSubtext(text, 2, 2, TM_VersShort);
+    // One shadow, a pixel down and right. Four of them at (+-2,+-2) piled
+    // up around the 1-px period and smeared it into a comma, so the version
+    // read "0,9,29" (visual audit, 2026-10-15).
+    int shadow = Text_AddSubtext(text, 1, 1, TM_VersShort);
     GXColor shadow_color = {0, 0, 0, 0};
     Text_SetColor(text, shadow, &shadow_color);
-
-    int shadow1 = Text_AddSubtext(text, 2, -2, TM_VersShort);
-    Text_SetColor(text, shadow1, &shadow_color);
-
-    int shadow2 = Text_AddSubtext(text, -2, 2, TM_VersShort);
-    Text_SetColor(text, shadow2, &shadow_color);
-
-    int shadow3 = Text_AddSubtext(text, -2, -2, TM_VersShort);
-    Text_SetColor(text, shadow3, &shadow_color);
 
     Text_AddSubtext(text, 0, 0, TM_VersShort);
 

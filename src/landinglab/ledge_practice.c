@@ -12,14 +12,16 @@
  * Refers ahead, through forward declarations, to: reset_drill.
  */
 
-// A route's kind and GALINT, like "NIL  11 GALINT" or "AI Bair  15 GALINT".
+// A route's kind and GALINT, like "NIL, 11 GALINT" or "AI Bair, 15 GALINT"
+// (a comma: the font made the old double space read as a dot, visual audit,
+// 2026-10-15).
 static void Route_Name(char *t, LedgeRoute *r, int galint)
 {
     t += sprintf(t, "%s", r->kind == LAND_AI ? "AI " : "NIL");
     if (r->kind == LAND_AI)
         t += sprintf(t, "%s", tracked_state_names[r->aerial]);
     if (galint > 0)
-        sprintf(t, "  %d GALINT", galint);
+        sprintf(t, ", %d GALINT", galint);
 }
 
 // Its inputs, like "away, wait 1, FF 2, DJ in".

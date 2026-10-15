@@ -14,30 +14,36 @@
 ///////////////////////
 
 // Two lines in a top corner: what's coming up, and how the last attempt
-// went (a third, the accuracy count, in Developer). Each has a square in
-// its cue's color at the screen's edge, and its text runs from there toward
-// the middle, so a long line can't run off the screen.
+// went (a third, the accuracy count, in Developer). Each sits on a dark
+// plate with a bar in its cue's color down the edge at the screen's side,
+// and its text runs from there toward the middle, so a long line can't run
+// off the screen. (Visual audit, 2026-10-15: the bar replaces the small
+// square, which got lost on the platform's underside, and the plate is
+// padded so it doesn't stop at the line's last letter.)
+
+#define PANEL_BAR 0.25f // the color bar's width
+#define PANEL_PAD 0.3f  // plate beyond the text, at the bar and at the far end
 
 static void Panel_Line(float x, float y, int right, const char *text, int kind)
 {
     if (!text[0] || (text[0] == '-' && !text[1]))
-        return; // nothing to say ("-"): no plate or square either
+        return; // nothing to say ("-"): no plate or bar either
     float size = 0.45f;
-    float w = 1.7f + Text_Width(text, size);
+    float lead = PANEL_BAR + PANEL_PAD; // from the screen's edge to the text
+    float w = lead + Text_Width(text, size) + PANEL_PAD;
     float x0 = right ? x - w : x;
-    Text_Plate(x0, x0 + w, y);
-    GXColor sq = kind >= 0 ? Cue_Color(kind) : Color_Fill(color_white, kind == -2 ? 0 : 0.3f); // -2: no square
     GXColor tc = {235, 235, 235, 255};
+    Text_Plate(x0, x0 + w, y);
+    if (kind != -2) // -2: no bar
+    {
+        GXColor bar = kind >= 0 ? Cue_Color(kind) : Color_Fill(color_white, 0.3f);
+        float b0 = right ? x - PANEL_BAR : x;
+        Hud_Rect(b0, y + 0.15f, b0 + PANEL_BAR, y + 2.35f, bar);
+    }
     if (right)
-    {
-        Hud_Rect(x - 1.05f, y + 0.8f, x - 0.35f, y + 1.5f, sq);
-        Hud_TextAligned(text, x - 1.4f, y, size, tc, 2);
-    }
+        Hud_TextAligned(text, x - lead, y, size, tc, 2);
     else
-    {
-        Hud_Rect(x + 0.35f, y + 0.8f, x + 1.05f, y + 1.5f, sq);
-        Hud_TextAligned(text, x + 1.4f, y, size, tc, 0);
-    }
+        Hud_TextAligned(text, x + lead, y, size, tc, 0);
 }
 
 // A quick toggle's new setting, shown for a moment at the top of the panel

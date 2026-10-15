@@ -180,15 +180,19 @@ static void Ring_Backing(float cx, float cy, float s)
 // it's pressed.
 static GXColor Ring_Lit(GXColor c, float glow)
 {
-    // up: a dark well in the button's color, its rim and letter in the
-    // color; down: filled solid and bright, the way a trigger fills
-    return Color_Mix(Color_Over(Color_Mix(c, color_plate, 0.72f), 0.88f), Color_Over(Color_Mix(c, color_white, 0.3f), 1.f), glow);
+    // up: a dark well in the button's color, its rim in the color; down:
+    // filled solid and bright, the way a trigger fills (visual audit,
+    // 2026-10-15: with no letter to carry the color, the well is 0.6 of the
+    // way to the plate instead of 0.72, so the red B reads at rest)
+    return Color_Mix(Color_Over(Color_Mix(c, color_plate, 0.6f), 0.9f), Color_Over(Color_Mix(c, color_white, 0.3f), 1.f), glow);
 }
 
-// A button's outline, lighter than its fill.
+// A button's outline, lighter than its fill, and solid (it was 0.9 and a
+// third white; the red B's rim sank into the dark well, visual audit,
+// 2026-10-15).
 static GXColor Ring_Edge(GXColor c)
 {
-    return Color_Over(Color_Mix(c, color_white, 0.35f), 0.9f);
+    return Color_Over(Color_Mix(c, color_white, 0.25f), 1.f);
 }
 
 // The ghost a press leaves, a copy of the button's fill, from the button's
@@ -207,6 +211,13 @@ static GXColor Ghost_Color(GXColor c, float flash)
     return Color_Over(Color_Mix(c, color_white, 0.45f), 0.9f * sqrtf((flash - GHOST_MIN) / (1.f - GHOST_MIN)));
 }
 
+// The buttons' letters, drawn in strokes since there's no text engine, are
+// off: at Small they are 4 px and unreadable, and at Medium still noise.
+// The GameCube's own colors and shapes say which button is which (green and
+// big A, red B, gray X and Y, purple Z, yellow C). Kept in case they come
+// back at Large (visual audit, 2026-10-15). The buttons still tell the
+// controller cues where they are (Pin_Spot).
+#if 0
 // One stroke of a button's letter: n points in units of the letter's height h,
 // from -0.5 to 0.5 each way, around (cx, cy).
 static void Ring_Stroke(float cx, float cy, float h, GXColor c, int n, const float *xy)
@@ -268,8 +279,9 @@ static void Ring_Letter(int in, float cx, float cy, float h, GXColor bc, float g
     }
     }
 }
+#endif
 
-// A round button: filled in its color, lettered, with a soft outline, and on
+// A round button: filled in its color, with a soft outline, and on
 // a press a ghost of its fill that grows a little and fades in a few frames.
 static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in, float glow)
 {
@@ -282,8 +294,8 @@ static void Ring_Button(float cx, float cy, float r, float s, GXColor c, int in,
     }
     Circle_Points(cx, cy, r, 18, px, py);
     Hud_Fan(cx, cy, px, py, 18, Ring_Lit(c, glow));
-    Hud_Line(px, py, 18, 1, 0.07f * s, PX, Ring_Edge(c));
-    Ring_Letter(in, cx, cy, 0.95f * r, c, glow);
+    Hud_Line(px, py, 18, 1, 0.09f * s, PX, Ring_Edge(c));
+    Pin_Spot(in, cx, cy, 0.95f * r);
 }
 
 // A kidney, the shape of the X and Y buttons (and here Z): an arc rho from
@@ -348,7 +360,7 @@ static void Kidney_Fill(const float *px, const float *py, const float *ends, GXC
     }
 }
 
-// Filled in its color, lettered, with a soft outline and the press ghost.
+// Filled in its color, with a soft outline and the press ghost.
 static void Ring_Kidney(float mx, float my, float dir, float rho, float span, float w, float s, GXColor c, int in, float glow)
 {
     float px[KIDNEY_POINTS], py[KIDNEY_POINTS], ends[4];
@@ -361,10 +373,8 @@ static void Ring_Kidney(float mx, float my, float dir, float rho, float span, fl
     }
     Kidney_Points(mx, my, dir, rho, span, w, px, py, ends);
     Kidney_Fill(px, py, ends, Ring_Lit(c, glow));
-    Hud_Line(px, py, KIDNEY_POINTS, 1, 0.07f * s, PX, Ring_Edge(c));
-    // Z's bean runs diagonally under its letter, so the letter's corners
-    // reach the edges sooner
-    Ring_Letter(in, mx, my, (in == PIN_Z ? 0.64f : 0.85f) * w, c, glow);
+    Hud_Line(px, py, KIDNEY_POINTS, 1, 0.09f * s, PX, Ring_Edge(c));
+    Pin_Spot(in, mx, my, (in == PIN_Z ? 0.64f : 0.85f) * w);
 }
 
 // The Ring look's C-stick around (cx, cy): the four arrows, lit the way the
@@ -378,7 +388,7 @@ static void Ring_CStick(HSD_Pad *pad, float cx, float cy, float s)
         float g = d == dir ? 1.f : pad_cdir_glow[d];
         int level = d % 2 == 0; // left and right have more room
         float base = (level ? 0.58f : 0.52f) * s;
-        float len = (level ? 0.26f : 0.22f) * s, half = (level ? 0.23f : 0.2f) * s;
+        float len = (level ? 0.234f : 0.198f) * s, half = (level ? 0.23f : 0.2f) * s;
         float ux = d == 0 ? 1 : d == 2 ? -1 : 0, uy = d == 1 ? 1 : d == 3 ? -1 : 0;
         float ax[3] = {cx + ux * base - uy * half, cx + ux * (base + len), cx + ux * base + uy * half};
         float ay[3] = {cy + uy * base + ux * half, cy + uy * (base + len), cy + uy * base - ux * half};

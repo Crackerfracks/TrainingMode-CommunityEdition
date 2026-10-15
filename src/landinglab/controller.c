@@ -31,6 +31,7 @@
 #define PAD_R 2.6f       // the stick gate's radius
 #define PCT_HALF_W 6.4f  // half a percent display's width, "%" and stock icon included
 #define PCT_TOP 7.f      // its top above its HUD position
+#define PAD_PCT_GAP 0.9f // the display's gap to the percent it sits beside (0.2 let the Ring touch the "0%", visual audit, 2026-10-15)
 
 #define PAD_TRAIL 8
 #define PAD_CTRAIL 4
@@ -42,9 +43,9 @@
 // both ends of the band to the middle, then floods the nub; a click lights
 // the whole half and keeps it lit while held. The stick's gate is in the
 // middle with the buttons in the four bays around it, filled in the
-// controller's own colors and lettered like the real ones: X and Y top left,
-// Z top right, B bottom left, A bottom right, each in the middle of its bay
-// (the widest circle that fits there). A press leaves a ghost of the button's
+// controller's own colors, with no letters: X and Y top left, Z top right,
+// B bottom left, A bottom right, each in the middle of its bay (the widest
+// circle that fits there). A press leaves a ghost of the button's
 // own fill that grows a little and fades in a few frames. Below the gate the
 // C-stick: four arrows for the direction the game reads as a smash or aerial,
 // around a small live gate whose trail shows smash DI. Every edge is soft, so
@@ -62,7 +63,8 @@
 #define RING_SEGS (2 * RING_LEG_SEGS + RING_NUB_SEGS)
 #define RING_STICK_Y 0.35f // the stick gate's center, above the ellipse's
 #define RING_STICK_R 1.45f
-#define RING_C_Y -2.16f // the C-stick's center, clear of the gate above it
+#define RING_C_Y -2.02f // the C-stick's center, midway between the gate above it and the band below
+                        // (-2.16 put the down arrow's tip on the band, visual audit, 2026-10-15)
 #define RING_C_R 0.4f
 
 // The Crest look's size, in units of its drawing at size 1 (y up from its
@@ -215,8 +217,8 @@ static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
             // above it; the first spot on screen that covers no percent
             float side = hp->X > 0.5f ? -1.f : 1.f;
             float cand[3][2] = {
-                {side > 0 ? hp->X + PCT_HALF_W + 0.2f : hp->X - PCT_HALF_W - 0.2f - w, bottom},
-                {side > 0 ? hp->X - PCT_HALF_W - 0.2f - w : hp->X + PCT_HALF_W + 0.2f, bottom},
+                {side > 0 ? hp->X + PCT_HALF_W + PAD_PCT_GAP : hp->X - PCT_HALF_W - PAD_PCT_GAP - w, bottom},
+                {side > 0 ? hp->X - PCT_HALF_W - PAD_PCT_GAP - w : hp->X + PCT_HALF_W + PAD_PCT_GAP, bottom},
                 {hp->X - w / 2, hp->Y + PCT_TOP + 0.3f},
             };
             int pick = 2;
@@ -266,6 +268,28 @@ static void Pad_Gate(float cx, float cy, float R, float rim_w, GXColor rim)
         Hud_Seg(vx[i], vy[i], vx[i + 1], vy[i + 1], rim_w, rim);
 }
 
+// The dark rounded plate behind the Classic look's buttons, like the Ring's
+// backing, so its outlines survive a bright stage (visual audit,
+// 2026-10-15: the rainbow background ran through them).
+#define PAD_BACK_R 0.9f
+static void Pad_Backing(float x0, float y0, float x1, float y1)
+{
+    float px[16], py[16];
+    for (int k = 0; k < 4; k++)
+    {
+        // the corners, counterclockwise from the top right
+        float mx = k == 0 || k == 3 ? x1 - PAD_BACK_R : x0 + PAD_BACK_R;
+        float my = k < 2 ? y1 - PAD_BACK_R : y0 + PAD_BACK_R;
+        for (int i = 0; i < 4; i++)
+        {
+            float ang = (k * 90 + i * 30) * 0.01745329f;
+            px[k * 4 + i] = mx + cos(ang) * PAD_BACK_R;
+            py[k * 4 + i] = my + sin(ang) * PAD_BACK_R;
+        }
+    }
+    Hud_Fan((x0 + x1) / 2, (y0 + y1) / 2, px, py, 16, Color_Over(color_plate, 0.6f));
+}
+
 // A pill's ten corners: half circles joined by straight edges, its length
 // turned rot radians from level.
 static void Pill_Points(float cx, float cy, float w, float h, float rot, float *px, float *py)
@@ -299,12 +323,14 @@ static void Hud_PillRing(float cx, float cy, float w, float h, float rot, float 
         Hud_Seg(px[i], py[i], px[(i + 1) % 10], py[(i + 1) % 10], lw, c);
 }
 
-// A round button: a faint outline, filled by its glow, and a bigger bright
-// ring on the frame it goes down.
+// A round button: an outline, filled by its glow, and a bigger bright ring
+// on the frame it goes down. (Visual audit, 2026-10-15: the outline was
+// nearly invisible on the Classic look's bright background; it is a real
+// 0.6 now, over the backing.)
 static void Pad_Button(float cx, float cy, float r, GXColor c, int in, float glow)
 {
     Pin_Spot(in, cx, cy, r);
-    Hud_Ring(cx, cy, r - 0.035f, 0.07f, Color_Fill(c, 0.5f));
+    Hud_Ring(cx, cy, r - 0.035f, 0.07f, Color_Over(c, 0.6f));
     if (glow > 0)
         Hud_Disc(cx, cy, r - 0.07f, Color_Fill(c, glow));
     if (pad_glow[in] >= 1.f && pad_glow_prev[in] < 1.f)
@@ -428,7 +454,9 @@ static void Pad_DropZone(FighterData *fp, float cx, float cy, float R, float k)
 // the shield drop zone. R is the gate's radius, k scales the marks inside it.
 static void Pad_Stick(FighterData *fp, HSD_Pad *pad, float cx, float cy, float R, float k)
 {
-    Pad_Gate(cx, cy, R, 0.12f * k, Color_Fill(color_white, 0.45f));
+    // (visual audit, 2026-10-15: the faint rim was lost on the dark stage;
+    // it is a real 0.55, 0.6 on the Classic look's backing)
+    Pad_Gate(cx, cy, R, 0.12f * k, Color_Over(color_white, pad_soft ? 0.55f : 0.6f));
 
     // the deadzone cross, where an axis reads as zero; fainter in the Ring
     // look, so the gate and the stick read first

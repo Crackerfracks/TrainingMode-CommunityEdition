@@ -98,9 +98,14 @@ static float Meter_Pitch(void);
 // side. Both leave room under for the row's label, and the first lane for
 // the glyphs of a route's inputs.
 #define HW_ROWS 24       // frames of lead a lane shows (18 was a little short, Stephen 0.9.19)
-#define HW_PITCH 0.68f   // one frame's height
+#define HW_PITCH_BASE 0.68f   // one frame's height
 #define CV_ROWS 36       // ... the conveyor's: twice (18 was way too short for a preloaded wavedash, Stephen 0.9.19)
-#define CV_PITCH 0.46f   // ... in about a third more height than it had
+#define CV_PITCH_BASE 0.46f   // ... in about a third more height than it had
+// Wide Cells stretches the highway's and conveyor's frames as it does the
+// cells' (Stephen, 0.9.29: it should work on every timer)
+#define WIDE_K (Options_Timers[TOPT_WIDE].val ? (MT_PITCH + MT_WIDE) / MT_PITCH : 1.f)
+#define HW_PITCH (HW_PITCH_BASE * WIDE_K)
+#define CV_PITCH (CV_PITCH_BASE * WIDE_K)
 #define HW_LANE 2.1f
 #define HW_LANE_GAP 0.5f
 #define HW_GLYPH 1.5f
@@ -111,7 +116,7 @@ static float Meter_Pitch(void);
 #define STRIP_PAD 0.35f
 #define CV_KEY 4.9f // the conveyor key's column: a swatch, then "JUMP" or "WAVE" (about 3.5 wide at ST_TEXT in game, more than Text_Width says), clear of the rail studs
 
-static float hw_pitch = HW_PITCH; // a frame's height in the window the highway and conveyor share
+static float hw_pitch = HW_PITCH_BASE; // a frame's height in the window the highway and conveyor share
 
 static int Strip_Glyphs(void)
 {

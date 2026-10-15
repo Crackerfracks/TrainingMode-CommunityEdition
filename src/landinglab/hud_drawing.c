@@ -235,7 +235,8 @@ static void Hud_TextAligned(const char *text, float x, float y, float size, GXCo
     }
 }
 
-static void Hud_Text(const char *text, float x, float y, float size, GXColor color)
+// (unused since the cell strip lost its numbers; kept for the next text)
+__attribute__((unused)) static void Hud_Text(const char *text, float x, float y, float size, GXColor color)
 {
     Hud_TextAligned(text, x, y, size, color, 0);
 }
@@ -288,7 +289,7 @@ static float Text_MidY(float mid, float size)
 }
 
 // A plate from x0 to x1, half tall above and below mid.
-static void Text_PlateAt(float x0, float x1, float mid, float half)
+__attribute__((unused)) static void Text_PlateAt(float x0, float x1, float mid, float half)
 {
     Hud_Rect(x0, mid - half, x1, mid + half, Color_Over(color_plate, 0.72f));
 }

@@ -113,6 +113,24 @@ static void Jump_Solve(FighterData *fp)
         }
         if (!ok)
             continue;
+        // moving, a hop the library has whole: its routes laid out from it,
+        // to be predicted only if one comes up (Jump_Verify)
+        if (jt_ground && !gt_still && (c.hop == GT_SH || c.hop == GT_FH))
+        {
+            JumpRoute direct[2 * GL_HEIGHTS];
+            int dn = Gl_Direct(fp, &c, direct);
+            if (dn >= 0)
+            {
+                gl_direct++;
+                for (int i = 0; i < dn; i++)
+                {
+                    jt_found++;
+                    if (Jump_OnTarget(&direct[i]))
+                        Jump_Insert(jt_best[direct[i].kind == LAND_AI], &jt_best_n[direct[i].kind == LAND_AI], &direct[i]);
+                }
+                continue;
+            }
+        }
         // a hop: only when the library says it may land on something (moving,
         // its rows are built as needed; standing, once built in the background)
         if (jt_ground && (c.hop == GT_SH || c.hop == GT_FH) && !Gl_Worth(fp, &c, !gt_still))
@@ -209,6 +227,46 @@ static void Jump_Text(JumpRoute *r, int e)
     next_kind = r->kind == LAND_AI ? CUE_AI : CUE_NIL;
 }
 
+// The best jump that may come up now, predicted for real if it was laid
+// out from the hop library: it takes the library one's place, or the library
+// one goes if it doesn't hold up. A few a frame; one still unchecked waits.
+#define JT_VERIFY 2
+static JumpRoute *Jump_Verify(FighterData *fp, int e)
+{
+    for (int tries = 0; tries < JT_VERIFY; tries++)
+    {
+        JumpRoute *b = Jump_Pick(e);
+        if (!b || !b->lib)
+            return b;
+        JumpRoute was = *b;
+        int k = was.kind == LAND_AI;
+        // out of the list first, then the prediction's own routes in
+        int n = 0;
+        for (int i = 0; i < jt_best_n[k]; i++)
+            if (&jt_best[k][i] != b)
+                jt_best[k][n++] = jt_best[k][i];
+        jt_best_n[k] = n;
+        JumpCand c = {was.d, was.stick, was.hold, was.hop, was.hj, 0};
+        JumpRoute found[JT_TRY];
+        int found_n, kept = 0;
+        Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+        for (int i = 0; i < found_n; i++)
+        {
+            if (!Jump_OnTarget(&found[i]))
+                continue;
+            found[i].seen = was.seen;
+            Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+            kept |= found[i].kind == was.kind && found[i].aerial == was.aerial;
+        }
+        if (kept)
+            gl_verified++;
+        else
+            gl_rejected++;
+    }
+    JumpRoute *b = Jump_Pick(e);
+    return b && b->lib ? 0 : b;
+}
+
 // After the search of this frame: the best jump still ahead is the one
 // shown, whether the search is done or not.
 static void Jump_Publish(FighterData *fp)
@@ -225,15 +283,15 @@ static void Jump_Publish(FighterData *fp)
         jt_have = 0; // standing still: the plan comes up once, when the search is through, and stays
         return;
     }
-    JumpRoute *b = Jump_Pick(e);
+    JumpRoute *b = Jump_Verify(fp, e);
     // The one up stays up while the search goes on: another takes its place
-    // only when it acts JT_SWITCH frames sooner and came up no more than
+    // only when it costs JT_SWITCH frames less (Jump_Cost) and came up no more than
     // JT_SETTLE frames ago, or when it no longer works. (Stephen, 0.8.3: the
     // route changed every frame as the search found slightly better ones.)
     JumpRoute *cur = jt_have ? Jump_Find(&jt_route, jt_route_abs) : 0;
     if (cur && b && Jump_HopGone(cur, e))
         cur = 0; // its press has come: the next hop takes over
-    if (cur && (!b || (b != cur && !(b->act + JT_SWITCH <= cur->act && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))))
+    if (cur && (!b || (b != cur && !(Jump_Cost(b) + JT_SWITCH <= Jump_Cost(cur) && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))))
         b = cur;
     jt_have = b != 0;
     if (jt_ground)
@@ -349,7 +407,12 @@ static void Meter_AddJump(void)
     JumpRoute *r = &jt_route;
     int e = Jump_E();
     MeterRow *row;
-    if (r->hop && gt_still)
+    // a hop due now while moving is a plan from a press not made yet, as
+    // standing still's is: re-planned each frame, a countdown would slip a
+    // frame and jump back (Stephen, 0.9.29: on the Conveyor two notes came
+    // in, moved a little, then reset)
+    int hop_now = r->hop && jt_ground && !jt_squat && r->hp - e - 1 <= 0;
+    if (r->hop && (gt_still || hop_now))
     {
         // standing still: what a hop now leads to, parked and dim, laid out
         // as it will be at the takeoff, in the lanes the air countdown uses,

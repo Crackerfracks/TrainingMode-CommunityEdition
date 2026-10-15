@@ -77,6 +77,7 @@ typedef struct JumpRoute
     s16 press;  // AI: first frame of the aerial's window
     s16 land;   // touchdown
     s16 act;    // the frame Falcon can act: the touchdown for a NIL, the end of the landing lag for an AI
+    u8 lib;     // laid out from the hop library, not predicted yet (Gl_Direct): checked before it's shown
 } JumpRoute;
 
 static SimState *jt_cache;      // [JT_D], allocated in Event_Init: the fall to jump from, d frames in
@@ -247,12 +248,30 @@ static int Jump_Changes(int stick, int hold)
     return 1 + !(hold && (stick == JT_LEFT || stick == JT_RIGHT));
 }
 
-// Better: acts sooner; then a wider aerial window (a NIL has no aerial to
-// time, so it's the widest); then fewer stick changes; then the one with
-// more time to get ready.
+// Better: costs less (Jump_Cost: acting sooner, less a backward double
+// jump and a narrow aerial window); then acts sooner; then a wider aerial
+// window (a NIL has no aerial to time, so it's the widest); then fewer
+// stick changes; then the one with more time to get ready.
 static int Jump_Wide(JumpRoute *r)
 {
     return r->kind == LAND_NIL ? 99 : r->press_w;
+}
+
+// What a route costs the player, in frames of acting sooner it's worth
+// giving up: a double jump backwards turns him around (and its aerial is
+// the turned one), and a one- or two-frame aerial window is hard to hit
+// (Stephen, 0.9.29: the shown route leaned to backward double jumps whose
+// landing press was the strict one, a frame sooner was all they had).
+static int Jump_Cost(JumpRoute *r)
+{
+    int cost = r->act;
+    int dj = !r->hop || r->hj >= 0;
+    if (dj && jt_stick_xy[r->stick][0] * jt_start.facing < 0)
+        cost += 4;
+    int w = Jump_Wide(r);
+    if (w < 3)
+        cost += 2 * (3 - w);
+    return cost;
 }
 
 static int Jump_Better(JumpRoute *a, JumpRoute *b)
@@ -263,6 +282,8 @@ static int Jump_Better(JumpRoute *a, JumpRoute *b)
         return 0;
     if (a->late != b->late)
         return b->late;
+    if (Jump_Cost(a) != Jump_Cost(b))
+        return Jump_Cost(a) < Jump_Cost(b);
     if (a->act != b->act)
         return a->act < b->act;
     if (Jump_Wide(a) != Jump_Wide(b))

@@ -149,6 +149,7 @@ static void Jump_Anchor(FighterData *fp, int ts)
 // with the stick held as it is, until the floor under him ends.
 static void Gl_Anchor(FighterData *fp);
 static int gl_builds, gl_pass, gl_skip;
+static int gl_direct, gl_verified, gl_rejected; // moving hops laid out from the library, and how their checks went
 static int Gt_Variant(int i, JumpCand *c);
 
 // A dash or run's speed change this frame (ftCo_Dash_Phys, ftCo_Run_Phys,
@@ -819,13 +820,14 @@ static void Jump_Follow(ScriptInput *in)
 static void Jump_Log(void)
 {
     JumpRoute *b = Jump_Pick(-1000); // the best of all, however near
-    char buf[320];
+    char buf[400];
     int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d edge %d", jt_anchor,
                     jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
                     jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found,
                     jt_ground ? gt_edge : -1);
     if (jt_ground)
-        n += sprintf(buf + n, " lib pass %d skip %d builds %d", gl_pass, gl_skip, gl_builds);
+        n += sprintf(buf + n, " lib pass %d skip %d builds %d direct %d verified %d rejected %d", gl_pass, gl_skip, gl_builds,
+                     gl_direct, gl_verified, gl_rejected);
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)

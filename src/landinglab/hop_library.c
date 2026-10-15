@@ -34,12 +34,26 @@
 #define GL_MARGIN 3.f   // how far past a floor's end a touchdown still counts as maybe on it
 #define GL_KEYS 2       // jumping forward or back
 #define GL_X (JT_SIM + GT_HJ_MAX + 12) // sideways path frames from the takeoff
+// The best route of a kind the variant has onto the endless floor, frames
+// from the hop's press frame (d = 0), so a moving hop can lay it out without
+// a prediction of its own (Gl_Direct).
+typedef struct GlRoute
+{
+    u8 ok;
+    u8 aerial;
+    u8 press;
+    u8 press_w;
+    u8 land;
+    u8 act;
+    u8 late;
+} GlRoute;
 typedef struct GlEntry
 {
     u8 built;
     u8 unsure; // the prediction relied on unlearned ECB frames: always worth trying
     u8 n;
     u8 t[GL_TOUCH]; // touchdown frames from the hop's press frame (d = 0)
+    GlRoute r[2];   // the best NIL [0] and AI [1]
 } GlEntry;
 static GlEntry *gl_lib; // [GL_KEYS][GT_STILL_CANDIDATES][GL_HEIGHTS]
 static float gl_hval[GL_HEIGHTS];
@@ -93,6 +107,7 @@ static void Gl_Anchor(FighterData *fp)
     Gl_CheckGen();
     gl_path_d = -1;
     gl_pass = gl_skip = 0;
+    gl_direct = gl_verified = gl_rejected = 0;
     Gl_DjPaths(fp);
     gl_an = 0;
     gl_ay = gt_steps[0].y;
@@ -179,6 +194,27 @@ static void Gl_Build(FighterData *fp, int key, int v, int h)
             dup |= g->t[j] == t;
         if (!dup && t > 0 && t < 256)
             g->t[g->n++] = t;
+    }
+    JumpRoute *best[2] = {0, 0};
+    for (int i = 0; i < found_n; i++)
+    {
+        JumpRoute *f = &found[i];
+        int k = f->kind == LAND_AI;
+        if (f->valid && f->act < 256 && f->land < 256 && (!best[k] || Jump_Better(f, best[k])))
+            best[k] = f;
+    }
+    for (int k = 0; k < 2; k++)
+    {
+        if (!best[k])
+            continue;
+        GlRoute *r = &g->r[k];
+        r->ok = 1;
+        r->aerial = best[k]->aerial;
+        r->press = best[k]->press < 0 ? 255 : best[k]->press;
+        r->press_w = best[k]->press_w;
+        r->land = best[k]->land;
+        r->act = best[k]->act;
+        r->late = best[k]->late;
     }
 }
 
@@ -305,6 +341,92 @@ static int Gl_Worth(FighterData *fp, JumpCand *c, int build)
         }
     }
     return 0;
+}
+
+// A moving hop's routes straight from the library, without a prediction:
+// its touchdown's x from the sideways path, kept only when it's well inside
+// a floor at that height (an edge, a wall or a ledge needs the real thing).
+// Returns -1 when the library can't say (a row not built, or unsure), else
+// how many routes it laid out. Each is marked lib and predicted for real
+// before it's shown (Jump_Verify). (Stephen, 0.9.29: plans took too long
+// while moving; he still had to stand still for them.)
+#define GL_INSIDE 6.f // how far in from a floor's end the touchdown must be
+static int Gl_Direct(FighterData *fp, JumpCand *c, JumpRoute *out)
+{
+    int key = Gl_Key(), v = c->v, n = 0;
+    for (int j = 0; j < gl_an; j++)
+    {
+        GlEntry *g = Gl_Entry(key, v, gl_ah[j]);
+        if (!g->built || g->unsure)
+            return -1;
+    }
+    GroundStep *gs = &gt_steps[c->d];
+    if (gl_path_d != c->d || gl_path_hop != c->hop)
+    {
+        SimStart ps;
+        gl_path_until = Sim_GroundJumpAt(fp, c->hop == GT_SH, gs->x, gs->y, gs->v, jt_stick_x, 1, &ps, 0);
+        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, jt_stick_x, jt_stick_x, gl_pre_sx, GL_X);
+        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, 0, 0, gl_pre_0, GL_X);
+        gl_path_d = c->d;
+        gl_path_hop = c->hop;
+    }
+    for (int j = 0; j < gl_an && n < 2 * GL_HEIGHTS; j++)
+    {
+        GlEntry *g = Gl_Entry(key, v, gl_ah[j]);
+        float y = gs->y + gl_hval[gl_ah[j]];
+        for (int k = 0; k < 2; k++)
+        {
+            GlRoute *lr = &g->r[k];
+            if (!lr->ok)
+                continue;
+            int t = lr->land - gl_path_until; // frames after the takeoff
+            float x;
+            if (c->hj < 0)
+            {
+                if (t < 1 || t >= GL_X)
+                    continue;
+                x = (c->hold ? gl_pre_sx : gl_pre_0)[t];
+            }
+            else
+            {
+                int m = t - c->hj;
+                if (c->hj >= GL_X || m < 1 || m >= GL_X)
+                    continue;
+                x = gl_pre_sx[c->hj] + gl_dj[c->stick * GL_X + m];
+            }
+            int inside = 0;
+            for (int f = 0; f < floor_num && !inside; f++)
+            {
+                FloorLine *fl = &floor_cache[f];
+                float fy = (fl->y0 + fl->y1) * 0.5f;
+                float lo = fl->x0 < fl->x1 ? fl->x0 : fl->x1, hi = fl->x0 < fl->x1 ? fl->x1 : fl->x0;
+                inside = fabs(fy - y) < 0.1f && x >= lo + GL_INSIDE && x <= hi - GL_INSIDE;
+            }
+            if (!inside)
+                continue;
+            JumpRoute *r = &out[n++];
+            memset(r, 0, sizeof(*r));
+            r->valid = 1;
+            r->lib = 1;
+            r->kind = k ? LAND_AI : LAND_NIL;
+            r->stick = c->stick;
+            r->hold = c->hold;
+            r->hop = c->hop;
+            r->hj = c->hj;
+            r->hp = c->d + 1;
+            r->d = c->d;
+            r->dj = c->hj >= 0 ? c->d + gl_path_until + c->hj + 1 : c->d + 1;
+            r->changes = c->hj >= 0 ? 1 + Jump_Changes(c->stick, c->hold) : 1 + !c->hold;
+            r->late = lr->late;
+            r->aerial = lr->aerial;
+            r->press = lr->press == 255 ? -1 : c->d + lr->press;
+            r->press_w = lr->press_w;
+            r->land = c->d + lr->land;
+            r->act = c->d + lr->act;
+            r->where = Jump_Where(x, y);
+        }
+    }
+    return n;
 }
 
 // While nothing else searches: build the library for where Falcon stands,

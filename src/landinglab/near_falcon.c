@@ -208,14 +208,17 @@ static void Near_Bubble(int kind, Cue *c)
     float S = Near_Scale(bx, by);
     float rb = Near_Clamp(3.6f * S, 0.9f, 2.4f); // the bubble's radius
     float step = rb * 0.172f;                    // the ring's speed, a frame
-    float wr = Near_Clamp(0.16f * rb, 0.12f, 0.3f);
-    float ew = wr + 0.1f; // the dark under-stroke
+    float wr = Near_Clamp(0.16f * rb, 0.18f, 0.3f);
+    float ew = wr + 0.16f; // the dark under-stroke
+    // (Visual audit, 2026-10-15: cyan on the platform needs the dark edge, so
+    // the under-stroke is 0.06 wider and 0.7 where it was 0.4, the least ring
+    // 0.18 where it was 0.12, and the closing ring 0.85 where it was 0.7.)
 
     if (n.mode == NMODE_COUNT)
     {
         float a = n.appear;
         Near_Disc(hx, hy, rb, Color_Over(color_plate, 0.45f * a));
-        Near_Ring(hx, hy, rb, ew, Color_Over(color_plate, 0.4f * a));
+        Near_Ring(hx, hy, rb, ew, Color_Over(color_plate, 0.7f * a));
         Near_Ring(hx, hy, rb, wr, Color_Over(n.now ? color_white : n.col, 0.9f * a));
         Hud_Diamond(hx, hy, 0.4f * rb, Color_Over(color_plate, 0.5f * a));
         Hud_Diamond(hx, hy, 0.28f * rb, Color_Over(n.col, 0.9f * a));
@@ -223,8 +226,8 @@ static void Near_Bubble(int kind, Cue *c)
         {
             float ra = rb + n.k * step;
             if (n.k <= 6) // far out its dark edge isn't worth the quads
-                Near_Ring(hx, hy, ra, ew, Color_Over(color_plate, 0.35f * a));
-            Near_Ring(hx, hy, ra, wr, Color_Over(Color_Mix(n.col, color_white, 0.25f), 0.7f * a));
+                Near_Ring(hx, hy, ra, ew, Color_Over(color_plate, 0.6f * a));
+            Near_Ring(hx, hy, ra, wr, Color_Over(Color_Mix(n.col, color_white, 0.25f), 0.85f * a));
         }
     }
     else if (n.mode == NMODE_WINDOW)
@@ -232,7 +235,7 @@ static void Near_Bubble(int kind, Cue *c)
         float left = (float)(n.w - n.age) / n.w;
         Near_Disc(hx, hy, rb, Color_Over(color_plate, 0.5f));
         Near_Fan(hx, hy, rb, NEAR_PI / 2.f - NEAR_TAU * left, NEAR_PI / 2.f, 10, Color_Over(n.col, 0.9f));
-        Near_Ring(hx, hy, rb, ew, Color_Over(color_plate, 0.4f));
+        Near_Ring(hx, hy, rb, ew, Color_Over(color_plate, 0.7f));
         Near_Ring(hx, hy, rb, wr, Color_Over(n.now ? color_white : n.col, 1.f));
     }
     else if (n.mode == NMODE_FOLD)
@@ -241,7 +244,7 @@ static void Near_Bubble(int kind, Cue *c)
         float r = rb * (1.f - Ease_Out(q));
         if (r > 0.25f)
         {
-            Near_Ring(hx, hy, r, ew, Color_Over(color_plate, 0.35f * (1.f - q)));
+            Near_Ring(hx, hy, r, ew, Color_Over(color_plate, 0.6f * (1.f - q)));
             Near_Ring(hx, hy, r, wr, Color_Over(n.col, 0.8f * (1.f - q)));
         }
     }
@@ -265,7 +268,7 @@ static void Near_Bubble(int kind, Cue *c)
     }
 }
 
-// The halo: a faint ring around Falcon's body, which it follows, with a bead
+// The halo: a ring around Falcon's body, which it follows, with a bead
 // running clockwise at 15 degrees a frame into the window's notch at twelve
 // o'clock (as wide as the window, 15 degrees a frame of it); the last three
 // frames are dots on the ring. A hit lights the ring up a little and grows
@@ -277,17 +280,20 @@ static void Near_Halo(FighterData *fp, NearCue *n)
     if (!Hud_FromWorld(x, y, &hx, &hy))
         return;
     float S = Near_Scale(x, y);
-    float R = Near_Clamp(12.f * S, 2.6f, 7.5f);
-    float wf = 0.12f;                             // the faint ring
-    float wn = Near_Clamp(1.2f * S, 0.3f, 0.5f);   // the notch
+    // (Visual audit, 2026-10-15: 80 px across was bigger than Falcon with a 1-px
+    // gray line, invisible by construction: it is smaller, 0.3 wide, in the
+    // cue's color, on a darker under-stroke.)
+    float R = Near_Clamp(8.f * S, 2.5f, 5.5f);
+    float wf = 0.3f;                               // the ring
+    float wn = Near_Clamp(1.2f * S, 0.45f, 0.7f);  // the notch, wider than the ring
     float step = NEAR_PI / 12.f;                   // 15 degrees
     float top = NEAR_PI / 2.f;                     // twelve o'clock; a frame before it is counterclockwise
 
     if (n->mode == NMODE_COUNT || n->mode == NMODE_WINDOW)
     {
         float a = n->mode == NMODE_COUNT ? n->appear : 1.f;
-        Near_Ring(hx, hy, R, wf + 0.1f, Color_Over(color_plate, 0.25f * a));
-        Near_Ring(hx, hy, R, wf, Color_Over(color_white, 0.3f * a));
+        Near_Ring(hx, hy, R, wf + 0.1f, Color_Over(color_plate, 0.5f * a));
+        Near_Ring(hx, hy, R, wf, Color_Over(n->col, 0.6f * a));
         float w = n->w * step;
         if (w > NEAR_TAU - 2.f * step)
             w = NEAR_TAU - 2.f * step;
@@ -468,6 +474,20 @@ static int Near_ClipBelow(const float *px, const float *py, int n, float y, floa
     return m;
 }
 
+// A convex outline of m points filled (nothing under 3).
+static void Near_Poly(const float *px, const float *py, int m, GXColor c)
+{
+    if (m < 3)
+        return;
+    float cx = 0.f, cy = 0.f;
+    for (int i = 0; i < m; i++)
+    {
+        cx += px[i] / m;
+        cy += py[i] / m;
+    }
+    Hud_Fan(cx, cy, px, py, m, c);
+}
+
 // The ECB fill: Falcon's ECB (see Near_Ecb), the diamond the game lands with,
 // drawn on him. It fills from its bottom point at a fixed rate and is full on
 // the press frame, 12 frames after it started; ticks beside it mark the last
@@ -496,17 +516,30 @@ static void Near_EcbFill(FighterData *fp, NearCue *n)
         float level = window ? 1.f : Clamp01(1.f - (float)n->k / NEAR_FILL);
         if (level > 0.f)
         {
-            float ox[8], oy[8];
-            int m = Near_ClipBelow(px, py, 4, py[2] + (py[0] - py[2]) * level, ox, oy);
-            if (m >= 3)
+            // The fill is faint (0.18 at most) so the body shows through. The
+            // level is a brighter band, rising with it, but only in the
+            // diamond's lower third; in the window that third stays lit. At
+            // 0.72 the whole fill hid his lower half (visual audit,
+            // 2026-10-15).
+            GXColor fill = window ? Color_Mix(n->col, color_white, n->now ? 0.5f : 0.f) : n->col;
+            float h = py[0] - py[2];
+            float top = py[2] + h * level;
+            float hi = top < py[2] + h / 3.f ? top : py[2] + h / 3.f;
+            float lo = window ? py[2] : top - 0.3f * h;
+            if (lo < py[2])
+                lo = py[2];
+            float ox[10], oy[10], bx[10], by[10], fy[10];
+            int m = Near_ClipBelow(px, py, 4, top, ox, oy);
+            Near_Poly(ox, oy, m, Color_Over(fill, 0.18f * a));
+            if (hi > lo)
             {
-                float cx = 0.f, cy = 0.f;
+                m = Near_ClipBelow(px, py, 4, hi, ox, oy);
                 for (int i = 0; i < m; i++)
-                {
-                    cx += ox[i] / m;
-                    cy += oy[i] / m;
-                }
-                Hud_Fan(cx, cy, ox, oy, m, Color_Over(window ? Color_Mix(n->col, color_white, n->now ? 0.5f : 0.f) : n->col, 0.72f * a));
+                    fy[i] = -oy[i]; // flipped, so the same cut keeps what is above lo
+                m = Near_ClipBelow(ox, fy, m, -lo, bx, by);
+                for (int i = 0; i < m; i++)
+                    by[i] = -by[i];
+                Near_Poly(bx, by, m, Color_Over(fill, 0.5f * a));
             }
         }
         // a soft glow around the outline: the diamond is small and Falcon's
@@ -614,8 +647,10 @@ static void Near_Lights(FighterData *fp, NearCue *n)
                 Near_Dot(lx, ly, r, Color_Over(c, 1.f));
             else
             {
-                Near_Dot(lx, ly, r * 1.1f, Color_Over(c, 0.6f * a));
-                Near_Dot(lx, ly, r * 0.62f, Color_Over(Color_Mix(c, color_plate, 0.75f), 0.95f * a));
+                // (visual audit, 2026-10-15: the unlit rings were low contrast
+                // on the dark stage; the ring is 0.9 where it was 0.6)
+                Near_Dot(lx, ly, r * 1.1f, Color_Over(c, 0.9f * a));
+                Near_Dot(lx, ly, r * 0.62f, Color_Over(Color_Mix(c, color_plate, 0.8f), 0.95f * a));
             }
         }
         else if (n->mode == NMODE_FOLD)

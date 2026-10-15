@@ -113,6 +113,8 @@ static void Pad_Draw(FighterData *fp)
         Pad_Cues();
         return;
     }
+    if (buttons)
+        Pad_Backing(bx, by, x1, y1);
     Pad_Stick(fp, pad, buttons ? bx + PAD_STICK_X : bx + PAD_R, by + PAD_R, PAD_R, 1.f);
     if (!buttons)
         return;
@@ -136,7 +138,7 @@ static void Pad_Draw(FighterData *fp)
 
     // Z, a pill
     float zx = bx + 9.6f, zy = by + 4.35f;
-    Hud_PillRing(zx, zy, 1.0f, 0.36f, 0, 0.07f, Color_Fill(color_btn_z, 0.5f));
+    Hud_PillRing(zx, zy, 1.0f, 0.36f, 0, 0.07f, Color_Over(color_btn_z, 0.6f));
     if (glow[PIN_Z] > 0)
         Hud_Pill(zx, zy, 0.93f, 0.29f, 0, Color_Fill(color_btn_z, glow[PIN_Z]));
     if (pad_glow[PIN_Z] >= 1.f && pad_glow_prev[PIN_Z] < 1.f)

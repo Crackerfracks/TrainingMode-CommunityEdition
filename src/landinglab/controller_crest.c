@@ -172,8 +172,8 @@ static void Gem_Marquise(float gx, float gy, float l, float w, float ang, float 
     }
 }
 
-// A gem as a button: the press ghost, the fill, the outline, the table and
-// the letter. Its outline (n points) and table (tn points) go round (gx, gy).
+// A gem as a button: the press ghost, the fill, the outline and the table.
+// Its outline (n points) and table (tn points) go round (gx, gy).
 static void Gem_Button(const float *px, const float *py, int n, const float *tx, const float *ty, int tn, float gx, float gy,
                        float k, float letter, GXColor c, int in, float glow)
 {
@@ -191,7 +191,7 @@ static void Gem_Button(const float *px, const float *py, int n, const float *tx,
     Hud_Fan(gx, gy, px, py, n, Ring_Lit(c, glow));
     Hud_Line(px, py, n, 1, 0.07f * k, PX, Ring_Edge(c));
     Hud_Fan(gx, gy, tx, ty, tn, Color_Over(color_white, 0.16f + 0.1f * glow));
-    Ring_Letter(in, gx, gy, letter, c, glow);
+    Pin_Spot(in, gx, gy, letter); // no letter on the gem (see Ring_Letter); the cues still find it
 }
 
 static void Crest_Marquise(float cx, float cy, float k, float gx, float gy, float l, float w, float ang, float letter,
@@ -242,7 +242,7 @@ static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
         py[i] = cy + crest_plate[i][1] * k;
     }
     Hud_Fan(cx, cy - 0.4f * k, px, py, n, Color_Fill(color_plate, 0.5f));
-    Hud_Line(px, py, n, 1, 0.05f * k, PX, Color_Over(color_white, 0.22f));
+    Hud_Line(px, py, n, 1, 0.05f * k, PX, Color_Over(color_white, 0.5f)); // 0.22 was faint (visual audit, 2026-10-15)
     Crest_Wing(cx, cy, k, -1, pad->ftriggerLeft, held[PIN_L], glow[PIN_L], pad_flash[PIN_L]);
     Crest_Wing(cx, cy, k, 1, pad->ftriggerRight, held[PIN_R], glow[PIN_R], pad_flash[PIN_R]);
 
@@ -251,8 +251,11 @@ static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
     Crest_Marquise(cx, cy, k, -2.88f, -0.92f, 1.25f, 0.56f, -25, 0.3f, color_btn_xy, PIN_Y, glow[PIN_Y]);
     Crest_Marquise(cx, cy, k, -2.62f, -1.74f, 1.25f, 0.56f, -25, 0.3f, color_btn_xy, PIN_X, glow[PIN_X]);
     Crest_Marquise(cx, cy, k, 2.62f, -1.12f, 1.6f, 0.64f, 25, 0.42f, color_btn_z, PIN_Z, glow[PIN_Z]);
-    Crest_Round(cx, cy, k, -1.47f, -2.42f, 0.48f, 0.44f, color_btn_b, PIN_B, glow[PIN_B]);
-    Crest_Round(cx, cy, k, 1.55f, -2.32f, 0.62f, 0.56f, color_btn_a, PIN_A, glow[PIN_A]);
+    // B and A spread 0.2 apart from the C-stick's arrows, and A's radius
+    // 8% less (0.62 to 0.57), so the three bottom buttons have a gap
+    // between them (visual audit, 2026-10-15)
+    Crest_Round(cx, cy, k, -1.67f, -2.45f, 0.48f, 0.44f, color_btn_b, PIN_B, glow[PIN_B]);
+    Crest_Round(cx, cy, k, 1.75f, -2.32f, 0.57f, 0.52f, color_btn_a, PIN_A, glow[PIN_A]);
     Ring_CStick(pad, cx, cy - 2.35f * k, 0.9f * k);
     pad_soft = 0;
 }

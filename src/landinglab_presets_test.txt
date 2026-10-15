@@ -21,9 +21,9 @@ mark 3 expect LLPRESET start User Custom (applied), card file read, and NIL Cues
 get Cues/NIL Cues
 
 # a built-in preset, saved as Preset 1, which then loads at start
-preset load Minimal
+preset load Quiet
 closemenu
-get Paths/Frame Dots
+get Timers/Fixed Strip
 preset save Preset 1
 preset start Preset 1
 card flush
@@ -31,8 +31,8 @@ preset load Everything
 closemenu
 card flush
 card restart
-mark 4 expect LLPRESET start Preset 1 (applied), Frame Dots = 2 (Off) next
-get Paths/Frame Dots
+mark 4 expect LLPRESET start Preset 1 (applied), Fixed Strip = 0 (Off) next
+get Timers/Fixed Strip
 get Cues/NIL Cues
 preset save Everything
 mark 5 expect LLPRESET save refused

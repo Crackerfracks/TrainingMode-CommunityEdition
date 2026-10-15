@@ -61,7 +61,7 @@ to the same frames.
 | assist-5s.gif, assist-01s.gif | assist-5s, assist-01s, then by pad | ledge.md Assist |
 | jump-timing-run.gif | jump-timing-run (Fountain of Dreams) | jump-timing.md |
 | cam-normal.gif, cam-zoom.gif, cam-fixed.gif, cam-advanced.gif | cam-* (Battlefield) | camera.md modes |
-| preset-defaults.gif, preset-minimal.gif, preset-everything.gif, preset-ledgedrill.gif | hero, preset-minimal, everything-jump, preset-ledgedrill | presets.md |
+| preset-defaults.gif, preset-quiet.gif, preset-wavedash.gif, preset-ledgedrill.gif, preset-everything.gif | hero, preset-quiet, wavedash, preset-ledgedrill, everything-jump | presets.md |
 | everything-wl.gif, everything-ledge.gif | everything-wl (Stadium), everything-ledge (Battlefield) | each feature's collapsed section |
 
 ## The cast

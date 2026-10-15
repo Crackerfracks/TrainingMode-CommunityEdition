@@ -2,7 +2,7 @@
 
 Presets save a whole setup so you can switch between them in one step, and pick the one the event starts with.
 
-Four built-in presets, four slots of your own, and User Custom, which saves itself every time you close the menu after changing something by hand. Defaults is what Crackerfracks settled on after 0.6.5, which is why most of the paths start off.
+Five built-in presets, four slots of your own, and User Custom, which saves itself every time you close the menu after changing something by hand. Defaults is what Crackerfracks settled on after 0.6.5, which is why most of the paths start off.
 
 <!-- GIF: ../media/quick-menu.gif (by pad, Battlefield): the quick menu opening over a frozen jump, flipping to another preset card, then the stick playing out of it, at default settings -->
 
@@ -12,72 +12,86 @@ The Presets menu, in menu order.
 
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |
-| Preset | User Custom, Preset 1 to Preset 4 (shows the name you gave it), Defaults, Minimal, Everything, Ledge Drill | User Custom | The preset the rows below act on. Its description shows three lines about it, such as the cues on, the timers and the paths. An empty slot says that Save to Preset keeps the current settings there. |
+| Preset | User Custom, Preset 1 to Preset 4 (shows the name you gave it), Defaults, Quiet, Wavedash, Ledge Drill, Everything | User Custom | The preset the rows below act on. Its description shows three lines about it: the cues on and whether Jump Timing is, the timers, and the paths and the controller. An empty slot says that Save to Preset keeps the current settings there. |
 | Load Preset | Press A | n/a | Sets every menu the way the preset above has it. |
-| Save to Preset | Press A | n/a | Keeps the current settings in the preset above: User Custom or Preset 1 to 4. Defaults, Minimal, Everything and Ledge Drill are built in and stay as they are. |
+| Save to Preset | Press A | n/a | Keeps the current settings in the preset above: User Custom or Preset 1 to 4. Defaults, Quiet, Wavedash, Ledge Drill and Everything are built in and stay as they are. |
 | Name Preset | Press A | n/a | Gives the preset above a name. Works on Preset 1 to 4 only. |
-| Load at Start | User Custom, Preset 1 to Preset 4 (shows the name you gave it), Defaults, Minimal, Everything, Ledge Drill | User Custom | The preset the event starts with. User Custom is how you left the menus the last time you closed them. |
+| Load at Start | User Custom, Preset 1 to Preset 4 (shows the name you gave it), Defaults, Quiet, Wavedash, Ledge Drill, Everything | User Custom | The preset the event starts with. User Custom is how you left the menus the last time you closed them. |
 | Memory Card | Info only | n/a | Says whether anything is saved on the memory card in slot A, and whether settings are being kept. |
 
 ## The presets
 
-User Custom and Preset 1 to 4 are yours and live on the memory card. They can be empty. The four built-in presets are Defaults, Minimal, Everything and Ledge Drill. You cannot save over or rename a built-in preset. Trying plays the error sound and does nothing. Load Preset on an empty slot plays the error sound too.
+User Custom and Preset 1 to 4 are yours and live on the memory card. They can be empty. The five built-in presets are Defaults, Quiet, Wavedash, Ledge Drill and Everything. You cannot save over or rename a built-in preset. Trying plays the error sound and does nothing. Load Preset on an empty slot plays the error sound too.
 
-Minimal, Everything and Ledge Drill are Defaults with the changes below. Everything not listed matches Defaults.
+Quiet, Wavedash, Ledge Drill and Everything are Defaults with the changes below. Everything not listed matches Defaults, and loading one sets every option, listed or not.
 
 ### Defaults
 
-The values in the Default columns of this guide. On screen: AI and waveland cues, the Fixed Strip (Cells), the landing spot brackets, the waveland and wavedash timers, the controller display, the info panel, input markers, frame dots, Window Bands, the ledge route path, Body Flash and the shield drop zone.
+The values in the Default columns of this guide. On screen: your character's AI cues, the Fixed Strip (Conveyor), the landing spot brackets, Waveland Cues onto platforms, the controller display (Ring, Medium), the info panel, input markers, frame dots, Window Bands, the ledge route path, Body Flash and the shield drop zone. Jump Timing, the waveland and wavedash timers and Near You are off.
 
-### Minimal
+### Quiet
 
-The AI cue and the Fixed Strip, and as little else as the preset reaches. Waveland cues, the landing spot, the waveland and wavedash timers, frame dots, the controller and the info panel go off. Body Flash, input markers, Window Bands and the ledge route path are not in the preset, so they stay as they were.
+AI cues with nothing fixed on screen, for playing rather than studying. What stays: the landing spot brackets, the aerial picker and input markers, and Body Flash. Waveland cues, the Fixed Strip, the controller and the info panel go off.
 
-| Menu | Option | Defaults | Minimal |
+| Menu | Option | Defaults | Quiet |
 | --- | --- | --- | --- |
-| Cues | Waveland Cues | All Floors | Off |
-| Timers | Landing Spot | On | Off |
-| Timers | Waveland | Ticks | Off |
-| Timers | Wavedash | Cells | Off |
-| Paths | Frame Dots | Always | Off |
+| Cues | Waveland Cues | Platforms | Off |
+| Timers | Fixed Strip | Conveyor | Off |
 | HUD | Controller | By Percent | Off |
 | HUD | Info Panel | On | Off |
 
+### Wavedash
+
+Wavelands and wavedashes, timed at the feet. The AI cues go off and the Waveland cues cover every floor. The Conveyor stays on.
+
+| Menu | Option | Defaults | Wavedash |
+| --- | --- | --- | --- |
+| Cues | AI Cues | On | Off |
+| Cues | Waveland Cues | Platforms | All Floors |
+| Cues | Platform Glow | Off | On |
+| Timers | Waveland | Off | Ticks |
+| Timers | Wavedash | Off | Pips |
+| Paths | Slide-off Line | Off | On |
+| HUD | Controller Cues | Off | Closing Ring |
+
+### Ledge Drill
+
+Ledge routes from the ledge, both kinds, reset to the same ledge each time. NIL cues go on and the waveland cues off. The frame dots are Always, as in Defaults.
+
+| Menu | Option | Defaults | Ledge Drill |
+| --- | --- | --- | --- |
+| Cues | NIL Cues | Off | On |
+| Cues | Waveland Cues | Platforms | Off |
+| Ledge Practice | Route Kind | AI | Both |
+| Ledge Practice | Reset | None | Same Side |
+
 ### Everything
 
-Every cue, path, timer and sound that has a plain on switch. It leaves Jump Timing, Controller Cues and Rumble as they were, and keeps the Fixed Strip on Cells.
+Every cue, path and timer that has a plain on switch, for exploring rather than playing. Near You is Pincers, which are drawn clear of the body. Body Path and Jump Preview stay off, and Frame Dots show only in Frame Advance. Jump Timing and its path are on.
 
 | Menu | Option | Defaults | Everything |
 | --- | --- | --- | --- |
 | Cues | NIL Cues | Off | On |
+| Cues | Waveland Cues | Platforms | All Floors |
 | Cues | Platform Glow | Off | On |
-| Timers | Near You | Off | Bubble |
+| Timers | Near You | Off | Pincers |
+| Timers | Waveland | Off | Ticks |
+| Timers | Wavedash | Off | Cells |
 | Paths | Landing Path | Off | On |
-| Paths | Body Path | Off | On |
+| Paths | Frame Dots | Always | Frame Advance |
 | Paths | Slide-off Line | Off | On |
-| Paths | Jump Preview | Off | Both |
+| Jump Timing | Show | Off | On |
+| Jump Timing | Path | Off | On |
 | Sounds | Buzz: Skipped Window | Off | On |
-| Sounds | Buzz: Fastfall Timing | Off | On |
-| Sounds | Buzz: Jump Timing | Off | On |
-| Sounds | Buzz: Aerial Timing | Off | On |
-
-### Ledge Drill
-
-Ledge routes from the ledge, both kinds, reset to the same ledge each time.
-
-| Menu | Option | Defaults | Ledge Drill |
-| --- | --- | --- | --- |
-| Ledge Practice | Route Kind | AI | Both |
-| Ledge Practice | Reset | None | Same Side |
-| Cues | NIL Cues | Off | On |
 
 <details>
-<summary>The four built-in presets, side by side</summary>
+<summary>The five built-in presets, side by side</summary>
 
 <!-- GIF: ../media/preset-defaults.gif (hero, Battlefield): the same jump under Defaults -->
-<!-- GIF: ../media/preset-minimal.gif (preset-minimal, Battlefield): under Minimal -->
-<!-- GIF: ../media/preset-everything.gif (everything-jump, Battlefield): under Everything -->
+<!-- GIF: ../media/preset-quiet.gif (preset-quiet, Battlefield): under Quiet -->
+<!-- GIF: ../media/preset-wavedash.gif (wavedash, Final Destination): a wavedash under Wavedash -->
 <!-- GIF: ../media/preset-ledgedrill.gif (preset-ledgedrill, Battlefield): under Ledge Drill -->
+<!-- GIF: ../media/preset-everything.gif (everything-jump, Battlefield): under Everything -->
 
 </details>
 
@@ -152,7 +166,7 @@ A D-pad press or a new trigger press brings back a quick menu that is fading out
 
 ### Settings in the list
 
-The list has 16 rows, in this order, named as the quick menu names them:
+The list has 17 rows, in this order, named as the quick menu names them:
 
 1. AI cues
 2. NIL cues
@@ -161,15 +175,16 @@ The list has 16 rows, in this order, named as the quick menu names them:
 5. Fixed strip
 6. Landing spot
 7. Waveland timer
-8. Landing path
-9. Body path
-10. Frame dots
-11. Platform glow
-12. Jump timing (Jump Timing > Show)
-13. Controller look
-14. Controller cues
-15. Intensity
-16. Auto fade
+8. Wavedash timer
+9. Landing path
+10. Body path
+11. Frame dots
+12. Platform glow
+13. Jump timing (Jump Timing > Show)
+14. Controller look
+15. Controller cues
+16. Intensity
+17. Auto fade
 
 How long the quick menu stays up or plays out is set in the HUD menu. See [HUD](hud.md).
 

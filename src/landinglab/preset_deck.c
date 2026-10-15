@@ -46,6 +46,7 @@ static DeckRow deck_rows[] = {
     {&Options_Timers[TOPT_STRIP], "Fixed strip"},
     {&Options_Timers[TOPT_SPOT], "Landing spot"},
     {&Options_Timers[TOPT_WL], "Waveland timer"},
+    {&Options_Timers[TOPT_WD], "Wavedash timer"},
     {&Options_Paths[POPT_PATH], "Landing path"},
     {&Options_Paths[POPT_BODY], "Body path"},
     {&Options_Paths[POPT_TICKS], "Frame dots"},
@@ -421,7 +422,13 @@ static void Deck_Draw(void)
     GXColor ink = {235, 235, 240, 255}, dim = {160, 166, 186, 255}, lit = land_kind_colors[LAND_AI];
     int pick = Options_Presets[PROPT_PICK].val;
     int n = Deck_Count();
-    float total = n * DECK_CARD_W + (n - 1) * DECK_GAP;
+    // the five built-in presets and the five saved ones together are wider
+    // than the screen's safe width at full size: the cards, their gaps and
+    // their marks shrink to fit
+    float full = n * DECK_CARD_W + (n - 1) * DECK_GAP, fit = 2 * SAFE_W - 1.f;
+    float k = full > fit ? fit / full : 1.f;
+    float cw = DECK_CARD_W * k, gap = DECK_GAP * k;
+    float total = n * cw + (n - 1) * gap;
     float x = -total / 2, pick_x = 0;
     int li = 0, mi = 0, ri = 0;
 
@@ -444,26 +451,26 @@ static void Deck_Draw(void)
         PresetSlot *slot = Preset_Slot(i);
         float y1 = DECK_TOP - (on ? 0.f : 0.5f), y0 = y1 - (on ? DECK_CARD_H : DECK_CARD_H - 0.8f);
         float a = on ? 1.f : 0.7f;
-        Hud_Rect(x, y0, x + DECK_CARD_W, y1, Color_Over(color_plate, 0.9f));
-        Hud_Frame(x, y0, x + DECK_CARD_W, y1, on ? 0.18f : 0.08f, Color_Over(on ? lit : dim, on ? 1.f : 0.5f));
+        Hud_Rect(x, y0, x + cw, y1, Color_Over(color_plate, 0.9f));
+        Hud_Frame(x, y0, x + cw, y1, on ? 0.18f : 0.08f, Color_Over(on ? lit : dim, on ? 1.f : 0.5f));
         char name[20];
         Name_Copy(name, preset_names[i]);
         // the name fits its card: smaller when long
-        float ns = 0.3f, nw = Text_Width(name, ns), room = DECK_CARD_W - 0.7f;
+        float ns = 0.3f, nw = Text_Width(name, ns), room = cw - 0.7f;
         if (nw > room)
             ns *= room / nw;
-        Deck_Line(deck.mid, mi++, name, x + DECK_CARD_W / 2, y1 - 2.0f, ns, Color_Over(on ? color_white : ink, a));
+        Deck_Line(deck.mid, mi++, name, x + cw / 2, y1 - 2.0f, ns, Color_Over(on ? color_white : ink, a));
         if (i > 0 && i < PS_SAVED && preset_file->preset_name[i][0])
-            Hud_Disc(x + DECK_CARD_W - 0.45f, y1 - 0.45f, 0.18f, Color_Over(color_in_jump, a)); // one he named
+            Hud_Disc(x + cw - 0.45f, y1 - 0.45f, 0.18f, Color_Over(color_in_jump, a)); // one he named
         if (on && deck.changed)
-            Hud_Rect(x + 0.3f, y0 - 0.75f, x + DECK_CARD_W - 0.3f, y0 - 0.25f, Color_Over(color_in_jump, 1.f)); // not saved yet
+            Hud_Rect(x + 0.3f, y0 - 0.75f, x + cw - 0.3f, y0 - 0.25f, Color_Over(color_in_jump, 1.f)); // not saved yet
         // what the preset has on: a mark each, lit when on
         for (int m = 0; m < (int)countof(deck_marks); m++)
         {
             EventOption *o = deck_marks[m].o;
             int v = on ? o->val : Preset_Value(slot, o);
             int lit_m = v != 0;
-            float mx = x + 0.45f + (m % 4) * 1.2f, my = y1 - 3.3f - (m / 4) * 0.95f;
+            float mx = x + 0.45f + (m % 4) * 1.2f * k, my = y1 - 3.3f - (m / 4) * 0.95f;
             GXColor mc = land_kind_colors[deck_marks[m].kind];
             if (lit_m)
                 Hud_Rect(mx, my, mx + 0.9f, my + 0.6f, Color_Over(mc, 0.95f * a));
@@ -476,7 +483,7 @@ static void Deck_Draw(void)
             Hud_Rect(x + 0.45f + b * 0.5f, y0 + 0.35f, x + 0.8f + b * 0.5f, y0 + 0.75f, Color_Over(dim, a));
         if (on)
             pick_x = x;
-        x += DECK_CARD_W + DECK_GAP;
+        x += cw + gap;
     }
 
     float hy = DECK_TOP - DECK_CARD_H - 1.0f;
@@ -494,7 +501,7 @@ static void Deck_Draw(void)
     }
     else
     {
-        float px = pick_x + DECK_CARD_W / 2 - DECK_ROW_W / 2;
+        float px = pick_x + cw / 2 - DECK_ROW_W / 2;
         if (px < -SAFE_W)
             px = -SAFE_W;
         if (px + DECK_ROW_W > SAFE_W)

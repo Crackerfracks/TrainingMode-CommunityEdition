@@ -4,7 +4,7 @@ Timers count down the [frames](glossary.md#frame) to each input so you can press
 
 Six ways to count down next to you, four in a corner, one at the landing spot, three for wavelands and three for wavedashes. Pick one. Picking all of them is how 0.6.5 happened.
 
-<!-- GIF: ../media/timers.gif (strip-cells, Battlefield): a double jump toward the top platform with the Cells look in the corner, the landing spot brackets closing, and a press on the gate, at default settings -->
+<!-- GIF: ../media/timers.gif (strip-conveyor, Battlefield): a double jump toward the top platform with the Conveyor look in the corner, the landing spot brackets closing, and a press on the strikeline, at default settings -->
 
 ## The words
 
@@ -21,11 +21,11 @@ The Timers menu, in menu order.
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |
 | Near You | Off, Bubble, Halo, Pincers, ECB Fill, Lights, Old Strip | Off | A countdown that rides with you. Bubble: a ring closes on where your body will be. Halo: a bead runs into a notch. Pincers, ECB Fill and Lights close, fill or count in on you. |
-| Fixed Strip | Off, Cells, Highway, Dial, Conveyor | Cells | A countdown in a corner. Cells slide into a gate, Highway drops notes into a window, Dial sweeps a hand in, Conveyor carries every cue on one moving belt. Press as it arrives. |
+| Fixed Strip | Off, Cells, Highway, Dial, Conveyor | Conveyor | A countdown in a corner. Cells slide into a gate, Dial sweeps a hand in, Highway and Conveyor (one moving belt) send notes: yellow tab JUMP, pink solid AI, green notched NIL, cyan hollow WAVE. |
 | Wide Cells | Off, On | On | Gives each frame a little more room: wider cells in Cells and the Near You strips, taller notes on the Highway and Conveyor. The Dial is unchanged. |
 | Landing Spot | Off, On | On | Brackets close in on the landing spot of an AI or NIL and meet it on the frame to press. |
-| Waveland | Off, Ticks, Rails, Chevrons | Ticks | Drawn at the slide. Ticks run in from its ends and spike where they meet, rails fill in, or chevrons hop in a notch a frame. They meet on the frame to airdodge. |
-| Wavedash | Off, Cells, Pips, Ring | Cells | Drawn out of the [jumpsquat](glossary.md#jumpsquat). Cells: a WD lane in the Fixed Strip. Pips: a pip a frame under your feet. Ring: a ring on the floor that closes on the airdodge frame. Works with Waveland Cues off. |
+| Waveland | Off, Ticks, Rails, Chevrons | Off | Drawn at the slide. Ticks run in from its ends and spike where they meet, rails fill in, or chevrons hop in a notch a frame. They meet on the frame to airdodge. |
+| Wavedash | Off, Cells, Pips, Ring | Off | Drawn out of the [jumpsquat](glossary.md#jumpsquat). Cells: a WD lane in the Fixed Strip. Pips: a pip a frame under your feet. Ring: a ring on the floor that closes on the airdodge frame. Works with Waveland Cues off. |
 | Note Travel | Fixed Speed, Catch Up | Fixed Speed | Applies to Cells and Highway. Fixed Speed: a frame is always the same distance, so a window found late shows up partway along. Catch Up: every window comes in from the far end and settles to that speed halfway in. |
 
 ## How to read it
@@ -35,8 +35,8 @@ Every look uses the same colors: pink for an AI, green for a NIL, cyan for a wav
 - **Cells.** Each lane is a row of frame cells sliding toward the gate, one cell a frame. Solid cells are the frames to press on; hollow cells are the frames you [touch down](glossary.md#touchdown). Press when a solid cell reaches the gate. A tick under every cell and a brighter empty cell every fifth frame show the game's clock going by, so you can see the row moving even with no window on it.
 - **Highway.** One upright lane per cue. Notes fall down the lane onto a strikeline, and each lane has a window one note tall above it. Press when the note is in the window.
 - **Dial.** A hand sweeps round the dial and the window is a wedge on the rim. Press as the hand enters the wedge. Ticks round the rim mark the frames.
-- **Conveyor.** One belt for every cue, moving a row a frame, with a heavier line every fifth frame. Notes on the same frame share a row. Shapes tell the kinds apart: a jump has a raised cap, an AI is solid, a NIL is notched, a waveland or wavedash is hollow. A plan from a press you haven't made yet hovers over the rows it will take and sets down when you press. A small key beside the belt names the shapes.
-- You can run several timers at once. Fixed Strip, Landing Spot, Waveland and Wavedash are on at the start.
+- **Conveyor.** One belt for every cue, moving a row a frame, with a heavier line every fifth frame. Notes on the same frame share a row. Shapes tell the kinds apart: a jump has a raised cap, an AI is solid, a NIL is notched, a waveland or wavedash is hollow. A plan from a press you haven't made yet hovers over the rows it will take and sets down when you press. A row of four small swatches under the belt shows the shapes in the cue colors, lit while that kind is on the belt.
+- You can run several timers at once. The Fixed Strip (Conveyor) and Landing Spot are on at the start. Waveland and Wavedash are off; the Conveyor's WAVE shapes time wavelands onto platforms, and the Wavedash and Everything presets turn those two timers on.
 
 How a window ends tells you where it was due. A hit flashes the gate white (on Highway the note burns white and a beam runs up the lane). A skip leaves the note in the gate or window in gray for a moment. A miss leaves it cracked in two. An early press on the JUMP lane says how early.
 

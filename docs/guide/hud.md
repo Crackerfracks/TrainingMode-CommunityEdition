@@ -14,7 +14,7 @@ The HUD menu, in menu order.
 | --- | --- | --- | --- |
 | Controller | By Percent, Bottom Left, Bottom Right, Off | By Percent | Shows your real stick, the band where Melee reads an axis as zero (the [deadzone](glossary.md#deadzone)), a trail of the last frames, and the fastfall line (lit when a flick would [fastfall](glossary.md#fastfall)). By Percent puts it beside your percent display. |
 | Controller Look | Ring, Crest, Classic | Ring | Ring: the whole controller in a small ellipse, with L and R as its halves, filling into their nubs. Crest: a shield with L and R as its wings. Classic: the wider block with trigger bars. |
-| Controller Size | Small, Medium, Large | Small | How big the Ring look is. Small takes the same room as TM-CE's own controller display. |
+| Controller Size | Small, Medium, Large | Medium | How big the Ring look is. Small takes the same room as TM-CE's own controller display. |
 | Buttons and Triggers | Off, On | On | Shows the buttons, triggers and C-stick too, in the controller's own colors. |
 | Controller Cues | Off, Closing Ring, Gauge | Off | Shows the button an AI or waveland window wants, timed on the controller: a ring closing in on it, or a gauge going round it. It is never filled, so it cannot pass for a press. Needs Buttons and Triggers. |
 | Shield Drop Zone | Off, On | On | Shades the stick angles that drop through a platform out of shield, inside the stick octagon. Shown while you are on a platform. |

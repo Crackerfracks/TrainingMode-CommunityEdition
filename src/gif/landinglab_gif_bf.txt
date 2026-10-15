@@ -510,17 +510,17 @@ land 120
 mark clip cam-advanced out
 
 # Presets: the same jump under each built-in.
-script preset-minimal
-preset load Minimal
+script preset-quiet
+preset load Quiet
 set Jump/Show = 1
 start -50 27.2 right
 90
-sync preset-minimal
-mark clip preset-minimal in
+sync preset-quiet
+mark clip preset-quiet in
 15
 follow 70 s:1,0
 30
-mark clip preset-minimal out
+mark clip preset-quiet out
 
 script preset-ledgedrill
 preset load Ledge Drill

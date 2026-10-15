@@ -17,7 +17,7 @@ The Paths menu, in menu order.
 | Ledge Route | Off, On | On | While you hang on a ledge and on the way back, draws the chosen route's path. Shown with Show Routes or Assist on in Ledge Practice. Jump Timing's path has its own toggle there. |
 | Input Markers | Off, On | On | Marks the inputs along the path where each is due, and which aerials interrupt. White: stick. Yellow: jump. Pink: aerial (the C-stick directions that work light up). Cyan: airdodge. A marker brightens over the last frames before its press, and on the press it fills with its color in a white frame. |
 | Window Bands | Off, On | On | Shades the stretch of the path where a press works: cyan for a [perfect waveland](glossary.md#perfect-waveland)'s airdodge, pink for an [AI](glossary.md#aerial-interrupt-ai)'s aerial. Your feet are in it on those frames. |
-| Marker Size | Small, Medium, Large | Medium | How big the input markers and the aerial picker are. |
+| Marker Size | Small, Medium, Large | Small | How big the input markers and the aerial picker are. |
 | Frame Dots | Frame Advance, Always, Off | Always | A small ring on the paths at every frame. Closer rings mean slower movement. Shown only during [Frame Advance](glossary.md#frame-advance) (always on ledge routes), always, or never. |
 | Slide-off Line | Off, On | Off | When a waveland or wavedash would slide off the edge, draws where you go: full stick that way until it starts, then your real stick. |
 | Jump Preview | Both, Full hop, Short hop, Off | Off | On the ground, shows where a [full hop and a short hop](glossary.md#short-hop-and-full-hop) would go if you jumped now, holding the stick where it is. |

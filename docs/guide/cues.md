@@ -14,7 +14,7 @@ The Cues menu, in menu order.
 | --- | --- | --- | --- |
 | NIL Cues | Off, On | Off | Green cue. Marks where holding the stick lands you with no landing lag (a NIL). |
 | AI Cues | Off, On | On | Pink cue. Marks where pressing an aerial lands you (an aerial interrupt). The path shows where, with arrows for the aerials that work there. |
-| Waveland Cues | Off, Platforms, All Floors | All Floors | Cyan cue. Marks when an airdodge just below sideways lands at once with full speed (a [perfect waveland](glossary.md#perfect-waveland)), and the [wavedash](glossary.md#wavedash) out of a jump. Platforms leaves out wavelands onto the main floor. |
+| Waveland Cues | Off, Platforms, All Floors | Platforms | Cyan cue. Marks when an airdodge just below sideways lands at once with full speed (a [perfect waveland](glossary.md#perfect-waveland)), and the [wavedash](glossary.md#wavedash) out of a jump. Platforms leaves out wavelands onto the main floor. |
 | AI Filter | Useful, All | Useful | Useful shows only aerial interrupts that land while you're still rising, save 4 frames or more, and land without the aerial's landing lag. All shows every one, falling ones included. |
 | AI Aerial | Any, Nair, Fair, Bair, Uair, Dair | Any | Counts down to one aerial's window only. Any uses the aerial that works on the most frames. With the stick held in, A is a fair, not a nair, and its window can be shorter. |
 | Body Flash | Off, On | On | Flashes you in the cue's color on the first frame you can act after a hit. Tints you periwinkle while you keep [ledge intangibility](glossary.md#ledge-intangibility). |
@@ -29,13 +29,14 @@ This is the legend the main menu's Help row shows in game.
 
 | Color | Means |
 | --- | --- |
-| Green | NIL |
+| Yellow | A jump |
 | Pink | Aerial interrupt |
+| Green | NIL |
 | Cyan | Waveland and wavedash |
 | Periwinkle | GALINT |
 | Slate | Missed |
 
-In the Fixed Strip's Cells look, solid cells are the frames to press on, hollow cells are the frames you [touch down](glossary.md#touchdown), and the white gate marks the frame to press now. The other looks are explained in [Timers](timers.md).
+In the Fixed Strip's Cells look, solid cells are the frames to press on, hollow cells are the frames you [touch down](glossary.md#touchdown), and the white gate marks the frame to press now. In the Conveyor and Highway looks the notes differ in shape as well as color: a jump has a tab, an AI is solid, a NIL is notched, a waveland or wavedash is hollow. The other looks are explained in [Timers](timers.md).
 
 ## How to read it
 

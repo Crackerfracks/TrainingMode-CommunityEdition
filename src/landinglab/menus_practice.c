@@ -256,16 +256,14 @@ static EventOption Options_Jump[JOPT_COUNT] = {
     },
     {
         .kind = OPTKIND_TOGGLE,
-        .name = "Plan Text",
-        .val = 1,
+        .name = "Plan Text", // off by default: the plan text was self-defeating (Stephen, 0.8.6)
         .desc = {"Spell the shown jump out in the info panel, as",
                  "in \"DJ up in 6f, nair +11-13: AI\"."},
     },
 #ifdef LL_GROUND_GUIDE
     {
         .kind = OPTKIND_TOGGLE,
-        .name = "Takeoff Bands",
-        .val = 1,
+        .name = "Takeoff Bands", // off by default: jump timing's furniture, not the AIs'
         .desc = {"On the ground: strips under the floor where a",
                  "hop (and a double jump) can start and still land",
                  "an AI, NIL or waveland on the platform above.",
@@ -273,8 +271,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
     },
     {
         .kind = OPTKIND_TOGGLE,
-        .name = "Reach Marks",
-        .val = 1,
+        .name = "Reach Marks", // likewise off by default
         .desc = {"On the ground: each platform lights the stretch a",
                  "hop from here can land on, brighter where more",
                  "timings work. Short hop nearer the surface."},

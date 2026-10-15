@@ -64,10 +64,10 @@ The ISO isn't NTSC 1.02. A clean NTSC 1.02 ISO has the MD5 `0e63d4223b01d9aba596
 
 1. Event Mode → **Character-specific Tech** → **Landing Gear** (the last event on the page). Pick anyone; Captain Falcon is the example here. Pick Battlefield.
 2. Run off the left platform and double jump toward the top one.
-3. A pink strip of frame cells appears in the corner. When a solid cell reaches the white gate, press A.
+3. A belt appears in the corner and a pink note travels down it. When the note reaches the white window at the bottom, press A.
 4. You land on the top platform on the frame you pressed. That's an aerial interrupt.
 
-Miss it and the strip turns slate blue. Do it again. That's the whole event. The other 24,000 lines are for doing it in more places.
+Miss it and the note turns slate blue. Do it again. That's the whole event. The other 24,000 lines are for doing it in more places.
 
 <!-- <img src="docs/media/first-minute.gif" width="480"> (first-minute, Battlefield: run off the left platform, double jump, nair AI onto the top platform, at defaults) -->
 
@@ -78,11 +78,11 @@ Landing Gear simulates where your fighter's ECB is headed and marks what's possi
 | Effect | What you see | On at start |
 | --- | --- | --- |
 | [AI cues](docs/guide/cues.md) | A pink timer counting down to the frame an aerial lands you early | Yes |
-| [Waveland cues](docs/guide/cues.md) | A cyan timer for a perfect waveland onto a platform or the floor, and for the wavedash out of a jump | Yes |
+| [Waveland cues](docs/guide/cues.md) | A cyan timer for a perfect waveland onto a platform or the floor, and for the wavedash out of a jump | Platforms only |
 | [NIL cues](docs/guide/cues.md) | A green timer for a landing with no landing lag at all | No |
-| [Timers](docs/guide/timers.md) | The Fixed Strip in a corner, as Cells, a Highway, a Dial or a Conveyor; or Near You, riding with your fighter | Cells |
+| [Timers](docs/guide/timers.md) | The Fixed Strip in a corner, as Cells, a Highway, a Dial or a Conveyor; or Near You, riding with your fighter | Conveyor |
 | [Spot timers](docs/guide/cues.md#spot-cues) | Brackets closing in on the landing spot itself | Yes |
-| [Wavedash timer](docs/guide/timers.md) | A WD lane in the strip, pips under your feet or a ring on the floor, counting out of the jumpsquat | Cells |
+| [Wavedash timer](docs/guide/timers.md) | A WD lane in the strip, pips under your feet or a ring on the floor, counting out of the jumpsquat | No |
 | [Paths](docs/guide/paths.md) | Where your ECB and body will go, with dots per frame, input markers and shaded bands where a press works | Markers, dots, bands and the ledge route |
 | [Controller](docs/guide/hud.md) | Your real stick and buttons beside your percent, optionally with a ring closing on the button to press | Yes, cues off |
 | [Jump Timing](docs/guide/jump-timing.md) | In a fall, when to double jump to set up an AI or NIL; on the ground, what a hop leads to | No |
@@ -131,10 +131,11 @@ Hold L or R all the way down and press D-pad up or down: the quick menu opens ov
 
 | Preset | For |
 | --- | --- |
-| Defaults | AI and waveland cues, the Fixed Strip, landing-spot brackets, the controller. Where everyone should start. |
-| Minimal | The AI cue and the Fixed Strip. Waveland cues, the landing spot, the waveland and wavedash timers, frame dots, the controller and the info panel go off. For when you mostly have it and want the screen back. |
-| Everything | Every cue, path, timer and sound with a plain on switch. For screenshots, and for seeing what 0.6.5 looked like. |
+| Defaults | Your character's AI cues on a Conveyor, landing-spot brackets, waveland cues onto platforms, the controller beside your percent, the info panel. Where everyone should start. |
+| Quiet | The AI cue with nothing fixed on screen: no strip, no controller, no info panel, no waveland cues. The landing spot, the aerial picker and Body Flash stay. For when you mostly have it and want the screen back. |
+| Wavedash | Waveland cues on every floor, the waveland timer, wavedash pips under your feet, Platform Glow, the slide-off line and a closing ring on the controller. The AI cues go off. |
 | Ledge Drill | Ledge routes of both kinds, back to the same ledge after every try. |
+| Everything | Every cue, path and timer with a plain on switch, Near You as Pincers, Jump Timing on. For screenshots and for exploring. |
 | Preset 1 to 4, User Custom | Yours, saved to the memory card. |
 
 <!-- <img src="docs/media/quick-menu.gif" width="480"> (by pad, Battlefield: quick menu open over a frozen jump, flip a card, play out with the stick) -->

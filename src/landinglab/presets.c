@@ -36,7 +36,7 @@ typedef struct PresetSlot
 } PresetSlot;
 
 #define PRESET_MAGIC 0x4C4C5052 // "LLPR"
-#define PRESET_VERSION 3
+#define PRESET_VERSION 4 // 4: the built-in presets were reordered (see Card_Load)
 #define NAME_LEN 12   // letters in a view's or preset's name
 #define VIEW_POOL 48  // views kept, all stages together
 typedef struct OldView // version 2's, one set for every stage
@@ -239,63 +239,82 @@ typedef struct PresetSet
     s16 val;
 } PresetSet;
 
-// The AI cue and the corner strip, nothing else on screen
-static const PresetSet preset_minimal[] = {
-    {&Options_Cues[COPT_NIL], 0},
-    {&Options_Cues[COPT_AI], 1},
+// AIs with nothing fixed on screen, for just playing: the landing spot, the
+// aerial picker and the body flash
+static const PresetSet preset_quiet[] = {
     {&Options_Cues[COPT_WL], 0},
-    {&Options_Cues[COPT_GLOW], 0},
     {&Options_Timers[TOPT_NEAR], NEAR_OFF},
-    {&Options_Timers[TOPT_STRIP], STRIP_CELLS},
-    {&Options_Timers[TOPT_SPOT], 0},
-    {&Options_Timers[TOPT_WL], WLT_OFF},
-    {&Options_Timers[TOPT_WD], WDT_OFF},
-    {&Options_Paths[POPT_PATH], 0},
-    {&Options_Paths[POPT_BODY], 0},
-    {&Options_Paths[POPT_TICKS], 2},
-    {&Options_Paths[POPT_SLIDEOFF], 0},
-    {&Options_Paths[POPT_PREVIEW], PREVIEW_OFF},
-    {&Options_Hud[HOPT_STICK], 3},
+    {&Options_Timers[TOPT_STRIP], STRIP_OFF},
+    {&Options_Timers[TOPT_SPOT], 1},
+    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Hud[HOPT_STICK], STICK_OFF},
     {&Options_Hud[HOPT_PANEL], 0},
+    {&Options_Sounds[SOPT_CHIME], 1},
 };
 
-// Every cue, path, timer and sound
-static const PresetSet preset_everything[] = {
-    {&Options_Cues[COPT_NIL], 1},
-    {&Options_Cues[COPT_AI], 1},
+// Wavelands and wavedashes, timed at the feet (Stephen asked for a wavedash
+// timer: this is where it lives)
+static const PresetSet preset_wavedash[] = {
+    {&Options_Cues[COPT_NIL], 0},
+    {&Options_Cues[COPT_AI], 0},
     {&Options_Cues[COPT_WL], 2},
-    {&Options_Cues[COPT_FLASH], 1},
     {&Options_Cues[COPT_GLOW], 1},
-    {&Options_Timers[TOPT_NEAR], NEAR_BUBBLE},
-    {&Options_Timers[TOPT_STRIP], STRIP_CELLS},
-    {&Options_Timers[TOPT_SPOT], 1},
+    {&Options_Timers[TOPT_STRIP], STRIP_CONVEYOR},
     {&Options_Timers[TOPT_WL], WLT_TICKS},
-    {&Options_Timers[TOPT_WD], WDT_CELLS},
-    {&Options_Paths[POPT_PATH], 1},
-    {&Options_Paths[POPT_BODY], 1},
-    {&Options_Paths[POPT_ROUTE], 1},
-    {&Options_Paths[POPT_INPUTS], 1},
-    {&Options_Paths[POPT_TICKS], 1},
+    {&Options_Timers[TOPT_WD], WDT_PIPS},
     {&Options_Paths[POPT_SLIDEOFF], 1},
-    {&Options_Paths[POPT_PREVIEW], 0},
-    {&Options_Hud[HOPT_STICK], 0},
-    {&Options_Hud[HOPT_PANEL], 1},
-    {&Options_Sounds[SOPT_SKIP], 1},
-    {&Options_Sounds[SOPT_FF], 1},
-    {&Options_Sounds[SOPT_JUMP], 1},
-    {&Options_Sounds[SOPT_AERIAL], 1},
+    {&Options_Hud[HOPT_PAD_CUES], PADCUE_RING},
 };
 
 // Ledge routes from the ledge, both kinds, reset to the same ledge each time
 static const PresetSet preset_ledge[] = {
     {&Options_Ledge[LOPT_ROUTES], 1},
     {&Options_Ledge[LOPT_KIND], ROUTES_BOTH},
-    {&Options_Ledge[LOPT_START], 0},
-    {&Options_Ledge[LOPT_RESET], 1},
-    {&Options_Paths[POPT_ROUTE], 1},
-    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Ledge[LOPT_START], START_LEDGE},
+    {&Options_Ledge[LOPT_RESET], RESET_SAME},
+    {&Options_Ledge[LOPT_DELAY], 1},
     {&Options_Cues[COPT_NIL], 1},
     {&Options_Cues[COPT_AI], 1},
+    {&Options_Cues[COPT_WL], 0},
+    {&Options_Paths[POPT_ROUTE], 1},
+    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Paths[POPT_TICKS], 1},
+    {&Options_Timers[TOPT_STRIP], STRIP_CONVEYOR},
+    {&Options_Sounds[SOPT_ROUTE_CHIME], 1},
+    {&Options_Sounds[SOPT_LOST], 1},
+};
+
+// Every cue and path, to explore with, not to play with: Pincers, which read
+// best and never cover the body, no body path or jump previews, and the
+// frame dots only in Frame Advance
+static const PresetSet preset_everything[] = {
+    {&Options_Cues[COPT_NIL], 1},
+    {&Options_Cues[COPT_AI], 1},
+    {&Options_Cues[COPT_WL], 2},
+    {&Options_Cues[COPT_FLASH], 1},
+    {&Options_Cues[COPT_GLOW], 1},
+    {&Options_Timers[TOPT_NEAR], NEAR_PINCERS},
+    {&Options_Timers[TOPT_STRIP], STRIP_CONVEYOR},
+    {&Options_Timers[TOPT_SPOT], 1},
+    {&Options_Timers[TOPT_WL], WLT_TICKS},
+    {&Options_Timers[TOPT_WD], WDT_CELLS},
+    {&Options_Paths[POPT_PATH], 1},
+    {&Options_Paths[POPT_BODY], 0},
+    {&Options_Paths[POPT_ROUTE], 1},
+    {&Options_Paths[POPT_INPUTS], 1},
+    {&Options_Paths[POPT_WINDOWS], 1},
+    {&Options_Paths[POPT_TICKS], 0},
+    {&Options_Paths[POPT_SLIDEOFF], 1},
+    {&Options_Paths[POPT_PREVIEW], PREVIEW_OFF},
+    {&Options_Jump[JOPT_SHOW], 1},
+    {&Options_Jump[JOPT_PATH], 1},
+#ifdef LL_GROUND_GUIDE
+    {&Options_Jump[JOPT_BANDS], 1},
+    {&Options_Jump[JOPT_MARKS], 1},
+#endif
+    {&Options_Hud[HOPT_STICK], STICK_PERCENT},
+    {&Options_Hud[HOPT_PANEL], 1},
+    {&Options_Sounds[SOPT_SKIP], 1},
 };
 
 static void Preset_Build(PresetSlot *s, PresetSlot *base, const PresetSet *set, int n)
@@ -332,7 +351,9 @@ static void Preset_Describe(int which)
     if (wl)
         t += sprintf(t, "%s waveland", n++ ? "," : "");
     if (!n)
-        sprintf(t, " none");
+        t += sprintf(t, " none");
+    // the biggest difference on screen between two cards
+    sprintf(t, ". Jump timing %s", Preset_Value(s, &Options_Jump[JOPT_SHOW]) ? "on" : "off");
 
     int near = Preset_Value(s, &Options_Timers[TOPT_NEAR]), strip = Preset_Value(s, &Options_Timers[TOPT_STRIP]);
     t = preset_desc[1];
@@ -414,9 +435,10 @@ static void Presets_Init(void)
     preset_file->start = PS_USER;
     PresetSlot *def = &preset_builtin[PS_DEFAULTS - PS_SAVED];
     Preset_Capture(def);
-    Preset_Build(&preset_builtin[PS_MINIMAL - PS_SAVED], def, preset_minimal, countof(preset_minimal));
-    Preset_Build(&preset_builtin[PS_EVERYTHING - PS_SAVED], def, preset_everything, countof(preset_everything));
+    Preset_Build(&preset_builtin[PS_QUIET - PS_SAVED], def, preset_quiet, countof(preset_quiet));
+    Preset_Build(&preset_builtin[PS_WAVEDASH - PS_SAVED], def, preset_wavedash, countof(preset_wavedash));
     Preset_Build(&preset_builtin[PS_LEDGE - PS_SAVED], def, preset_ledge, countof(preset_ledge));
+    Preset_Build(&preset_builtin[PS_EVERYTHING - PS_SAVED], def, preset_everything, countof(preset_everything));
     Options_Presets[PROPT_START].val = PS_USER;
     Labels_Refresh();
     Preset_Describe(Options_Presets[PROPT_PICK].val);

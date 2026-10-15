@@ -139,7 +139,7 @@ static EventOption Options_Cues[COPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Waveland Cues",
-        .val = 2,
+        .val = 1, // Platforms: a waveland onto one is the AI's rival choice; main-floor ones are the Wavedash preset's
         .value_num = countof(wl_cue_names),
         .values = wl_cue_names,
         .desc = {"Cyan: when an airdodge just below sideways lands",
@@ -275,7 +275,7 @@ static EventOption Options_Paths[POPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Marker Size",
-        .val = 1,
+        .val = 0, // Small: at Medium the pickers were as big as the torso
         .value_num = countof(mark_size_names),
         .values = mark_size_names,
         .desc = {"How big the input markers and the aerial",
@@ -307,7 +307,7 @@ static EventOption Options_Paths[POPT_COUNT] = {
         .values = preview_names,
         .desc = {"On the ground, show where a full hop and a short",
                  "hop would go if you jumped now, holding the stick",
-                 "where it is."},
+                 "where it is. The short hop's path is dashed."},
     },
 };
 
@@ -345,13 +345,13 @@ static EventOption Options_Timers[TOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Fixed Strip",
-        .val = STRIP_CELLS,
+        .val = STRIP_CONVEYOR, // his favorite, and always visible (Stephen, 0.9.10)
         .value_num = countof(strip_names),
         .values = strip_names,
         .desc = {"A countdown in a corner. Cells slide into a gate,",
-                 "Highway drops notes into a window, Dial sweeps a",
-                 "hand in, Conveyor carries every cue on one moving",
-                 "belt. Press as it arrives."},
+                 "Dial sweeps a hand in. Highway and Conveyor (one",
+                 "moving belt) send notes: yellow tab JUMP, pink",
+                 "solid AI, green notched NIL, cyan hollow WAVE."},
     },
     {
         .kind = OPTKIND_TOGGLE,
@@ -370,7 +370,7 @@ static EventOption Options_Timers[TOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Waveland",
-        .val = WLT_TICKS,
+        .val = WLT_OFF, // the Conveyor's WAVE lane times platform wavelands; ticks are for the Wavedash preset
         .value_num = countof(wl_timer_names),
         .values = wl_timer_names,
         .desc = {"At the slide: ticks run in from its ends and",
@@ -381,7 +381,7 @@ static EventOption Options_Timers[TOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Wavedash",
-        .val = WDT_CELLS,
+        .val = WDT_OFF, // it adds a WAVE note on every jumpsquat: the Wavedash preset has it
         .value_num = countof(wd_timer_names),
         .values = wd_timer_names,
         .desc = {"Out of the jumpsquat: a row in the strips, a pip",
@@ -450,6 +450,7 @@ static EventOption Options_Hud[HOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Controller Size",
+        .val = 1, // Medium (Stephen, 0.6: big, always visible)
         .value_num = countof(mark_size_names),
         .values = mark_size_names,
         .desc = {"How big the Ring look is. Small takes the same",
@@ -687,15 +688,16 @@ enum preset_slot
     PS_4,
     PS_SAVED, // the ones above are on the card, the ones from here built in
     PS_DEFAULTS = PS_SAVED,
-    PS_MINIMAL,
-    PS_EVERYTHING,
+    PS_QUIET,
+    PS_WAVEDASH,
     PS_LEDGE,
+    PS_EVERYTHING,
 
     PS_COUNT
 };
 static char preset_label[PS_SAVED][20]; // Preset 1 to 4, or their names
 static const char *preset_names[PS_COUNT] = {"User Custom", preset_label[1], preset_label[2], preset_label[3], preset_label[4],
-                                             "Defaults", "Minimal", "Everything", "Ledge Drill"};
+                                             "Defaults", "Quiet", "Wavedash", "Ledge Drill", "Everything"};
 static char preset_desc[3][52];      // the chosen preset's settings, in short
 static char preset_card_desc[3][52]; // what the memory card is doing
 
@@ -732,8 +734,8 @@ static EventOption Options_Presets[PROPT_COUNT] = {
         .name = "Save to Preset",
         .desc = {"Keep the current settings in the preset above:",
                  "User Custom or Preset 1 to 4. Defaults,",
-                 "Minimal, Everything and Ledge Drill are built",
-                 "in and stay as they are."},
+                 "Quiet, Wavedash, Ledge Drill and Everything are",
+                 "built in and stay as they are."},
         .OnSelect = Event_PresetSave,
     },
     {
@@ -873,10 +875,10 @@ static EventOption Options_Main[OPT_COUNT] = {
     {
         .kind = OPTKIND_INFO,
         .name = "Help",
-        .desc = {"Green NIL, pink AI, cyan waveland. Solid cells:",
-                 "press. Hollow: touchdown. Periwinkle: GALINT.",
-                 "White gate: press now. Slate: missed. Short hop",
-                 "path dashed, body path dotted."},
+        .desc = {"Yellow jump, pink AI, green NIL, cyan waveland.",
+                 "Conveyor and Highway notes: tab, solid, notched,",
+                 "hollow. Cells: hollow is touchdown. Periwinkle:",
+                 "GALINT. White gate: press now. Slate: missed."},
     },
     {
         .kind = OPTKIND_FUNC,

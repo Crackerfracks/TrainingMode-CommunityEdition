@@ -144,6 +144,17 @@ static void Card_Load(void)
                 {
                     memset(preset_file, 0, sizeof(PresetFile));
                     memcpy(preset_file, &img->file, size);
+                    // Version 4 added Wavedash to the built-in presets and
+                    // moved Everything to the end. A start preset saved
+                    // before it keeps pointing at the same one: slot 7 was
+                    // Everything, and is Wavedash now. Minimal's slot is
+                    // Quiet's, and the rest stayed. Saved presets keep their
+                    // settings by name, so they need nothing.
+                    if (preset_file->version < 4 && preset_file->start == PS_WAVEDASH)
+                    {
+                        preset_file->start = PS_EVERYTHING;
+                        preset_dirty = 1; // written again as version 4
+                    }
                     if (preset_file->version < PRESET_VERSION)
                         preset_file->version = PRESET_VERSION;
                     ok = 1;

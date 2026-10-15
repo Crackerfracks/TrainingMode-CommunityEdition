@@ -20,6 +20,8 @@ static int Dial_Target(int kind)
 // o'clock, and the hand sweeps clockwise a frame at a time into it, with
 // ticks for the last six frames. A hand more than 21 frames out waits
 // hidden. The ledge intangibility after the wedge is a band on the rim.
+// Bolder than it was: a plate, rim and hand that read on a dark stage
+// (visual audit, 2026-10-15: thin dark faces, 1-2 px hands).
 static void Dial_One(MeterRow *r, float cx, float cy)
 {
     float R = DL_R, dim = r->dim ? 0.5f : 1.f;
@@ -40,8 +42,8 @@ static void Dial_One(MeterRow *r, float cx, float cy)
             tail++;
     }
 
-    Dial_Fan(cx, cy, R + 0.35f, 0, 360, Color_Fill(color_plate, 0.8f));
-    Dial_Band(cx, cy, R - 0.05f, R + 0.05f, 0, 360, Color_Over(color_white, 0.2f * dim));
+    Dial_Fan(cx, cy, DL_CELL / 2, 0, 360, Color_Fill(color_plate, 0.9f));
+    Dial_Band(cx, cy, R - 0.09f, R + 0.09f, 0, 360, Color_Over(color_white, 0.5f * dim));
 
     // the game's clock round the rim: a tick between every two frames,
     // heavier before every fifth. They hold still while a window waits,
@@ -52,8 +54,8 @@ static void Dial_One(MeterRow *r, float cx, float cy)
     {
         int five = (at - d) % 5 == 0;
         float deg = -d * DL_DEG, x0, y0, x1, y1;
-        Dial_Pt(cx, cy, R + 0.08f, deg, &x0, &y0);
-        Dial_Pt(cx, cy, R + (five ? 0.3f : 0.18f), deg, &x1, &y1);
+        Dial_Pt(cx, cy, R + 0.1f, deg, &x0, &y0);
+        Dial_Pt(cx, cy, R + (five ? 0.3f : 0.2f), deg, &x1, &y1);
         Hud_Seg(x0, y0, x1, y1, five ? 0.1f : 0.06f, Color_Over(color_white, (five ? 0.5f : 0.22f) * dim));
     }
 
@@ -67,7 +69,7 @@ static void Dial_One(MeterRow *r, float cx, float cy)
         if (span > 360.f)
             span = 360.f;
         GXColor wc = hot >= 2 && tone == TONE_CUE ? Color_Mix(col, color_white, 0.6f) : col;
-        Dial_Fan(cx, cy, R - 0.05f, 0, span, Color_Over(wc, (hot ? 1.f : 0.75f) * al));
+        Dial_Fan(cx, cy, R - 0.09f, 0, span, Color_Over(wc, (hot ? 1.f : 0.95f) * al));
         if (tail > 0 && span < 360.f)
         {
             float end = span + tail * DL_DEG;
@@ -81,17 +83,19 @@ static void Dial_One(MeterRow *r, float cx, float cy)
             float deg = (0.5f - d) * DL_DEG, x0, y0, x1, y1;
             Dial_Pt(cx, cy, R - 0.4f, deg, &x0, &y0);
             Dial_Pt(cx, cy, R, deg, &x1, &y1);
-            Hud_Seg(x0, y0, x1, y1, 0.1f, Color_Over(color_white, 0.6f * al));
+            Hud_Seg(x0, y0, x1, y1, 0.1f, Color_Over(color_white, 0.85f * al));
         }
 
-        // the hand, in the middle of its frame's slice
+        // the hand, in the middle of its frame's slice, past the rim: a
+        // white core in its color, over a dark halo
         if (a <= 21)
         {
             float deg = (r->spent - a + 0.5f) * DL_DEG, hx, hy;
-            Dial_Pt(cx, cy, R + 0.2f, deg, &hx, &hy);
+            Dial_Pt(cx, cy, R + 0.35f, deg, &hx, &hy);
             GXColor hc = tone == TONE_CUE ? Color_Mix(r->color, color_white, hot ? 1.f : 0.55f) : Tone_Color(r, tone);
-            Hud_Seg(cx, cy, hx, hy, 0.34f, Color_Over(color_plate, 0.5f * al));
-            Hud_Seg(cx, cy, hx, hy, 0.2f, Color_Over(hc, al));
+            Hud_Seg(cx, cy, hx, hy, 0.42f, Color_Over(color_plate, 0.6f * al));
+            Hud_Seg(cx, cy, hx, hy, 0.3f, Color_Over(hc, al));
+            Hud_Seg(cx, cy, hx, hy, 0.1f, Color_Over(color_white, 0.9f * al));
         }
     }
     if (r->implode >= 0)
@@ -111,24 +115,52 @@ static void Dial_One(MeterRow *r, float cx, float cy)
         Strip_Ending(r, cx, cy, R, R, 1.f, 1);
 }
 
-// The dial (Fixed Strip): a small dial for each row, side by side, the label
-// under it.
+// The dial (Fixed Strip): a dial a slot, side by side, its swatch under
+// it. Two rows in a slot (a hop and its double jump): the one due first,
+// the other's endings still played round it.
 static void Dial_Draw(FighterData *fp)
 {
     float x0, y0, w, h;
     Strip_Place(fp, STRIP_DIAL, &x0, &y0, &w, &h);
-    int right = x0 > 0; // counted from the screen's edge, like the highway's lanes
-    float base_k = vis_k;
-    for (int i = 0; i < meter_rows; i++)
+    // left to right in the slots' order, counted from the screen's edge like
+    // the highway's lanes, and the rest's past them toward the middle while
+    // it's used, so no dial moves (visual audit, 2026-10-15: there were 3 or
+    // 4, and AI moved from x 47 to 183)
+    int right = x0 > 0, slots = Slot_Shown();
+    float left = right ? x0 + w - STRIP_PAD - MT_SLOTS_SHOWN * DL_CELL : x0 + STRIP_PAD; // the four's
+    float cy = y0 + DL_LABEL + DL_R + 0.45f;
+    float base_k = vis_k, plate_k = Strip_PlateK();
+    for (int s = 0; s < slots; s++)
     {
-        MeterRow *r = &meter[i];
-        if (r->gap)
+        float cx = left + (s < MT_SLOTS_SHOWN ? s + 0.5f : right ? -0.5f : MT_SLOTS_SHOWN + 0.5f) * DL_CELL;
+        MeterRow *sr[2];
+        int m = Slot_Rows(s, sr);
+        if (m == 0)
+        {
+            // empty: a faint rim and a dot, no face
+            vis_k = base_k * plate_k;
+            Dial_Band(cx, cy, DL_R - 0.05f, DL_R + 0.05f, 0, 360, Color_Over(color_white, 0.18f));
+            Hud_Disc(cx, cy, 0.12f, Color_Over(color_white, 0.18f));
+            Slot_Swatch(s, 0, cx, y0 + 0.75f, 0.9f, 0.45f, SLOT_DIM);
             continue;
+        }
+        MeterRow *r = sr[0], *o = 0;
+        if (m > 1)
+        {
+            int ta = Row_FirstTarget(sr[0]), tb = Row_FirstTarget(sr[1]);
+            if (tb >= 0 && (ta < 0 || tb < ta))
+                r = sr[1];
+            o = r == sr[0] ? sr[1] : sr[0];
+        }
         vis_k = base_k * r->fade;
-        float off = STRIP_PAD + DL_R + 0.35f + i * DL_CELL;
-        float cx = right ? x0 + w - off : x0 + off, cy = y0 + DL_LABEL + DL_R + 0.45f;
         Dial_One(r, cx, cy);
-        Strip_Label(r, cx, y0 + 0.75f, DL_CELL - 0.5f);
+        if (o && !o->dim)
+        {
+            vis_k = base_k * o->fade;
+            Strip_Ending(o, cx, cy, DL_R, DL_R, 1.f, 1);
+        }
+        vis_k = base_k * r->fade;
+        Slot_Swatch(s, r, cx, y0 + 0.75f, s < MT_SLOTS_SHOWN ? 0.9f : 0.5f, 0.45f, 1.f);
     }
     vis_k = base_k;
 }
@@ -156,5 +188,5 @@ static void Meter_Fixed(FighterData *fp)
     }
     float gx, base;
     Strip_CellsAt(fp, &gx, &base);
-    Meter_Draw(gx, base, MT_FIXED, MT_FIXED_MAX, 1);
+    Meter_Draw(gx, base, MT_FIXED, Strip_CellsMax(gx, base), 1);
 }

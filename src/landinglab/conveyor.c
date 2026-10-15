@@ -13,30 +13,24 @@
 // width that moves a row a frame (Stephen, 0.9.10: the highway's lanes
 // stacked too wide, and the background should show the game's time
 // passing, like a fretboard). Notes on the same frame share its row, in a
-// fixed order by kind; a lone note takes the whole row. Kinds differ by
-// shape as well as color: a jump has a raised cap, an AI is solid, a NIL
-// notched, a waveland or wavedash hollow. A preload (a
+// fixed order by slot (Lane_Slot); a lone note takes the whole row. Kinds
+// differ by shape as well as color: a jump has a raised cap, an AI is
+// solid, a NIL notched, a waveland or wavedash hollow. A preload (a
 // plan from a press not made yet) hovers over the rows it will take, its
 // shadow on the belt, and sets down when the press comes. What's beyond the
 // belt's far end waits over its entry, lower the nearer it is.
-#define CV_W (2 * HW_LANE + HW_LANE_GAP)
 #define CV_SHELF 1.3f
 #define CV_LIFT 0.4f // a preload's hover: most of a frame (0.22 didn't read as lifted)
-#define CV_BASE 0.8f // under the window
-#define CV_KEY_PITCH 1.2f // the key's rows (0.8 overlapped)
+#define CV_FADE_FROM 22 // the belt's rows that fade: the plate, belt, rails and lines from here
+#define CV_NOTE_FROM 30 // ... the notes from here
+#define CV_SWATCH_W 0.55f // the key's swatches under the window
+#define CV_SWATCH_H 0.4f
+#define CV_SWATCH_GAP 0.3f
 
+// A row's kind, for its notes' shape and the key.
 static int Cv_Rank(MeterRow *r)
 {
-    const char *l = r->label;
-    if (Str_Same(l, "HOP") || Str_Same(l, "JUMP"))
-        return 0;
-    if (Str_Same(l, "AI"))
-        return 1;
-    if (Str_Same(l, "NIL"))
-        return 2;
-    if (Str_Same(l, "WL") || Str_Same(l, "WD"))
-        return 3;
-    return 4;
+    return Lane_Slot(r);
 }
 
 // Whether a cell takes a share of its row: notes do, the frames in the air
@@ -46,11 +40,11 @@ static int Cv_Claims(int kind)
     return kind == CELL_PRESS || kind == CELL_ACT || kind == CELL_LAND || kind == CELL_TAIL;
 }
 
-// The rows to draw, in the belt's order (kind, then lane), a preload last:
-// it takes the far share of each frame it's over.
-static int Cv_Place(MeterRow *r)
+// The rows to draw, in the belt's order (slot, then a slot's second row),
+// a preload last: it takes the far share of each frame it's over.
+static int Cv_Place(int i)
 {
-    return r->parked ? 9 : Cv_Rank(r);
+    return meter[i].parked ? 99 : (i % MT_SLOTS) * 2 + i / MT_SLOTS;
 }
 
 static int Cv_Order(int *order)
@@ -61,7 +55,7 @@ static int Cv_Order(int *order)
         if (meter[i].gap)
             continue;
         int j = n++;
-        while (j > 0 && Cv_Place(&meter[order[j - 1]]) > Cv_Place(&meter[i]))
+        while (j > 0 && Cv_Place(order[j - 1]) > Cv_Place(i))
         {
             order[j] = order[j - 1];
             j--;
@@ -176,46 +170,45 @@ static void Conveyor_Draw(FighterData *fp)
     Strip_Place(fp, STRIP_CONVEYOR, &x0, &y0, &w, &h);
     int right = x0 > 0;
     float glyph = Strip_Glyphs() ? HW_GLYPH : 0;
-    float glyph_x = right ? x0 + STRIP_PAD + glyph / 2 : x0 + w - STRIP_PAD - glyph / 2;
-    // the key on the side toward the screen's edge, the glyphs toward its middle
-    float bl = x0 + STRIP_PAD + (right ? glyph : CV_KEY), br = bl + CV_W;
-    float kx = right ? br + 0.5f : x0 + STRIP_PAD;
-    float line_y = y0 + CV_BASE, top = line_y + CV_ROWS * CV_PITCH;
+    // the belt on the side toward the screen's edge, the glyphs' column
+    // (always kept) toward its middle
+    float bl = x0 + STRIP_PAD + (right ? HW_GLYPH : 0), br = bl + CV_W;
+    float glyph_x = right ? x0 + STRIP_PAD + HW_GLYPH / 2 : br + HW_GLYPH / 2;
+    float line_y = y0 + CV_BASE, top = line_y + CV_ROWS * CV_PITCH, fade_y = line_y + CV_FADE_FROM * CV_PITCH;
     hw_pitch = CV_PITCH; // the window's frame is a row of the belt
-    float base_k = vis_k;
+    float base_k = vis_k, dim = Strip_Dim(fp);
     int now = event_vars->game_timer;
-    int order[MT_ROWS], n = Cv_Order(order);
+    int order[MT_LANES], n = Cv_Order(order);
 
-    // the plate and belt stay up, solid, while the strip is on, so the
-    // belt's motion is always there to read the notes' speed against
-    // (0.9.12's faded with the cues, and the stage showed through it)
-    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Over(color_plate, 0.95f));
-    Hud_Rect(bl, line_y, br, top, Color_Over(color_white, 0.07f));
+    // the plate and belt stay up while the strip is on, so the belt's
+    // motion is always there to read the notes' speed against (0.9.12's
+    // faded with the cues, and the stage showed through it). Its far end
+    // fades into the stage, and all of it fades back while Falcon is over
+    // it; the notes, window and endings don't (Strip_Dim)
+    Hud_RectFade(x0, y0, x0 + w, y0 + h, fade_y, top, color_plate, 0.85f * dim);
+    Hud_RectFade(bl, line_y, br, top, fade_y, top, color_white, 0.07f * dim);
     // the belt moves: a line between every two frames, a heavier one every
     // fifth frame of the game's clock, with studs on the rails, so they
-    // travel down a row each frame
-    for (int k = 1; k <= CV_ROWS; k++)
+    // travel down a row each frame (brighter: low contrast, visual audit
+    // 2026-10-15)
+    for (int k = 1; k < CV_ROWS; k++)
     {
-        float y = line_y + k * CV_PITCH;
+        float y = line_y + k * CV_PITCH, f = Track_Fade(k, CV_FADE_FROM, CV_ROWS) * dim;
         if ((now + k) % 5 == 0)
         {
-            Hud_Rect(bl, y - 0.09f, br, y + 0.09f, Color_Over(color_white, 0.42f));
-            if (k < CV_ROWS)
-            {
-                Hud_Rect(bl - 0.42f, y - 0.14f, bl - 0.16f, y + 0.14f, Color_Over(color_white, 0.5f));
-                Hud_Rect(br + 0.16f, y - 0.14f, br + 0.42f, y + 0.14f, Color_Over(color_white, 0.5f));
-            }
+            Hud_Rect(bl, y - 0.09f, br, y + 0.09f, Color_Over(color_white, 0.5f * f));
+            Hud_Rect(bl - 0.42f, y - 0.14f, bl - 0.16f, y + 0.14f, Color_Over(color_white, 0.5f * f));
+            Hud_Rect(br + 0.16f, y - 0.14f, br + 0.42f, y + 0.14f, Color_Over(color_white, 0.5f * f));
         }
         else
-            Hud_Rect(bl, y - PX / 2, br, y + PX / 2, Color_Over(color_white, 0.17f));
+            Hud_Rect(bl, y - PX / 2, br, y + PX / 2, Color_Over(color_white, 0.22f * f));
     }
-    Hud_Rect(bl - 0.12f, line_y, bl - 0.06f, top, Color_Over(color_white, 0.2f));
-    Hud_Rect(br + 0.06f, line_y, br + 0.12f, top, Color_Over(color_white, 0.2f));
-    Hud_Rect(bl - 0.2f, top, br + 0.2f, top + 0.08f, Color_Over(color_white, 0.35f)); // the entry's lip
+    Hud_RectFade(bl - 0.12f, line_y, bl - 0.06f, top, fade_y, top, color_white, 0.2f * dim);
+    Hud_RectFade(br + 0.06f, line_y, br + 0.12f, top, fade_y, top, color_white, 0.2f * dim);
 
     // the notes: each row's runs of frames that keep their share of the
     // belt, drawn whole, so a window reads as one note
-    int slot[MT_ROWS][CV_ROWS], cnt[CV_ROWS];
+    int slot[MT_LANES][CV_ROWS], cnt[CV_ROWS];
     for (int k = 0; k < CV_ROWS; k++)
     {
         cnt[k] = 0;
@@ -272,7 +265,7 @@ static void Conveyor_Draw(FighterData *fp)
             float y0 = line_y + k * CV_PITCH, y1 = line_y + (e + 1) * CV_PITCH;
             int lo = k > 0 && r->cell[k - 1] == kind && r->tone[k - 1] == r->tone[k];
             int hi = e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k];
-            vis_k = base_k * r->fade;
+            vis_k = base_k * r->fade * Note_Far(k, CV_NOTE_FROM, CV_ROWS);
             // where it will set down: a light outline on the belt under it
             // (a dark shadow was lost on the dark belt, 0.9.14 test)
             // (0.9.15 test: right under the note it was hidden, so the note
@@ -288,8 +281,9 @@ static void Conveyor_Draw(FighterData *fp)
         }
     }
 
-    // over the entry: each row's next note past the far end, waiting
-    int wait[MT_ROWS], wk[MT_ROWS], q = 0;
+    // over the entry: each row's next note past the far end, waiting, as
+    // dim as a note coming in (floating ghosts, over a plate faded out)
+    int wait[MT_LANES], wk[MT_LANES], q = 0;
     for (int j = 0; j < n; j++)
     {
         MeterRow *r = &meter[order[j]];
@@ -303,7 +297,7 @@ static void Conveyor_Draw(FighterData *fp)
     for (int j = 0; j < q; j++)
     {
         MeterRow *r = &meter[wait[j]];
-        vis_k = base_k * r->fade * 0.8f;
+        vis_k = base_k * r->fade * 0.8f * NOTE_FAR;
         float share = (CV_W - 0.3f) / q;
         float sx0 = bl + 0.15f + j * share + 0.1f, sx1 = sx0 + share - 0.2f;
         int far = wk[j] - CV_ROWS;
@@ -315,17 +309,19 @@ static void Conveyor_Draw(FighterData *fp)
     for (int j = 0; j < n; j++)
     {
         MeterRow *r = &meter[order[j]];
-        vis_k = base_k * r->fade;
         float lift = Cv_Lift(r);
         for (int k = 0; k < r->len && k < CV_ROWS; k++)
+        {
+            vis_k = base_k * r->fade * Note_Far(k, CV_NOTE_FROM, CV_ROWS);
             if (r->glyph[k])
                 Glyph_Draw(r->glyph[k], glyph_x, line_y + (k + 0.5f) * CV_PITCH + lift, 0.3f,
                            Color_Fill(color_white, 0.95f * (r->dim ? 0.5f : 1.f)));
+        }
     }
 
     // the window: one across the belt, lit by the hottest row due, each
     // row's ending in its share
-    int at[MT_ROWS], e = 0, hot = -1;
+    int at[MT_LANES], e = 0, hot = -1;
     for (int j = 0; j < n; j++)
     {
         MeterRow *r = &meter[order[j]];
@@ -369,28 +365,21 @@ static void Conveyor_Draw(FighterData *fp)
     if (tr > 0)
         Hud_Rect(br + 0.2f, my - 0.06f, br + 0.12f + tr, my + 0.06f, sc);
 
-    // the key beside the belt: every kind in its own place, lit while
-    // one is up (Stephen, 0.9.10: no time to read words under the belt;
-    // the colors do the work, the key is there to learn them)
-    static const char *key_label[4] = {"JUMP", "AI", "NIL", "WAVE"}; // no wider than JUMP (WL/WD ran into the belt)
-    static const char *key_rank[4] = {"JUMP", "AI", "NIL", "WL"};
-    GXColor key_color[4] = {color_in_jump, land_kind_colors[LAND_AI], land_kind_colors[LAND_NIL],
-                            land_kind_colors[LAND_PERFECT_WL]};
-    for (int i = 0; i < 4; i++)
+    // the key under the window: every kind's swatch in the slots' order,
+    // lit while one is on the belt, no words (Stephen, 0.9.10: no time to
+    // read words; the colors do the work, the key is there to learn them.
+    // Visual audit, 2026-10-15: its words overlapped the belt and widened
+    // the strip)
+    float kx = (bl + br) / 2 - (MT_SLOTS_SHOWN * CV_SWATCH_W + (MT_SLOTS_SHOWN - 1) * CV_SWATCH_GAP) / 2;
+    for (int i = 0; i < MT_SLOTS_SHOWN; i++)
     {
         int on = 0;
         for (int j = 0; j < n; j++)
             if (Cv_Rank(&meter[order[j]]) == i)
                 on = 1;
-        MeterRow sw = {0};
-        sw.color = key_color[i];
-        strcpy(sw.label, key_rank[i]);
-        float y = top - 0.6f - i * CV_KEY_PITCH; // a line of ST_TEXT apart
-        vis_k = base_k * (on ? 1.f : 0.55f);
-        Cv_Note(&sw, CELL_PRESS, TONE_CUE, 1.f, kx, y - 0.22f, kx + 0.55f, y + 0.22f, 0, 0);
-        GXColor tc = Color_Mix(key_color[i], color_white, 0.35f);
-        tc.a = 255;
-        Hud_TextAligned(key_label[i], kx + 0.75f, Text_MidY(y, ST_TEXT), ST_TEXT, tc, 0);
+        vis_k = base_k;
+        Slot_Swatch(i, 0, kx + CV_SWATCH_W / 2 + i * (CV_SWATCH_W + CV_SWATCH_GAP), y0 + 0.65f, CV_SWATCH_W, CV_SWATCH_H,
+                    on ? 1.f : SLOT_DIM);
     }
     vis_k = base_k;
     hw_pitch = HW_PITCH;

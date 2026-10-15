@@ -119,18 +119,51 @@ static void Strip_Ending(MeterRow *r, float cx, float cy, float hw, float hh, fl
     }
 }
 
-// One lane of the highway: its cells as notes, a cell a frame up from the
-// hit line.
-static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
+// The highway's and conveyor's far end fades into the stage, so their
+// height (the lead, Stephen 0.9.19) isn't a wall (visual audit,
+// 2026-10-15). Their plate, lanes and lines go from whole at row from to
+// nothing at row to; a note there only dims, to NOTE_FAR, so one coming in
+// is dim, not gone.
+#define NOTE_FAR 0.6f
+
+static float Track_Fade(float row, float from, float to)
 {
-    float rx = lx + HW_LANE, in = 0.15f, top = line_y + HW_ROWS * HW_PITCH;
-    float dim = r->dim ? 0.5f : 1.f;
+    return 1.f - Clamp01((row - from) / (to - from));
+}
+
+static float Note_Far(float row, float from, float to)
+{
+    return 1.f - (1.f - NOTE_FAR) * Clamp01((row - from) / (to - from));
+}
+
+// A rect of c at alpha a up to fy0, fading from there to nothing at fy1.
+static void Hud_RectFade(float x0, float y0, float x1, float y1, float fy0, float fy1, GXColor c, float a)
+{
+    if (y0 < fy0)
+        Hud_Rect(x0, y0, x1, y1 < fy0 ? y1 : fy0, Color_Over(c, a));
+    float lo = y0 > fy0 ? y0 : fy0, hi = y1 < fy1 ? y1 : fy1;
+    if (hi <= lo)
+        return;
+    float ka = 1.f - (lo - fy0) / (fy1 - fy0), kb = 1.f - (hi - fy0) / (fy1 - fy0);
+    Quad_Add2(x0, lo, x1, lo, x1, hi, x0, hi, Color_Over(c, a * ka), Color_Over(c, a * kb));
+}
+
+#define HW_FADE_FROM 14 // the highway's rows that fade: the plate and lines from here
+#define HW_NOTE_FROM 20 // ... the notes from here
+
+// One lane of the highway, lx to rx: its cells as notes, a cell a frame up
+// from the hit line. o is the slot's other row, if any: this one's frames
+// in the air don't cross its notes.
+static void Hw_Lane(MeterRow *r, MeterRow *o, float glyph_x, float lx, float rx, float line_y)
+{
+    float in = 0.15f, top = line_y + HW_ROWS * HW_PITCH;
+    float dim = r->dim ? 0.5f : 1.f, base_k = vis_k;
     int len = r->len < HW_ROWS ? r->len : HW_ROWS;
 
     for (int k = 0; k < len; k++)
     {
         int kind = r->cell[k];
-        if (kind == CELL_NONE)
+        if (kind == CELL_NONE || (kind == CELL_AIR && Row_NoteAt(o, k)))
             continue;
         int tone = r->tone[k], al = r->alpha[k];
         int j = k;
@@ -142,7 +175,8 @@ static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
         }
         float a = al / 255.f * dim;
         GXColor col = Tone_Color(r, tone);
-        float y0 = line_y + Note_At(r, k, HW_ROWS) * HW_PITCH + 0.04f;
+        float at = Note_At(r, k, HW_ROWS);
+        float y0 = line_y + at * HW_PITCH + 0.04f;
         float y1 = line_y + (Note_At(r, j, HW_ROWS) + 1.f) * HW_PITCH - 0.04f;
         if (y0 >= top - 0.1f)
         {
@@ -151,7 +185,8 @@ static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
         }
         if (y1 > top)
             y1 = top;
-        float yc = (y0 + y1) / 2, mid = (lx + rx) / 2;
+        float yc = (y0 + y1) / 2, mid = (lx + rx) / 2, lag = (rx - lx) * 0.24f;
+        vis_k = base_k * Note_Far(at, HW_NOTE_FROM, HW_ROWS);
         switch (kind)
         {
         case CELL_PRESS:
@@ -170,7 +205,7 @@ static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
             Hud_Rect(lx + in, y0, rx - in, y0 + 0.24f * HW_PITCH + 0.04f, Color_Fill(col, a));
             break;
         case CELL_LAG:
-            Hud_Rect(mid - 0.5f, y0, mid + 0.5f, y1, Color_Fill(col, a * 0.75f));
+            Hud_Rect(mid - lag, y0, mid + lag, y1, Color_Fill(col, a * 0.75f));
             break;
         case CELL_TAIL:
             Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(color_galint, a));
@@ -181,9 +216,11 @@ static void Hw_Lane(MeterRow *r, float glyph_x, float lx, float line_y)
     for (int k = 0; k < len; k++)
     {
         float at = Note_At(r, k, HW_ROWS);
+        vis_k = base_k * Note_Far(at, HW_NOTE_FROM, HW_ROWS);
         if (r->glyph[k] && at < HW_ROWS - 0.5f)
             Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim));
     }
+    vis_k = base_k;
 }
 
 // A lane's window at the bottom: a frame one note tall that notes drop
@@ -241,8 +278,18 @@ static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
     }
 }
 
+// How much a row lights its window: due on the press frame, due, ending.
+static int Hw_FrameRank(MeterRow *r)
+{
+    if (r->dim)
+        return 0;
+    return r->flash >= 0 || r->hot >= 2 ? 3 : r->hot ? 2 : r->implode >= 0 ? 1 : 0;
+}
+
 // The window's frame, lit while r's press is due (white on its first or
-// last frame), in r's ending colors as it fades.
+// last frame), in r's ending colors as it fades. Heavier at rest than it
+// was, so the eye finds it first (visual audit, 2026-10-15: thinner than
+// the belt's fifth-frame lines).
 static void Hw_WindowFrame(MeterRow *r, float lx, float rx, float line_y)
 {
     float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - 0.14f, wy1 = line_y + hw_pitch + 0.1f;
@@ -254,57 +301,65 @@ static void Hw_WindowFrame(MeterRow *r, float lx, float rx, float line_y)
     GXColor fc = hot >= 2 ? color_white : hot ? Color_Mix(r->color, color_white, 0.4f)
                  : ending ? Color_Mix(dc, color_white, 0.3f)
                           : Color_Over(color_white, r->dim ? 0.3f : 0.6f);
-    float t = hot >= 2 ? 0.16f : 0.1f;
+    float t = hot >= 2 ? 0.16f : 0.14f;
     Hud_Frame(wx0, wy0, wx1, wy1, t, fc);
     Hud_Rect(wx0, wy0, wx1, wy0 + t + 0.06f, fc); // the floor of it, heavier
 }
 
-static void Hw_Window(MeterRow *r, float lx, float rx, float line_y)
+// An empty slot's window: its frame, faint, and no floor, so the lane is
+// there with nothing due.
+static void Hw_EmptyWindow(float lx, float rx, float line_y)
 {
-    Hw_WindowEnd(r, lx, rx, line_y);
-    Hw_WindowFrame(r, lx, rx, line_y);
+    Hud_Frame(lx - 0.12f, line_y - 0.14f, rx + 0.12f, line_y + hw_pitch + 0.1f, 0.1f, Color_Over(color_white, 0.25f));
 }
 
-// The highway (Fixed Strip): one vertical lane per row, notes falling onto a
+// The highway (Fixed Strip): a vertical lane a slot, notes falling onto a
 // hit line at the bottom, a row a frame with every fifth one heavier, the
-// label under the lane. The hit line lights while a press is due, and the
-// ghost, burst and fold are the cells' at the line.
+// slot's swatch under its lane. The hit line lights while a press is due,
+// and the ghost, burst and fold are the cells' at the line.
 static void Highway_Draw(FighterData *fp)
 {
-    int rows = meter_rows;
     float x0, y0, w, h;
     Strip_Place(fp, STRIP_HIGHWAY, &x0, &y0, &w, &h);
-    // lanes count from the screen's edge and the glyphs' column comes after
-    // them, so neither a lane added nor the glyphs showing up moves any lane
-    // (Stephen, 0.8.6: the lanes shifted when the markers came in)
-    int right = x0 > 0;
-    float glyph = Strip_Glyphs() ? HW_GLYPH : 0;
-    float glyph_x = right ? x0 + STRIP_PAD + glyph / 2 : x0 + w - STRIP_PAD - glyph / 2;
-    float lanes_l = x0 + STRIP_PAD + (right ? glyph : 0), lanes_r = x0 + w - STRIP_PAD - (right ? 0 : glyph);
-    float line_y = y0 + HW_LABEL;
-    float base_k = vis_k;
+    // the lanes count from the screen's edge, in the slots' order left to
+    // right, with the glyphs' column after them toward the middle (kept
+    // whether or not there are glyphs) and the rest's half lane past that
+    // while it's used, so nothing showing up moves a lane (Stephen, 0.8.6:
+    // the lanes shifted when the markers came in)
+    int right = x0 > 0, glyphs = Strip_Glyphs();
+    float lanes_l = right ? x0 + w - STRIP_PAD - HW_LANES : x0 + STRIP_PAD, lanes_r = lanes_l + HW_LANES;
+    float glyph_x = right ? lanes_l - HW_GLYPH / 2 : lanes_r + HW_GLYPH / 2;
+    float other_l = right ? lanes_l - HW_GLYPH - HW_OTHER_GAP - HW_OTHER : lanes_r + HW_GLYPH + HW_OTHER_GAP;
+    float line_y = y0 + HW_LABEL, top = line_y + HW_ROWS * HW_PITCH, fade_y = line_y + HW_FADE_FROM * HW_PITCH;
+    int slots = Slot_Shown();
+    float base_k = vis_k, plate_k = Strip_PlateK(), dim = Strip_Dim(fp);
+    hw_pitch = HW_PITCH;
 
-    vis_k = base_k * Strip_PlateK();
-    Hud_Rect(x0, y0, x0 + w, y0 + h, Color_Fill(color_plate, 0.72f));
+    vis_k = base_k * plate_k;
+    Hud_RectFade(x0, y0, x0 + w, y0 + h, fade_y, top, color_plate, 0.72f * dim);
     // every fifth frame of the game's clock heavier, so the lines travel
-    // down a row a frame, like the conveyor's
+    // down a row a frame, like the conveyor's (brighter: they were faint,
+    // visual audit 2026-10-15)
     for (int k = 1; k <= HW_ROWS; k++)
     {
         int five = (event_vars->game_timer + k) % 5 == 0;
         float y = line_y + k * HW_PITCH, e = five ? 0.1f : 0.05f;
-        Hud_Rect(lanes_l - 0.1f, y - e, lanes_r + 0.1f, y + e, Color_Over(color_white, five ? 0.3f : 0.12f));
+        GXColor lc = Color_Over(color_white, (five ? 0.4f : 0.18f) * Track_Fade(k, HW_FADE_FROM, HW_ROWS) * dim);
+        Hud_Rect(lanes_l - 0.1f, y - e, lanes_r + 0.1f, y + e, lc);
+        if (slots > MT_SLOTS_SHOWN)
+            Hud_Rect(other_l - 0.1f, y - e, other_l + HW_OTHER + 0.1f, y + e, lc);
     }
 
     // the strikeline: under every lane's window, a tick out past each end
     // that stretches on the press frame
     int press = 0;
-    for (int i = 0; i < rows; i++)
+    for (int i = 0; i < meter_rows; i++)
         if (!meter[i].gap && !meter[i].dim && (meter[i].flash >= 0 || meter[i].hot >= 2))
             press = 1;
     float tick = press ? 0.6f : 0.35f;
     GXColor sc = press ? color_white : Color_Over(color_white, 0.45f);
     // (not into the glyphs' column, where the next input's glyph sits)
-    float tl = glyph > 0 && right ? 0 : tick, tr = glyph > 0 && !right ? 0 : tick;
+    float tl = glyphs && right ? 0 : tick, tr = glyphs && !right ? 0 : tick;
     float my = line_y + HW_PITCH / 2;
     Hud_Rect(lanes_l - 0.12f - tl, line_y - 0.2f, lanes_r + 0.12f + tr, line_y - 0.12f, sc);
     if (tl > 0)
@@ -312,19 +367,36 @@ static void Highway_Draw(FighterData *fp)
     if (tr > 0)
         Hud_Rect(lanes_r + 0.2f, my - 0.06f, lanes_r + 0.12f + tr, my + 0.06f, sc);
 
-    for (int i = 0; i < rows; i++)
+    for (int s = 0; s < slots; s++)
     {
-        MeterRow *r = &meter[i];
-        if (r->gap)
-            continue;
-        vis_k = base_k * r->fade;
-        float lx = right ? lanes_r - (i + 1) * HW_LANE - i * HW_LANE_GAP : lanes_l + i * (HW_LANE + HW_LANE_GAP);
-        float rx = lx + HW_LANE;
-        Hud_Rect(lx, line_y, rx, line_y + HW_ROWS * HW_PITCH, Color_Over(color_white, 0.05f));
-        Hw_Lane(r, glyph_x, lx, line_y);
-
-        Hw_Window(r, lx, rx, line_y);
-        Strip_Label(r, (lx + rx) / 2, y0 + 0.75f, HW_LANE - 0.3f);
+        MeterRow *sr[2];
+        int m = Slot_Rows(s, sr);
+        float lx = s < MT_SLOTS_SHOWN ? lanes_l + s * (HW_LANE + HW_LANE_GAP) : other_l;
+        float rx = lx + (s < MT_SLOTS_SHOWN ? HW_LANE : HW_OTHER);
+        // the lane: fainter while empty, and the rest's always (visual
+        // audit, 2026-10-15)
+        vis_k = base_k * (m ? sr[0]->fade : plate_k);
+        Hud_RectFade(lx, line_y, rx, top, fade_y, top, color_white, (m && s < MT_SLOTS_SHOWN ? 0.05f : 0.03f) * dim);
+        MeterRow *f = m ? sr[0] : 0;
+        for (int j = 0; j < m; j++)
+        {
+            vis_k = base_k * sr[j]->fade;
+            Hw_Lane(sr[j], m > 1 ? sr[1 - j] : 0, glyph_x, lx, rx, line_y);
+            Hw_WindowEnd(sr[j], lx, rx, line_y);
+            if (Hw_FrameRank(sr[j]) > Hw_FrameRank(f))
+                f = sr[j];
+        }
+        if (f)
+        {
+            vis_k = base_k * f->fade;
+            Hw_WindowFrame(f, lx, rx, line_y);
+        }
+        else
+        {
+            vis_k = base_k * plate_k;
+            Hw_EmptyWindow(lx, rx, line_y);
+        }
+        Slot_Swatch(s, f, (lx + rx) / 2, y0 + 0.75f, s < MT_SLOTS_SHOWN ? 0.9f : 0.5f, 0.45f, m ? 1.f : SLOT_DIM);
     }
     vis_k = base_k;
 }

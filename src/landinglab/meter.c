@@ -18,6 +18,27 @@
 
 #define MT_CELLS 40
 #define MT_ROWS 5
+// Every strip keeps a slot for each kind of row, left to right and bottom
+// up in the order inputs come: the jump, then the landing (AI, NIL), then
+// the waveland or wavedash, and one for the rest (the drop drill, a ledge
+// route's alternate) while it's used. A slot stays where it is, empty or
+// not, so a hit, miss or skip always lands in the same place (visual audit,
+// 2026-10-15: rows, lanes and dials changed order and count between
+// moments; lanes never reorder, as in a rhythm game).
+enum lane_slot
+{
+    SLOT_JUMP, // a hop or a jump: any yellow row
+    SLOT_AI,
+    SLOT_NIL,
+    SLOT_WAVE, // a waveland or wavedash
+    SLOT_OTHER,
+    MT_SLOTS,
+};
+#define MT_SLOTS_SHOWN 4 // the slots a strip always has room for
+// A slot holds two rows (lanes s and s + MT_SLOTS) when two of a kind are
+// up at once: a hop and its double jump, or the chosen route and the miss
+// still folding where the last one was.
+#define MT_LANES (2 * MT_SLOTS)
 #define MT_PITCH 0.622f // 35% bigger than the mockup's
 #define MT_CW 0.498f
 #define MT_CH 0.949f
@@ -91,7 +112,7 @@ typedef struct MeterRow
     char info[24];
 } MeterRow;
 
-static MeterRow meter[MT_ROWS];
+static MeterRow meter[MT_LANES]; // built: MT_ROWS at most; settled: a lane each
 static int meter_rows;
 
 static MeterRow *Meter_Add(GXColor color, const char *label)
@@ -315,12 +336,12 @@ static void Meter_Collect(void)
         Meter_FromCue(CUE_NIL);
 }
 
-// Lanes keep their places: a row keeps the lane it came up in (by its
-// label) while it's up and for MT_LINGER frames after, fading out, so the
-// others never shift or swap. One that went with a window still ahead
-// leaves that window in gray as it fades, rather than just vanishing. A new
-// row takes the first free lane. Each lane also remembers how far out its
-// window was when it came up, for Note Travel.
+// Lanes keep their places: a row takes the slot of its kind (Lane_Slot)
+// and keeps that lane (by its label) while it's up and for MT_LINGER frames
+// after, fading out, so the others never shift or swap. One that went with
+// a window still ahead leaves that window in gray as it fades, rather than
+// just vanishing. Each lane also remembers how far out its window was when
+// it came up, for Note Travel.
 #define MT_LINGER 8
 typedef struct Lane
 {
@@ -329,17 +350,53 @@ typedef struct Lane
     int k_prev;  // its first window's cell last frame, -1 none
     int k0;      // ... and when that window came up
     u8 used;
+    u8 dim;      // an alternate route's
     u8 parked;   // its row was a preload last frame
     u8 settle;   // ... and the row's settle
     MeterRow last;
 } Lane;
-static Lane lanes[MT_ROWS];
+static Lane lanes[MT_LANES];
 
 static int Str_Same(const char *a, const char *b)
 {
     while (*a && *a == *b)
         a++, b++;
     return *a == *b;
+}
+
+static int Color_Same(GXColor a, GXColor b)
+{
+    return a.r == b.r && a.g == b.g && a.b == b.b;
+}
+
+// The slot of a row's kind. A ledge route's rows ("1st", "2nd", "Route")
+// go by their color, AI or NIL.
+static int Lane_Slot(MeterRow *r)
+{
+    const char *l = r->label;
+    if (Str_Same(l, "HOP") || Str_Same(l, "JUMP") || Color_Same(r->color, color_in_jump))
+        return SLOT_JUMP;
+    if (Str_Same(l, "WL") || Str_Same(l, "WD"))
+        return SLOT_WAVE;
+    if (Str_Same(l, "DRP"))
+        return SLOT_OTHER;
+    if (Str_Same(l, "AI") || Color_Same(r->color, land_kind_colors[LAND_AI]))
+        return SLOT_AI;
+    if (Str_Same(l, "NIL") || Color_Same(r->color, land_kind_colors[LAND_NIL]))
+        return SLOT_NIL;
+    return SLOT_OTHER;
+}
+
+// The lane a new row takes: its slot, else (two of a kind up) the slot's
+// second row, else the rest's slot. An alternate route skips the second
+// row, where it would sit under the chosen one, for the rest's. -1: none.
+static int Lane_Free(const int *taken, int slot, int dim)
+{
+    int want[4] = {slot, dim ? SLOT_OTHER : slot + MT_SLOTS, SLOT_OTHER, SLOT_OTHER + MT_SLOTS};
+    for (int i = 0; i < 4; i++)
+        if (taken[want[i]] < 0)
+            return want[i];
+    return -1;
 }
 
 // The first cell that is a window to press in, a touchdown or the first
@@ -356,9 +413,9 @@ static void Meter_Settle(void)
 {
     static MeterRow built[MT_ROWS];
     int now = event_vars->game_timer, n = meter_rows;
-    int taken[MT_ROWS], at[MT_ROWS];
+    int taken[MT_LANES], at[MT_ROWS];
     memcpy(built, meter, n * sizeof(MeterRow));
-    for (int l = 0; l < MT_ROWS; l++)
+    for (int l = 0; l < MT_LANES; l++)
     {
         taken[l] = -1;
         if (lanes[l].used && (now < lanes[l].seen || now - lanes[l].seen > MT_LINGER))
@@ -368,38 +425,43 @@ static void Meter_Settle(void)
                 OSReport("LLLANE %d %s lane %d gone\n", now, lanes[l].label, l);
         }
     }
-    // the lanes the rows already had, then the first free one for the rest
     for (int i = 0; i < n; i++)
-    {
         at[i] = -1;
-        for (int l = 0; l < MT_ROWS && at[i] < 0; l++)
-            if (lanes[l].used && taken[l] < 0 && Str_Same(lanes[l].label, built[i].label))
-                at[i] = l;
-        if (at[i] >= 0)
-            taken[at[i]] = i;
-    }
-    for (int i = 0; i < n; i++)
+    // the cues and the chosen route first, then the alternates, so the
+    // chosen route has its kind's slot from the first hang frame whatever
+    // the alternates had. Each keeps the lane it had (the same label, in
+    // its own slot or the rest's), then the others take a free one
+    for (int dim = 0; dim < 2; dim++)
     {
-        if (at[i] >= 0)
-            continue;
-        int best = -1;
-        for (int l = 0; l < MT_ROWS && best < 0; l++)
-            if (!lanes[l].used && taken[l] < 0)
-                best = l;
-        // all taken: the one gone longest
-        for (int l = 0; l < MT_ROWS && best < 0; l++)
-            if (taken[l] < 0 && (best < 0 || lanes[l].seen < lanes[best].seen))
-                best = l;
-        if (best < 0)
-            continue;
-        Lane *L = &lanes[best];
-        memset(L, 0, sizeof(*L));
-        strcpy(L->label, built[i].label);
-        L->k_prev = -1;
-        if (cue_log)
-            OSReport("LLLANE %d %s lane %d new\n", now, L->label, best);
-        at[i] = best;
-        taken[best] = i;
+        for (int i = 0; i < n; i++)
+        {
+            if (!built[i].dim != !dim)
+                continue;
+            int s = Lane_Slot(&built[i]);
+            for (int l = 0; l < MT_LANES && at[i] < 0; l++)
+                if (lanes[l].used && taken[l] < 0 && !lanes[l].dim == !dim && Str_Same(lanes[l].label, built[i].label) &&
+                    (l % MT_SLOTS == s || l % MT_SLOTS == SLOT_OTHER))
+                    at[i] = l;
+            if (at[i] >= 0)
+                taken[at[i]] = i;
+        }
+        for (int i = 0; i < n; i++)
+        {
+            if (!built[i].dim != !dim || at[i] >= 0)
+                continue;
+            int best = Lane_Free(taken, Lane_Slot(&built[i]), dim);
+            if (best < 0)
+                continue;
+            Lane *L = &lanes[best];
+            memset(L, 0, sizeof(*L));
+            strcpy(L->label, built[i].label);
+            L->dim = dim;
+            L->k_prev = -1;
+            if (cue_log)
+                OSReport("LLLANE %d %s lane %d new\n", now, L->label, best);
+            at[i] = best;
+            taken[best] = i;
+        }
     }
     for (int i = 0; i < n; i++)
     {
@@ -426,7 +488,7 @@ static void Meter_Settle(void)
     }
 
     int top = -1;
-    for (int l = 0; l < MT_ROWS; l++)
+    for (int l = 0; l < MT_LANES; l++)
         if (lanes[l].used)
             top = l;
     meter_rows = top + 1;
@@ -470,6 +532,65 @@ static void Meter_Build(void)
 {
     Meter_Collect();
     Meter_Settle();
+}
+
+// The rows a lane strip (cells, highway, dial) draws in slot s: its first
+// and its second, unless the second is an alternate route that would sit
+// under the chosen one (the conveyor's belt shares every row). Returns how
+// many.
+static int Slot_Rows(int s, MeterRow **out)
+{
+    int n = 0;
+    for (int l = s; l < meter_rows; l += MT_SLOTS)
+    {
+        MeterRow *r = &meter[l];
+        if (r->gap || (n > 0 && r->dim))
+            continue;
+        out[n++] = r;
+    }
+    return n;
+}
+
+// The slots up to the last one with a row.
+static int Slot_Count(void)
+{
+    int top = 0;
+    for (int l = 0; l < meter_rows; l++)
+        if (!meter[l].gap && l % MT_SLOTS + 1 > top)
+            top = l % MT_SLOTS + 1;
+    return top;
+}
+
+// The slots a fixed strip draws: the four always, the rest's while it's used.
+static int Slot_Shown(void)
+{
+    int n = Slot_Count();
+    return n > MT_SLOTS_SHOWN ? n : MT_SLOTS_SHOWN;
+}
+
+static const char *slot_labels[MT_SLOTS] = {"JUMP", "AI", "NIL", "WAVE", ""};
+
+static GXColor Slot_Color(int s)
+{
+    switch (s)
+    {
+    case SLOT_JUMP:
+        return color_in_jump;
+    case SLOT_AI:
+        return land_kind_colors[LAND_AI];
+    case SLOT_NIL:
+        return land_kind_colors[LAND_NIL];
+    case SLOT_WAVE:
+        return land_kind_colors[LAND_PERFECT_WL];
+    }
+    return color_galint;
+}
+
+// Whether row o has a note at cell k: a second row in the same slot leaves
+// its frames in the air out there, under the note.
+static int Row_NoteAt(MeterRow *o, int k)
+{
+    return o && k < o->len && k < MT_CELLS && o->cell[k] != CELL_NONE && o->cell[k] != CELL_AIR;
 }
 
 // Where cell k of a row is along its track, in frames from the gate, with
@@ -570,17 +691,18 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
 
 // The meter with its gate's left edge at gx and its bottom at base. scale
 // is 1 above Falcon and MT_FIXED for the fixed strip, which also gets
-// labels. Returns nothing drawn when there are no rows.
+// labels. A row a slot, bottom up (Meter_Settle); the fixed strip always
+// has the four, an empty one with its label dimmed and no cells.
 static void Meter_Draw(float gx, float base, float scale, int max_cells, int labels)
 {
     int wide = Options_Timers[TOPT_WIDE].val;
     float pitch = (MT_PITCH + (wide ? MT_WIDE : 0)) * scale;
     float cw = (MT_CW + (wide ? MT_WIDE : 0)) * scale;
     float ch = MT_CH * scale, gap = MT_GAP * scale;
-    int rows = meter_rows;
+    int rows = labels ? Slot_Shown() : Slot_Count();
 
     int len = 1, glyphs = 0;
-    for (int i = 0; i < rows; i++)
+    for (int i = 0; i < meter_rows; i++)
     {
         if (meter[i].len > len)
             len = meter[i].len;
@@ -596,7 +718,7 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
 
     // the plate, so it reads over any stage; it fades with the brightest row
     float base_k = vis_k, plate_k = 0;
-    for (int i = 0; i < rows; i++)
+    for (int i = 0; i < meter_rows; i++)
         if (!meter[i].gap && meter[i].fade > plate_k)
             plate_k = meter[i].fade;
     vis_k = base_k * plate_k;
@@ -604,7 +726,8 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     // per label to overlap the next row's)
     float plate_x0 = labels ? gx - MT_LABEL_GAP * scale - MT_LABEL_W - 0.25f : gx - 0.32f * scale;
     // (deeper under the rows than over them: the time ticks go there)
-    Hud_Rect(plate_x0, base - 0.5f * scale, x1 + 0.22f * scale, top + 0.22f * scale + glyph_h, Color_Fill(color_plate, 0.72f));
+    float plate_y0 = base - 0.5f * scale, plate_y1 = top + 0.22f * scale; // the rows' part, under the glyphs
+    Hud_Rect(plate_x0, plate_y0, x1 + 0.22f * scale, plate_y1 + glyph_h, Color_Fill(color_plate, 0.72f));
 
     // the game's time going by under the rows: a tick a frame, longer and
     // brighter on every fifth frame of the clock, moving a cell toward the
@@ -619,64 +742,72 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                  Color_Over(color_white, five ? 0.6f : 0.25f));
     }
 
-    // rows from the bottom up, each in its own lane (Meter_Settle)
-    for (int i = 0; i < rows; i++)
+    // each slot's rows, from the bottom up. The fixed strip's empty frames
+    // are brighter: the dark gray ones vanished on the dark stage underside
+    // (visual audit, 2026-10-15)
+    float empty_a = labels ? 0.14f : 0.1f, five_a = labels ? 0.22f : 0.16f;
+    for (int s = 0; s < rows; s++)
     {
-        MeterRow *r = &meter[i];
-        if (r->gap)
-            continue;
-        vis_k = base_k * r->fade;
-        float y0 = base + i * (ch + gap), y1 = y0 + ch;
-        float dim = r->dim ? 0.5f : 1.f;
-
-        // empty frames
-        for (int k = 1; k < len; k++)
+        MeterRow *sr[2];
+        int m = Slot_Rows(s, sr);
+        float y0 = base + s * (ch + gap), y1 = y0 + ch;
+        for (int j = 0; j < m; j++)
         {
-            if (r->cell[k] == CELL_NONE)
-                Hud_Rect(gx + k * pitch, y0, gx + k * pitch + cw, y1, (now + k) % 5 == 0 ? Color_Over(color_white, 0.16f * dim)
-                                                                                    : Color_Fill(color_white, 0.1f * dim));
-        }
+            // (two rows in a slot, a hop and its double jump: one's frames
+            // in the air don't cross the other's notes)
+            MeterRow *r = sr[j], *o = m > 1 ? sr[1 - j] : 0;
+            vis_k = base_k * r->fade;
+            float dim = r->dim ? 0.5f : 1.f;
 
-        for (int k = 0; k < r->len && k < len; k++)
-        {
-            int kind = r->cell[k];
-            if (kind == CELL_NONE)
-                continue;
-            float a = r->alpha[k] / 255.f * dim;
-            GXColor col = Tone_Color(r, r->tone[k]);
-            float at = Note_At(r, k, len);
-            if (at > len - 0.5f)
-                continue; // still off the far end
-            float cx0 = gx + at * pitch, cx1 = cx0 + cw;
-            switch (kind)
+            // empty frames, once for the slot
+            for (int k = 1; k < len && j == 0; k++)
             {
-            case CELL_PRESS:
-                Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
-                break;
-            case CELL_ACT:
-                Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
-                Hud_Rect(cx0, y1 - 0.2f * ch, cx1, y1, Color_Fill(color_white, a * 0.9f));
-                break;
-            case CELL_AIR:
-                Hud_Rect(cx0, y0 + ch * 0.38f, cx1, y0 + ch * 0.62f, Color_Fill(col, a * 0.5f));
-                break;
-            case CELL_LAND:
+                if (r->cell[k] == CELL_NONE && !(o && k < o->len && o->cell[k] != CELL_NONE))
+                    Hud_Rect(gx + k * pitch, y0, gx + k * pitch + cw, y1, (now + k) % 5 == 0 ? Color_Over(color_white, five_a * dim)
+                                                                                        : Color_Fill(color_white, empty_a * dim));
+            }
+
+            for (int k = 0; k < r->len && k < len; k++)
             {
-                float w = 1.4f * PX * scale;
-                Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_plate, a * 0.6f));
-                Hud_Frame(cx0, y0, cx1, y1, w, Color_Fill(col, a));
-                Hud_Rect(cx0, y0, cx1, y0 + ch * 0.24f, Color_Fill(col, a));
-                break;
+                int kind = r->cell[k];
+                if (kind == CELL_NONE || (kind == CELL_AIR && Row_NoteAt(o, k)))
+                    continue;
+                float a = r->alpha[k] / 255.f * dim;
+                GXColor col = Tone_Color(r, r->tone[k]);
+                float at = Note_At(r, k, len);
+                if (at > len - 0.5f)
+                    continue; // still off the far end
+                float cx0 = gx + at * pitch, cx1 = cx0 + cw;
+                switch (kind)
+                {
+                case CELL_PRESS:
+                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
+                    break;
+                case CELL_ACT:
+                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
+                    Hud_Rect(cx0, y1 - 0.2f * ch, cx1, y1, Color_Fill(color_white, a * 0.9f));
+                    break;
+                case CELL_AIR:
+                    Hud_Rect(cx0, y0 + ch * 0.38f, cx1, y0 + ch * 0.62f, Color_Fill(col, a * 0.5f));
+                    break;
+                case CELL_LAND:
+                {
+                    float w = 1.4f * PX * scale;
+                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_plate, a * 0.6f));
+                    Hud_Frame(cx0, y0, cx1, y1, w, Color_Fill(col, a));
+                    Hud_Rect(cx0, y0, cx1, y0 + ch * 0.24f, Color_Fill(col, a));
+                    break;
+                }
+                case CELL_LAG:
+                    Hud_Rect(cx0, y0, cx1, y0 + ch * 0.55f, Color_Fill(col, a * 0.75f));
+                    break;
+                case CELL_TAIL:
+                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_galint, a));
+                    break;
+                }
+                if (r->glyph[k])
+                    Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, 0.36f * scale, Color_Fill(color_white, 0.95f * dim));
             }
-            case CELL_LAG:
-                Hud_Rect(cx0, y0, cx1, y0 + ch * 0.55f, Color_Fill(col, a * 0.75f));
-                break;
-            case CELL_TAIL:
-                Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_galint, a));
-                break;
-            }
-            if (r->glyph[k])
-                Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, 0.36f * scale, Color_Fill(color_white, 0.95f * dim));
         }
     }
 
@@ -686,9 +817,11 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     float gcx = gx + cw / 2, gcy = (base + top) / 2;
     float hot = 0;
     GXColor hot_col = color_white;
-    for (int i = 0; i < rows; i++)
+    for (int i = 0; i < meter_rows; i++)
     {
         MeterRow *r = &meter[i];
+        if (r->gap)
+            continue;
         if (r->hot && !r->dim && r->hot > hot)
         {
             hot = r->hot;
@@ -702,13 +835,21 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     }
     if (hot > 0)
     {
+        // the fixed strip's light and flash stay on the rows' plate (visual
+        // audit, 2026-10-15: past it, the press frame was a tall white bar)
+        float ly0 = gy0 - 0.2f * scale, ly1 = gy1 + 0.2f * scale, fy0 = gy0 - 0.45f * scale, fy1 = gy1 + 0.45f * scale;
+        if (labels)
+        {
+            ly0 = fy0 = plate_y0;
+            ly1 = fy1 = plate_y1;
+        }
         GXColor fill = Color_Mix(hot_col, color_white, hot >= 2 ? 1.f : 0.4f);
-        Hud_Rect(gx - 0.35f * scale, gy0 - 0.2f * scale, gx + cw + 0.35f * scale, gy1 + 0.2f * scale, Color_Fill(hot_col, 0.3f));
+        Hud_Rect(gx - 0.35f * scale, ly0, gx + cw + 0.35f * scale, ly1, Color_Fill(hot_col, 0.3f));
         Hud_Rect(gx - 0.1f * scale, gy0, gx + cw + 0.1f * scale, gy1, fill);
         if (hot >= 2)
         {
             // the press frame: a white flash past the plate, and two ticks
-            Hud_Rect(gx - 0.2f * scale, gy0 - 0.45f * scale, gx + cw + 0.2f * scale, gy1 + 0.45f * scale, color_white);
+            Hud_Rect(gx - 0.2f * scale, fy0, gx + cw + 0.2f * scale, fy1, color_white);
             Hud_Rect(gx - 0.75f * scale, gcy - 0.06f * scale, gx - 0.4f * scale, gcy + 0.06f * scale, Color_Fill(color_white, 0.9f)); // short of the labels
             Hud_Rect(gx + cw + 0.4f * scale, gcy - 0.06f * scale, gx + cw + 1.0f * scale, gcy + 0.06f * scale, Color_Fill(color_white, 0.9f));
         }
@@ -720,86 +861,98 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         Hud_Rect(gx + cw + 0.06f * scale, gy0, gx + cw + 0.16f * scale, gy1, post);
     }
 
-    // endings at the gate
-    for (int i = 0; i < rows; i++)
+    // endings at the gate, each on its slot's row
+    for (int s = 0; s < rows; s++)
     {
-        MeterRow *r = &meter[i];
-        if (r->dim || r->gap)
-            continue;
-        vis_k = base_k * r->fade;
-        for (int g = 0; g < 4; g++)
+        MeterRow *sr[2];
+        int m = Slot_Rows(s, sr);
+        for (int j = 0; j < m; j++)
         {
-            if (r->ghost[g] < 0)
+            MeterRow *r = sr[j];
+            if (r->dim)
                 continue;
-            // a filled copy of the gate's cell, in the row's color, that
-            // swells and fades fast
-            float q = (float)r->ghost[g] / LL_GHOST, fade = (1.f - q) * (1.f - q);
-            int b = r->ghost_bright[g];
-            float grow = (b ? 0.1f + 1.2f * Ease_Out(q) : 0.05f + 0.55f * Ease_Out(q)) * scale;
-            GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
-            Hud_Rect(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
-            Hud_Frame(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, 1.6f * PX * scale, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
-        }
-        if (r->burst >= 0)
-        {
-            float q = (float)r->burst / LL_BURST;
-            float rad = (0.6f + 2.0f * Ease_Out(q)) * scale;
-            GXColor bc = Color_Fill(r->color, 1.f - q);
-            for (int ray = 0; ray < 6; ray++)
+            vis_k = base_k * r->fade;
+            for (int g = 0; g < 4; g++)
             {
-                float ang = ray * 1.0471976f + 0.5235988f;
-                float dx = cos(ang), dy = sin(ang);
-                Hud_Seg(gcx + dx * rad * 0.55f, gcy + dy * rad * 0.55f, gcx + dx * rad, gcy + dy * rad, 0.2f * scale, bc);
+                if (r->ghost[g] < 0)
+                    continue;
+                // a filled copy of the gate's cell, in the row's color, that
+                // swells and fades fast
+                float q = (float)r->ghost[g] / LL_GHOST, fade = (1.f - q) * (1.f - q);
+                int b = r->ghost_bright[g];
+                float grow = (b ? 0.1f + 1.2f * Ease_Out(q) : 0.05f + 0.55f * Ease_Out(q)) * scale;
+                GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
+                Hud_Rect(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
+                Hud_Frame(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, 1.6f * PX * scale, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
             }
-        }
-        if (r->implode >= 0)
-        {
-            float q = (float)r->implode / LL_FADE;
-            GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
-            // the cell that was due stays in the gate on its own row,
-            // fading: whole and gray for a skip, cracked in two for a miss
-            // (Stephen, 0.9.8: a skip barely showed)
-            float ry0 = base + i * (ch + gap), ry1 = ry0 + ch, rcy = (ry0 + ry1) / 2;
-            float a = 0.9f * (1.f - q);
-            if (r->implode_tone == TONE_MISS)
+            if (r->burst >= 0)
             {
-                float d = 0.25f * scale * Ease_Out(q), h = ch / 2 - 0.05f * scale;
-                Hud_Rect(gx, rcy + 0.05f * scale + d, gx + cw, rcy + 0.05f * scale + h + d, Color_Fill(dc, a));
-                Hud_Rect(gx, rcy - 0.05f * scale - h - d, gx + cw, rcy - 0.05f * scale - d, Color_Fill(dc, a));
+                float q = (float)r->burst / LL_BURST;
+                float rad = (0.6f + 2.0f * Ease_Out(q)) * scale;
+                GXColor bc = Color_Fill(r->color, 1.f - q);
+                for (int ray = 0; ray < 6; ray++)
+                {
+                    float ang = ray * 1.0471976f + 0.5235988f;
+                    float dx = cos(ang), dy = sin(ang);
+                    Hud_Seg(gcx + dx * rad * 0.55f, gcy + dy * rad * 0.55f, gcx + dx * rad, gcy + dy * rad, 0.2f * scale, bc);
+                }
             }
-            else
-                Hud_Rect(gx, ry0, gx + cw, ry1, Color_Fill(dc, a * 0.8f));
-            float k = 1.f - Ease_Out(q);
-            float hw = (cw / 2 + 0.7f * scale) * k, hh = (ch / 2 + 0.4f * scale) * k;
-            if (hw > 0.05f)
-                Hud_Frame(gcx - hw, rcy - hh, gcx + hw, rcy + hh, 1.4f * PX * scale, Color_Fill(dc, 0.6f * (1.f - q)));
+            if (r->implode >= 0)
+            {
+                float q = (float)r->implode / LL_FADE;
+                GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
+                // the cell that was due stays in the gate on its own row,
+                // fading: whole and gray for a skip, cracked in two for a miss
+                // (Stephen, 0.9.8: a skip barely showed)
+                float ry0 = base + s * (ch + gap), ry1 = ry0 + ch, rcy = (ry0 + ry1) / 2;
+                float a = 0.9f * (1.f - q);
+                if (r->implode_tone == TONE_MISS)
+                {
+                    float d = 0.25f * scale * Ease_Out(q), h = ch / 2 - 0.05f * scale;
+                    Hud_Rect(gx, rcy + 0.05f * scale + d, gx + cw, rcy + 0.05f * scale + h + d, Color_Fill(dc, a));
+                    Hud_Rect(gx, rcy - 0.05f * scale - h - d, gx + cw, rcy - 0.05f * scale - d, Color_Fill(dc, a));
+                }
+                else
+                    Hud_Rect(gx, ry0, gx + cw, ry1, Color_Fill(dc, a * 0.8f));
+                float k = 1.f - Ease_Out(q);
+                float hw = (cw / 2 + 0.7f * scale) * k, hh = (ch / 2 + 0.4f * scale) * k;
+                if (hw > 0.05f)
+                    Hud_Frame(gcx - hw, rcy - hh, gcx + hw, rcy + hh, 1.4f * PX * scale, Color_Fill(dc, 0.6f * (1.f - q)));
+            }
         }
     }
 
     vis_k = base_k;
     if (!labels)
         return;
-    for (int i = 0; i < rows; i++)
+    // the labels, right-aligned on their rows, just short of the gate's
+    // ticks (the game aligns them, so they can't run long). No numbers past
+    // the cells: changing every frame they can't be read at speed, and they
+    // ran into the stock icon and "0%" (Stephen, 10-03; visual audit,
+    // 2026-10-15). The panel says them
+    for (int s = 0; s < rows; s++)
     {
-        MeterRow *r = &meter[i];
-        if (r->gap)
-            continue;
-        vis_k = base_k * r->fade;
-        float y0 = base + i * (ch + gap);
+        MeterRow *sr[2];
+        int m = Slot_Rows(s, sr);
+        float y0 = base + s * (ch + gap);
         float ty = Text_MidY(y0 + ch / 2, ST_TEXT);
-        GXColor tc = Color_Mix(r->color, color_white, 0.35f);
+        GXColor tc;
+        if (m == 0)
+        {
+            // an empty slot: its kind's name, dimmed
+            vis_k = base_k * plate_k;
+            tc = Color_Fill(Color_Mix(Slot_Color(s), color_white, 0.35f), 0.35f);
+            tc.a = 255;
+            Hud_TextAligned(slot_labels[s], gx - MT_LABEL_GAP * scale, ty, ST_TEXT, tc, 2);
+            continue;
+        }
+        MeterRow *r = sr[0];
+        vis_k = base_k * r->fade;
+        tc = Color_Mix(r->color, color_white, 0.35f);
         if (r->dim)
             tc = Color_Fill(tc, 0.6f);
         tc.a = 255;
-        // right-aligned on its row, just short of the gate's ticks (the
-        // game aligns it, so it can't run long)
         Hud_TextAligned(r->label, gx - MT_LABEL_GAP * scale, ty, ST_TEXT, tc, 2);
-        if (r->info[0])
-        {
-            float ix = x1 + 0.5f * scale;
-            Text_PlateAt(ix - 0.2f, ix + Text_Width(r->info, ST_TEXT) + 0.2f, y0 + ch / 2, (ch + gap) / 2);
-            Hud_Text(r->info, ix, ty, ST_TEXT, (GXColor){220, 220, 220, 255});
-        }
     }
     vis_k = base_k;
 }

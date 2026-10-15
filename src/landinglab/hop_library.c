@@ -101,11 +101,11 @@ static void Gl_CheckGen(void)
 
 // The floors' heights from the anchor's floor, as library height rows
 static void Gl_DjPaths(FighterData *fp);
-static int gl_path_d = -1;
+static int gl_path_d[2] = {-1, -1}; // the frame each hop's sideways path is from (Gl_Path)
 static void Gl_Anchor(FighterData *fp)
 {
     Gl_CheckGen();
-    gl_path_d = -1;
+    gl_path_d[0] = gl_path_d[1] = -1;
     gl_pass = gl_skip = 0;
     gl_direct = gl_verified = gl_rejected = 0;
     Gl_DjPaths(fp);
@@ -252,9 +252,31 @@ static void Gl_Steps(FighterData *fp, float x, float vx, int ts, int frame, int 
 // let go (gl_pre_0); and, per anchor, x n frames after a double jump from
 // 0 for each standstill stick (it sets the speed, so what came before
 // doesn't matter)
-static float *gl_pre_sx, *gl_pre_0; // [GL_X]
+static float *gl_pre_sx, *gl_pre_0; // [GL_X], the hop's own in gl_pre_buf
+static float *gl_pre_buf;           // [2 hops][kept, let go][GL_X]
 static float *gl_dj;                // [GT_STILL_STICKS][GL_X]
-static int gl_path_hop, gl_path_until;
+static int gl_path_until, gl_path_until2[2];
+
+// A frame's hop's sideways paths, kept for each hop: the candidates go
+// short hop, full hop, short hop... at each frame, and with one kept they
+// were made again for nearly every one (repro3e, 2026-10-15: moving, a
+// plan's frame took 87 ms)
+static void Gl_Path(FighterData *fp, JumpCand *c)
+{
+    int h = c->hop == GT_FH;
+    gl_pre_sx = &gl_pre_buf[(h * 2) * GL_X];
+    gl_pre_0 = &gl_pre_buf[(h * 2 + 1) * GL_X];
+    if (gl_path_d[h] != c->d)
+    {
+        GroundStep *gs = &gt_steps[c->d];
+        SimStart ps;
+        gl_path_until2[h] = Sim_GroundJumpAt(fp, c->hop == GT_SH, gs->x, gs->y, gs->v, jt_stick_x, 1, &ps, 0);
+        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, jt_stick_x, jt_stick_x, gl_pre_sx, GL_X);
+        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, 0, 0, gl_pre_0, GL_X);
+        gl_path_d[h] = c->d;
+    }
+    gl_path_until = gl_path_until2[h];
+}
 
 static void Gl_DjPaths(FighterData *fp)
 {
@@ -300,15 +322,7 @@ static int Gl_Worth(FighterData *fp, JumpCand *c, int build)
         return 0;
 
     GroundStep *gs = &gt_steps[c->d];
-    if (gl_path_d != c->d || gl_path_hop != c->hop)
-    {
-        SimStart ps;
-        gl_path_until = Sim_GroundJumpAt(fp, c->hop == GT_SH, gs->x, gs->y, gs->v, jt_stick_x, 1, &ps, 0);
-        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, jt_stick_x, jt_stick_x, gl_pre_sx, GL_X);
-        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, 0, 0, gl_pre_0, GL_X);
-        gl_path_d = c->d;
-        gl_path_hop = c->hop;
-    }
+    Gl_Path(fp, c);
     for (int j = 0; j < gl_an; j++)
     {
         GlEntry *g = Gl_Entry(key, v, gl_ah[j]);
@@ -361,15 +375,7 @@ static int Gl_Direct(FighterData *fp, JumpCand *c, JumpRoute *out)
             return -1;
     }
     GroundStep *gs = &gt_steps[c->d];
-    if (gl_path_d != c->d || gl_path_hop != c->hop)
-    {
-        SimStart ps;
-        gl_path_until = Sim_GroundJumpAt(fp, c->hop == GT_SH, gs->x, gs->y, gs->v, jt_stick_x, 1, &ps, 0);
-        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, jt_stick_x, jt_stick_x, gl_pre_sx, GL_X);
-        Gl_Steps(fp, ps.pos.X, ps.vel.X, ps.ts, 0, ps.len, 0, 0, gl_pre_0, GL_X);
-        gl_path_d = c->d;
-        gl_path_hop = c->hop;
-    }
+    Gl_Path(fp, c);
     for (int j = 0; j < gl_an && n < 2 * GL_HEIGHTS; j++)
     {
         GlEntry *g = Gl_Entry(key, v, gl_ah[j]);

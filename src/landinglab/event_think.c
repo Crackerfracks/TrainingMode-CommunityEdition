@@ -30,8 +30,7 @@ void Event_Init(GOBJ *gobj)
     jt_cache = calloc(sizeof(SimState) * JT_D);
     gt_steps = calloc(sizeof(GroundStep) * JT_D);
     gl_lib = calloc(sizeof(GlEntry) * GL_KEYS * GT_STILL_CANDIDATES * GL_HEIGHTS);
-    gl_pre_sx = calloc(sizeof(float) * GL_X);
-    gl_pre_0 = calloc(sizeof(float) * GL_X);
+    gl_pre_buf = calloc(sizeof(float) * 4 * GL_X);
     gl_dj = calloc(sizeof(float) * GT_STILL_STICKS * GL_X);
     gl_gen = -1;
 #ifdef LL_GROUND_GUIDE

@@ -10,7 +10,7 @@ Six ways to count down next to you, four in a corner, one at the landing spot, t
 
 - **Near You** is the timer that rides with your fighter. **Fixed Strip** is the one in a corner of the screen. They are two rows of the Timers menu and each has several looks.
 - The Fixed Strip's looks are **Cells**, **Highway**, **Dial** and **Conveyor**. "The Cells look" always means this one; the Wavedash row has a value called Cells too, which adds a row to it.
-- A **lane** is one cue's line in the Fixed Strip, labeled AI, NIL, WL (waveland), WD (wavedash), JUMP, HOP or DRP (ledge drop). Cells, Highway and Dial give each cue its own lane. Conveyor puts every cue on one belt and tells them apart by shape.
+- A **lane** is one cue's line in the Fixed Strip. There are four, always in the same place and order: JUMP (hops and double jumps), AI, NIL, and WAVE (wavelands and wavedashes). An empty lane stays drawn, faintly. A ledge drop drill or a second route borrows a fifth lane while it lasts. Cells label their rows; Highway and Dial mark each lane with its note shape (yellow tab, pink solid, green notched, cyan hollow). Conveyor puts every cue on one belt and tells them apart by the same shapes.
 - The **gate** is the white line in the Fixed Strip where a press is due. (The controller display has a stick octagon, and Jump Timing's path has colored bars. Neither is called a gate on these pages.)
 - A **window** is the frames a press works on. A **note** is a window as the Highway or Conveyor draws it.
 

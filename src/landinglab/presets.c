@@ -308,6 +308,7 @@ static const PresetSet preset_everything[] = {
     {&Options_Paths[POPT_PREVIEW], PREVIEW_OFF},
     {&Options_Jump[JOPT_SHOW], 1},
     {&Options_Jump[JOPT_PATH], 1},
+    {&Options_Jump[JOPT_TEXT], 1}, // the plan in words, off by default since 0.9.30
 #ifdef LL_GROUND_GUIDE
     {&Options_Jump[JOPT_BANDS], 1},
     {&Options_Jump[JOPT_MARKS], 1},

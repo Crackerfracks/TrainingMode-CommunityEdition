@@ -67,7 +67,7 @@ Ledge routes from the ledge, both kinds, reset to the same ledge each time. NIL 
 
 ### Everything
 
-Every cue, path and timer that has a plain on switch, for exploring rather than playing. Near You is Pincers, which are drawn clear of the body. Body Path and Jump Preview stay off, and Frame Dots show only in Frame Advance. Jump Timing and its path are on.
+Every cue, path and timer that has a plain on switch, for exploring rather than playing. Near You is Pincers, which are drawn clear of the body. Body Path and Jump Preview stay off, and Frame Dots show only in Frame Advance. Jump Timing, its path and its plan text are on.
 
 | Menu | Option | Defaults | Everything |
 | --- | --- | --- | --- |
@@ -82,6 +82,7 @@ Every cue, path and timer that has a plain on switch, for exploring rather than 
 | Paths | Slide-off Line | Off | On |
 | Jump Timing | Show | Off | On |
 | Jump Timing | Path | Off | On |
+| Jump Timing | Plan Text | Off | On |
 | Sounds | Buzz: Skipped Window | Off | On |
 
 <details>

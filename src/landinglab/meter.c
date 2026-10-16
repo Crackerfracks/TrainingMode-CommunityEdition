@@ -509,7 +509,9 @@ static void Lane_Track(Lane *L, int l, MeterRow *r, int t)
         from = w > 0 ? w - 1 : -1;
     }
     int d = 0;
-    if (t >= 0 && L->k_prev >= 0 && !L->parked && !r->parked && !Row_Ending(r))
+    // (a target held in the window, as the hop offered "now" while walking,
+    // is no re-timing: the rest of the row keeps its rows)
+    if (t >= 0 && L->k_prev >= 0 && !(t == 0 && L->k_prev == 0) && !L->parked && !r->parked && !Row_Ending(r))
         d = t - from;
     if (d != 0 && from >= 0 && d >= -MT_SLIDE_MAX && d <= MT_SLIDE_MAX)
     {

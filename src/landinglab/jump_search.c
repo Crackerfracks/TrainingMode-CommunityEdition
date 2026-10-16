@@ -305,7 +305,7 @@ static JumpRoute *Jump_Verify(FighterData *fp, int e)
 // whose notes come in, slide, and jump back when it hands over in turn
 // (repro-conveyor-f77, 2026-10-15: walking, the press kept sliding 16
 // frames out). 1 with it in out.
-static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int e, JumpRoute *out)
+static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int hp, JumpRoute *out)
 {
     int k = was->kind == LAND_AI, made = 0;
     for (int tries = 0; tries < JT_VERIFY; tries++)
@@ -315,7 +315,7 @@ static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int e, JumpRoute
         {
             JumpRoute *y = &jt_best[k][i];
             if (y->hop == was->hop && y->hj == hj && y->stick == was->stick && y->hold == was->hold && y->neutral == was->neutral &&
-                y->aerial == was->aerial && y->hp == e + 1)
+                y->aerial == was->aerial && y->hp == hp)
                 x = y;
         }
         if (!x)
@@ -325,10 +325,10 @@ static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int e, JumpRoute
             // Without it the search's later hop took over for a frame or
             // two, then the next anchor brought "now" back, 11-15 times a
             // walk under a platform (0.9.34, CHURN-0934)
-            if (made || e + 1 >= JT_D)
+            if (made || hp >= JT_D)
                 return 0;
             made = 1;
-            JumpCand c = {e, was->stick, was->hold, was->hop, hj, 0, was->neutral};
+            JumpCand c = {hp - 1, was->stick, was->hold, was->hop, hj, 0, was->neutral};
             JumpRoute found[JT_TRY];
             int found_n;
             Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
@@ -351,17 +351,20 @@ static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int e, JumpRoute
 static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
 {
     JumpRoute was = *cur;
-    if (Jump_Again1(fp, &was, was.hj, e, out))
+    if (Jump_Again1(fp, &was, was.hj, e + 1, out))
         return 1;
-    // its double jump a frame later or sooner: walking under the top
-    // platform the same double jump lands only two frames in three, and
-    // the third kept the plan whose hop had gone by (0.9.37 topR, a row
-    // back every third frame)
+    // no hop on the next frame lands it: the one after, its double jump
+    // where it was going, so the notes keep their rows while the hop's says
+    // "next frame". Walking right under the top platform, one frame in three
+    // has none (0.9.37 topR: the plan whose hop had gone by stayed, a row
+    // back; a double jump a frame later or sooner didn't land either)
+    if (Jump_Again1(fp, &was, was.hj, e + 2, out))
+        return 1;
     if (was.hj < 0)
         return 0;
-    if (Jump_Again1(fp, &was, was.hj + 1, e, out))
+    if (Jump_Again1(fp, &was, was.hj + 1, e + 1, out))
         return 1;
-    return was.hj > 0 && Jump_Again1(fp, &was, was.hj - 1, e, out);
+    return was.hj > 0 && Jump_Again1(fp, &was, was.hj - 1, e + 1, out);
 }
 
 // After the search of this frame: the best jump still ahead is the one

@@ -310,14 +310,26 @@ static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int hp, JumpRout
     int k = was->kind == LAND_AI, made = 0;
     for (int tries = 0; tries < JT_VERIFY; tries++)
     {
-        JumpRoute *x = 0;
+        // the held one's hold first, else the other: the lists keep one of
+        // the two (Jump_Same), so asking for the one let go found nothing,
+        // and the prediction below, no better than the kept one, wasn't put
+        // in. One frame in three walking under the top platform (0.9.38
+        // topR: every hop and double jump a frame either way "failed")
+        JumpRoute *x = 0, *other = 0;
         for (int i = 0; i < jt_best_n[k] && !x; i++)
         {
             JumpRoute *y = &jt_best[k][i];
-            if (y->hop == was->hop && y->hj == hj && y->stick == was->stick && y->hold == was->hold && y->neutral == was->neutral &&
+            if (y->hop == was->hop && y->hj == hj && y->stick == was->stick && y->neutral == was->neutral &&
                 y->aerial == was->aerial && y->hp == hp)
-                x = y;
+            {
+                if (y->hold == was->hold)
+                    x = y;
+                else if (!other)
+                    other = y;
+            }
         }
+        if (!x)
+            x = other;
         if (!x)
         {
             // not among the ones kept (the lists fill with other shapes,
@@ -354,10 +366,7 @@ static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
     if (Jump_Again1(fp, &was, was.hj, e + 1, out))
         return 1;
     // no hop on the next frame lands it: the one after, its double jump
-    // where it was going, so the notes keep their rows while the hop's says
-    // "next frame". Walking right under the top platform, one frame in three
-    // has none (0.9.37 topR: the plan whose hop had gone by stayed, a row
-    // back; a double jump a frame later or sooner didn't land either)
+    // where it was going, so the notes keep their rows
     if (Jump_Again1(fp, &was, was.hj, e + 2, out))
         return 1;
     if (was.hj < 0)

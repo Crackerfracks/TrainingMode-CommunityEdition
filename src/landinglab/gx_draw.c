@@ -156,13 +156,14 @@ static void World_GX(GOBJ *gobj, int pass)
         ; // the route's own path shows where it goes
     else if (live_visible)
         Draw_Prediction(pred_live, 1, LINE_SOLID, full);
-    else if (ghost_visible)
+    else if (ghost_visible && full)
     {
-        // the landing just made, against what was predicted: whole lines
-        // only in Full and Frame Advance, as the live one (they stayed up
-        // 90 frames into a dash dance)
+        // the landing just made, against what was predicted: only in Full
+        // and Frame Advance (they stayed up 90 frames into a dash dance,
+        // and its waveland band sat under the platform after the AI landed:
+        // 0.9.36 e-cs2)
         Draw_Prediction(pred_seg, 0, LINE_SOLID, full);
-        if (Options_Paths[POPT_PATH].val && full)
+        if (Options_Paths[POPT_PATH].val)
             Draw_Path(actual_pos, actual_bottom, 0, actual_num - 1, color_actual, 12);
     }
     else if (full)

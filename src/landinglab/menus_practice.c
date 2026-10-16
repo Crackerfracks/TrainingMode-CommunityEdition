@@ -258,9 +258,10 @@ static EventOption Options_Jump[JOPT_COUNT] = {
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Path",
-        .desc = {"Draw the shown jump's path in its color, with a",
-                 "yellow bar where you are on the jump's frame",
-                 "and a pink one on the aerial's."},
+        .desc = {"Draw the shown jump's landing spot, and its path",
+                 "and gates as Path Detail (Paths) allows: a yellow",
+                 "bar where you are on the jump's frame and a pink",
+                 "one on the aerial's."},
     },
     {
         .kind = OPTKIND_TOGGLE,

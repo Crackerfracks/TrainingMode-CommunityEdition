@@ -57,6 +57,53 @@ static void Spot_BracketGhost(Cue *c, GXColor base, float lx, float ly, float rx
         Hud_Seg(lx - o, ly, rx + o, ry, SPOT_LINE, Color_Over(base, 0.5f * fade));
 }
 
+// A live AI or NIL cue's bracket: frames from closing (0 in the window),
+// -1 while it isn't drawn (more than SPOT_OPEN frames out, or not counting).
+#define SPOT_OPEN 10
+static int Spot_BracketK(int kind, Cue *c)
+{
+    if (c->phase != PH_COUNT && c->phase != PH_WINDOW)
+        return -1;
+    int k = c->phase == PH_WINDOW ? 0 : kind == CUE_NIL ? c->left - 2 : c->left - 1;
+    if (k < 0)
+        k = 0;
+    return k > SPOT_OPEN ? -1 : k;
+}
+
+// A spot at rest, where a plan lands (Fable's live paths plan): the landing
+// spot's brackets open as wide as a countdown starts, with no countdown, in
+// the kind's color at 0.6 on the dark under-stroke, so when the live cue's
+// timer takes over in the same place and shape it's one object going from
+// "there" to "now". It never plays an ending: hit, miss and skip are the
+// cue's. Hollow (a short hop's preview): the brackets' outline only.
+static void Spot_Rest(float wx, float wy, GXColor base, float a, int hollow)
+{
+    float lx, ly, rx, ry, mx, my;
+    if (a <= 0.01f || !Hud_FromWorld(wx, wy, &mx, &my))
+        return;
+    Hud_FromWorld(wx - SPOT_HW, wy, &lx, &ly);
+    Hud_FromWorld(wx + SPOT_HW, wy, &rx, &ry);
+    float off = SPOT_OPEN * Meter_Pitch();
+    GXColor col = Color_Over(base, 0.6f * a);
+    Hud_Seg(lx, ly, rx, ry, SPOT_LINE + 0.24f, Color_Over(color_plate, 0.5f * a));
+    Hud_Seg(lx, ly, rx, ry, SPOT_LINE + 0.04f, Color_Over(base, 0.45f * a));
+    if (hollow)
+    {
+        float e = 0.12f;
+        for (int side = -1; side <= 1; side += 2)
+        {
+            float x = side < 0 ? lx - off : rx + off, y = side < 0 ? ly : ry;
+            Hud_Rect(x - SPOT_LINE / 2 - e, y - e, x + SPOT_LINE / 2 + e, y + SPOT_STEM + e, col);
+            float fx = x - side * (SPOT_FOOT + e);
+            Hud_Rect(side > 0 ? fx : x - e, y - e, side > 0 ? x + e : fx, y + SPOT_LINE + e, col);
+            Spot_Bracket(x, y, side, SPOT_STEM, Color_Over(color_plate, 0.8f * a));
+        }
+        return;
+    }
+    Spot_BracketEdged(lx - off, ly, -1, SPOT_STEM, col, a);
+    Spot_BracketEdged(rx + off, ry, 1, SPOT_STEM, col, a);
+}
+
 // AI and NIL: the footprint where Falcon touches down, and brackets that
 // close in on it a meter cell per frame and meet it on the frame to press
 // (the touchdown, for a NIL).
@@ -72,10 +119,8 @@ static void Spot_Brackets(int kind, Cue *c, int ended)
 
     if (!ended && (c->phase == PH_COUNT || c->phase == PH_WINDOW))
     {
-        int k = c->phase == PH_WINDOW ? 0 : kind == CUE_NIL ? c->left - 2 : c->left - 1;
+        int k = Spot_BracketK(kind, c);
         if (k < 0)
-            k = 0;
-        if (k > 10)
             return;
         GXColor col = c->dim ? Dim_Color(c->dim) : base;
         float am = c->dim ? 0.5f : 1.f;

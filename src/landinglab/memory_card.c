@@ -139,11 +139,23 @@ static void Card_Load(void)
                 // older files are this one cut short: what they have
                 // is kept
                 u32 size = img->size;
-                if (r == CARD_RESULT_READY && size >= __builtin_offsetof(PresetFile, old_view) && size <= sizeof(PresetFile) &&
-                    img->sum == Card_Sum(&img->file, size))
+                // up to version 4 a slot held 72 options: that layout's
+                // bounds, and its slots moved into this one's
+                int v4 = r == CARD_RESULT_READY && img->file.magic == PRESET_MAGIC && img->file.version < 5;
+                u32 lo = v4 ? __builtin_offsetof(PresetFileV4, old_view) : __builtin_offsetof(PresetFile, old_view);
+                u32 hi = v4 ? sizeof(PresetFileV4) : sizeof(PresetFile);
+                if (r == CARD_RESULT_READY && size >= lo && size <= hi && img->sum == Card_Sum(&img->file, size))
                 {
                     memset(preset_file, 0, sizeof(PresetFile));
-                    memcpy(preset_file, &img->file, size);
+                    if (v4)
+                    {
+                        // what a shorter, older file doesn't have reads as zero
+                        memset((u8 *)&img->file + size, 0, sizeof(PresetFileV4) - size);
+                        Preset_FromV4(preset_file, (PresetFileV4 *)&img->file);
+                        preset_dirty = 1; // written again in the new layout
+                    }
+                    else
+                        memcpy(preset_file, &img->file, size);
                     // Version 4 added Wavedash to the built-in presets and
                     // moved Everything to the end. A start preset saved
                     // before it keeps pointing at the same one: slot 7 was

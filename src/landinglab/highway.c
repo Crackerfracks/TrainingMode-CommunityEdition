@@ -63,8 +63,14 @@ static void Dial_Band(float cx, float cy, float r0, float r1, float from, float 
 // the ghost's swell (a filled copy of the gate that grows and fades, strong
 // on a press that worked), the hit's burst and the fold of a miss or skip.
 // (cx, cy) is the gate's middle, hw by hh its half size (a round gate uses
-// hw), s a size to scale the effects by.
-static void Strip_Ending(MeterRow *r, float cx, float cy, float hw, float hh, float s, int round)
+// hw), s a size to scale the effects by. (hx, hy) is the head's middle, the
+// note that was in the box on the frame before, hhw by hhh its half size:
+// a hit's swell grows out of it to the gate over its first ENDING_GROW
+// frames, and its burst starts there, so the result screen shows what
+// became of the note that was due (Fable's live paths plan, item 2: the
+// press-frame screen is the result screen; never a note, only the ending).
+static void Strip_Ending(MeterRow *r, float cx, float cy, float hw, float hh, float hx, float hy, float hhw, float hhh, float s,
+                         int round)
 {
     for (int g = 0; g < 4; g++)
     {
@@ -74,27 +80,32 @@ static void Strip_Ending(MeterRow *r, float cx, float cy, float hw, float hh, fl
         int b = r->ghost_bright[g];
         float grow = (b ? 0.1f + 1.0f * Ease_Out(q) : 0.05f + 0.45f * Ease_Out(q)) * s;
         GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
+        // a hit's out of the head; a skip's is the window's own
+        float t = b ? Ending_Grow(r->ghost[g]) : 1.f;
+        float mx = hx + (cx - hx) * t, my = hy + (cy - hy) * t;
+        float ew = hhw + (hw - hhw) * t + grow, eh = hhh + (hh - hhh) * t + grow;
         if (round)
-            Dial_Fan(cx, cy, hw + grow, 0, 360, Color_Over(tint, (b ? 0.5f : 0.2f) * fade));
+            Dial_Fan(mx, my, ew, 0, 360, Color_Over(tint, (b ? 0.5f : 0.2f) * fade));
         else
         {
-            Hud_Rect(cx - hw - grow, cy - hh - grow, cx + hw + grow, cy + hh + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
-            Hud_Frame(cx - hw - grow, cy - hh - grow, cx + hw + grow, cy + hh + grow, 1.6f * PX, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
+            Hud_Rect(mx - ew, my - eh, mx + ew, my + eh, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
+            Hud_Frame(mx - ew, my - eh, mx + ew, my + eh, 1.6f * PX, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
         }
     }
     if (r->burst >= 0)
     {
-        float q = (float)r->burst / LL_BURST;
-        float rad = (round ? hw + 0.3f * s : 0.5f * s) + 1.6f * s * Ease_Out(q);
+        float q = (float)r->burst / LL_BURST, t = Ending_Grow(r->burst);
+        float mx = hx + (cx - hx) * t, my = hy + (cy - hy) * t, rim = hhw + (hw - hhw) * t;
+        float rad = (round ? rim + 0.3f * s : 0.5f * s) + 1.6f * s * Ease_Out(q);
         float from = rad * 0.55f;
         if (round)
-            from = rad - 0.8f * s > hw + 0.1f * s ? rad - 0.8f * s : hw + 0.1f * s; // a dial's rays start outside its rim
+            from = rad - 0.8f * s > rim + 0.1f * s ? rad - 0.8f * s : rim + 0.1f * s; // a dial's rays start outside its rim
         GXColor bc = Color_Fill(r->color, 1.f - q);
         for (int ray = 0; ray < 6; ray++)
         {
             float ang = ray * 1.0471976f + 0.5235988f;
             float dx = cos(ang), dy = sin(ang);
-            Hud_Seg(cx + dx * from, cy + dy * from, cx + dx * rad, cy + dy * rad, 0.18f * s, bc);
+            Hud_Seg(mx + dx * from, my + dy * from, mx + dx * rad, my + dy * rad, 0.18f * s, bc);
         }
     }
     if (r->implode >= 0)
@@ -293,9 +304,12 @@ static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
     }
     if (!r->dim && r->burst >= 0)
     {
-        // the burn: white, cooling to the row's color, and a beam up the lane
-        float b = (float)r->burst / LL_BURST, fade = 1.f - b;
-        Hud_Rect(lx + 0.05f, line_y, rx - 0.05f, line_y + hw_pitch, Color_Fill(Color_Mix(color_white, r->color, b), fade));
+        // the burn: white, cooling to the row's color, and a beam up the
+        // lane. It fills the box out of the head, the note that was in it
+        // the frame before, over its first frames (Strip_Ending)
+        float b = (float)r->burst / LL_BURST, fade = 1.f - b, g = Ending_Grow(r->burst);
+        float bx = in + (0.05f - in) * g, by = 0.04f * (1.f - g);
+        Hud_Rect(lx + bx, line_y + by, rx - bx, line_y + hw_pitch - by, Color_Fill(Color_Mix(color_white, r->color, b), fade));
         float beam = (2.f + 5.f * Ease_Out(b)) * hw_pitch, bw = (rx - lx) * (0.5f - 0.3f * b);
         for (int i = 0; i < 4; i++)
         {
@@ -310,7 +324,8 @@ static void Hw_WindowEnd(MeterRow *r, float lx, float rx, float line_y)
         MeterRow e = *r;
         e.burst = -1;
         e.implode = -1;
-        Strip_Ending(&e, mid, line_y + hw_pitch / 2, (rx - lx) / 2, hw_pitch / 2, 1.f, 0);
+        float cy = line_y + hw_pitch / 2;
+        Strip_Ending(&e, mid, cy, (rx - lx) / 2, hw_pitch / 2, mid, cy, (rx - lx) / 2 - in, hw_pitch / 2 - 0.04f, 1.f, 0);
     }
 }
 

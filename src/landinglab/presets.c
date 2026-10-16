@@ -27,7 +27,9 @@ typedef struct PresetOpt
     u16 pad;
 } PresetOpt;
 
-#define PRESET_OPTS 72
+// 72 until version 5, when the menus had 73 options to keep and Path Detail
+// made 74: the last ones (Speed's) fell off the end unsaved. Room to grow.
+#define PRESET_OPTS 96
 typedef struct PresetSlot
 {
     u16 used;
@@ -36,7 +38,10 @@ typedef struct PresetSlot
 } PresetSlot;
 
 #define PRESET_MAGIC 0x4C4C5052 // "LLPR"
-#define PRESET_VERSION 4 // 4: the built-in presets were reordered (see Card_Load)
+// 4: the built-in presets were reordered (see Card_Load)
+// 5: a preset keeps up to 96 options, not 72 (Card_Load reads a version 4
+//    file's slots into the new layout)
+#define PRESET_VERSION 5
 #define NAME_LEN 12   // letters in a view's or preset's name
 #define VIEW_POOL 48  // views kept, all stages together
 typedef struct OldView // version 2's, one set for every stage
@@ -68,6 +73,46 @@ typedef struct PresetFile
     CamView view[VIEW_POOL];
     float skill[4]; // Auto Fade's hit rates, by cue kind
 } PresetFile;
+
+// The file up to version 4: the same, with 72 options a slot. Read and
+// moved into the layout above (Preset_FromV4), so nothing saved is lost.
+#define PRESET_OPTS_V4 72
+typedef struct PresetSlotV4
+{
+    u16 used;
+    u16 num;
+    PresetOpt opt[PRESET_OPTS_V4];
+} PresetSlotV4;
+typedef struct PresetFileV4
+{
+    u32 magic;
+    u16 version;
+    u8 start;
+    u8 pad;
+    PresetSlotV4 slot[PS_SAVED];
+    OldView old_view[4];
+    char preset_name[PS_SAVED][NAME_LEN + 4];
+    CamView view[VIEW_POOL];
+    float skill[4];
+} PresetFileV4;
+
+static void Preset_FromV4(PresetFile *to, const PresetFileV4 *from)
+{
+    memset(to, 0, sizeof(*to));
+    to->magic = from->magic;
+    to->version = from->version;
+    to->start = from->start;
+    for (int i = 0; i < PS_SAVED; i++)
+    {
+        to->slot[i].used = from->slot[i].used;
+        to->slot[i].num = from->slot[i].num <= PRESET_OPTS_V4 ? from->slot[i].num : PRESET_OPTS_V4;
+        memcpy(to->slot[i].opt, from->slot[i].opt, sizeof(from->slot[i].opt));
+    }
+    memcpy(to->old_view, from->old_view, sizeof(to->old_view));
+    memcpy(to->preset_name, from->preset_name, sizeof(to->preset_name));
+    memcpy(to->view, from->view, sizeof(to->view));
+    memcpy(to->skill, from->skill, sizeof(to->skill));
+}
 static float skill[4]; // the same, as they go (CUE_NUM used)
 static CamView *View_Find(int v);
 static CamView *View_New(int v);
@@ -277,6 +322,7 @@ static const PresetSet preset_ledge[] = {
     {&Options_Cues[COPT_AI], 1},
     {&Options_Cues[COPT_WL], 0},
     {&Options_Paths[POPT_ROUTE], 1},
+    {&Options_Paths[POPT_DETAIL], DETAIL_FULL}, // the ledge is a fixed anchor: the whole route holds still (Fable's live paths plan)
     {&Options_Paths[POPT_INPUTS], 1},
     {&Options_Paths[POPT_TICKS], 1},
     {&Options_Timers[TOPT_STRIP], STRIP_CONVEYOR},
@@ -300,6 +346,9 @@ static const PresetSet preset_everything[] = {
     {&Options_Timers[TOPT_WD], WDT_CELLS},
     {&Options_Paths[POPT_PATH], 1},
     {&Options_Paths[POPT_BODY], 0},
+    // Lead, as the default: exploring at full speed is what the whole arcs
+    // ruined, and Frame Advance shows them (Fable's live paths plan)
+    {&Options_Paths[POPT_DETAIL], DETAIL_LEAD},
     {&Options_Paths[POPT_ROUTE], 1},
     {&Options_Paths[POPT_INPUTS], 1},
     {&Options_Paths[POPT_WINDOWS], 1},

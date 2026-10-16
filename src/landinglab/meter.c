@@ -184,6 +184,17 @@ static int Cue_Ghost(Cue *c, int *bright)
     return g >= 0 && g < LL_GHOST ? g : -1;
 }
 
+// How far a hit's ending has grown out of the head, the note that was in
+// the window on the frame before, to the whole window: over its first
+// ENDING_GROW frames (0 on the press frame). The press-frame screen is the
+// result screen: it shows the note that was due being consumed, never a
+// note (Fable's live paths plan, item 2).
+#define ENDING_GROW 2.f
+static float Ending_Grow(int age)
+{
+    return Clamp01(age / ENDING_GROW);
+}
+
 static void Row_Ghosts(MeterRow *r, Cue *c)
 {
     int bright, g = Cue_Ghost(c, &bright);
@@ -1102,6 +1113,10 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
             if (r->dim)
                 continue;
             vis_k = base_k * r->fade;
+            // its cell in the gate: the head, the note that was due there
+            // the frame before, which a hit's swell and burst start from
+            // (Fable's live paths plan, item 2)
+            float ry0 = base + s * (ch + gap), ry1 = ry0 + ch, rcy = (ry0 + ry1) / 2;
             for (int g = 0; g < 4; g++)
             {
                 if (r->ghost[g] < 0)
@@ -1114,8 +1129,9 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
                 // the fixed strip's swells up and down only as far as its
                 // plate (0.9.30 stills: a double jump's ran off the screen's
-                // bottom edge)
-                float lo = gy0 - grow, hi = gy1 + grow;
+                // bottom edge). A hit's grows out of the head to the gate
+                float t = b ? Ending_Grow(r->ghost[g]) : 1.f;
+                float lo = ry0 + (gy0 - ry0) * t - grow, hi = ry1 + (gy1 - ry1) * t + grow;
                 if (labels && lo < plate_y0)
                     lo = plate_y0;
                 if (labels && hi > plate_y1 + glyph_h)
@@ -1127,12 +1143,13 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
             {
                 float q = (float)r->burst / LL_BURST;
                 float rad = (0.6f + 2.0f * Ease_Out(q)) * scale;
+                float by = rcy + (gcy - rcy) * Ending_Grow(r->burst); // from the head's middle
                 GXColor bc = Color_Fill(r->color, 1.f - q);
                 for (int ray = 0; ray < 6; ray++)
                 {
                     float ang = ray * 1.0471976f + 0.5235988f;
                     float dx = cos(ang), dy = sin(ang);
-                    Hud_Seg(gcx + dx * rad * 0.55f, gcy + dy * rad * 0.55f, gcx + dx * rad, gcy + dy * rad, 0.2f * scale, bc);
+                    Hud_Seg(gcx + dx * rad * 0.55f, by + dy * rad * 0.55f, gcx + dx * rad, by + dy * rad, 0.2f * scale, bc);
                 }
             }
             if (r->implode >= 0)
@@ -1142,7 +1159,6 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 // the cell that was due stays in the gate on its own row,
                 // fading: whole and gray for a skip, cracked in two for a miss
                 // (Stephen, 0.9.8: a skip barely showed)
-                float ry0 = base + s * (ch + gap), ry1 = ry0 + ch, rcy = (ry0 + ry1) / 2;
                 float a = 0.9f * (1.f - q);
                 if (r->implode_tone == TONE_MISS)
                 {

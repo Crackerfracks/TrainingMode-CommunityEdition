@@ -15,6 +15,15 @@ static int Dial_Target(int kind)
     return kind == CELL_PRESS || kind == CELL_LAND || kind == CELL_ACT;
 }
 
+// A row's ending on a dial, out of its head: the wedge's first frame at
+// twelve o'clock, where the hand met it the frame before (Strip_Ending)
+static void Dial_Ending(MeterRow *r, float cx, float cy)
+{
+    float hx, hy;
+    Dial_Pt(cx, cy, DL_R * 0.62f, DL_DEG / 2, &hx, &hy);
+    Strip_Ending(r, cx, cy, DL_R, DL_R, hx, hy, DL_R * 0.22f, DL_R * 0.22f, 1.f, 1);
+}
+
 // One dial for a row: the first run of cells that matter (a press, a
 // touchdown, the first frame Falcon can act) is its wedge at twelve
 // o'clock, and the hand sweeps clockwise a frame at a time into it, with
@@ -115,7 +124,7 @@ static void Dial_One(MeterRow *r, float cx, float cy)
             Dial_Fan(cx, cy, R - 0.05f, 0, DL_DEG, Color_Fill(color_skip, a * 0.8f));
     }
     if (!r->dim)
-        Strip_Ending(r, cx, cy, R, R, 1.f, 1);
+        Dial_Ending(r, cx, cy);
 }
 
 // The dial (Fixed Strip): a dial a slot, side by side, its swatch under
@@ -161,7 +170,7 @@ static void Dial_Draw(FighterData *fp)
         if (o && !o->dim)
         {
             vis_k = base_k * o->fade;
-            Strip_Ending(o, cx, cy, DL_R, DL_R, 1.f, 1);
+            Dial_Ending(o, cx, cy);
         }
         vis_k = base_k * r->fade;
         Slot_Swatch(s, r, cx, y0 + 0.75f, s < MT_SLOTS_SHOWN ? 0.9f : 0.5f, 0.45f, 1.f);

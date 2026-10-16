@@ -335,6 +335,22 @@ static void Cues_Clear(void)
 
 #define LL_GHOST_FRAMES 90
 
+// The aerials pressed this session, by TS_AIR* - TS_AIRN, so Jump Timing
+// can lean to the ones played (Jump_Cost; Fable's live paths plan: the
+// probable route is the habit). From the aerial's state, and from a press
+// that landed on its own frame and so never showed one (Landing_Judge).
+static u16 ai_used[5];
+static int Log_Level(void); // (debug_camera)
+static void Aerial_Used(int aerial)
+{
+    if (aerial < TS_AIRN || aerial > TS_AIRLW)
+        return;
+    if (ai_used[aerial - TS_AIRN] < 0xFFFF)
+        ai_used[aerial - TS_AIRN]++;
+    if (Log_Level() >= LOG_ALL)
+        OSReport("LLAIUSED %d %s %d\n", event_vars->game_timer, tracked_state_names[aerial], ai_used[aerial - TS_AIRN]);
+}
+
 // The fighter left the tracked air states this frame: judge the landing.
 static void Landing_Judge(FighterData *fp);
 
@@ -379,6 +395,8 @@ static void Landing_Judge(FighterData *fp)
         dodge = Dodge_Dir(fp->input.lstick.X, fp->input.lstick.Y);
     else if (is_landing && Jump_Or_Fall(prev_ts) && pred_live->land_frame != 1)
         pressed = Aerial_Pressed(fp);
+    if (pressed >= 0)
+        Aerial_Used(pressed);
 
     int kind;
     if (sid == ASID_WAIT)

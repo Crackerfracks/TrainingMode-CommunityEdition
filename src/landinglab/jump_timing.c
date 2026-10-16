@@ -80,6 +80,11 @@ typedef struct JumpRoute
     s16 act;    // the frame Falcon can act: the touchdown for a NIL, the end of the landing lag for an AI
     u8 lib;     // laid out from the hop library, not predicted yet (Gl_Direct): checked before it's shown
     u8 neutral; // a hop and double jump: the stick let go from the takeoff to the double jump
+    // the floor it lands on (Jump_Where): a platform's line, JFLOOR_STAGE
+    // for any of the stage's own, -1 none; and the spot on it, where the
+    // world shows the plan (jt_world; Fable's live paths plan)
+    s16 floor;
+    float spot_x, spot_y;
 } JumpRoute;
 
 static SimState *jt_cache;      // [JT_D], allocated in Event_Init: the fall to jump from, d frames in
@@ -117,6 +122,41 @@ static int jt_path_anchor = -1;
 static int jt_target;           // Land On as the search started
 static int jt_hop;              // From the Ground as the search started
 static int jt_steps, jt_tries;  // the search's cost, for the log
+// The plan the world shows (Fable's live paths plan): where it lands, held
+// still while the plan holds. It's drawn once the plan has held for
+// JT_WORLD_STABLE frames (or once Falcon is committed to it: Plan_Committed),
+// coming in and going out a quarter a frame, so a plan that flips faster
+// than about 10 frames never fully shows. On the same floor its spot slides
+// a third of the way a frame; to another floor the old one fades in place
+// as the new one comes in. Display state, not the search's: no anchor
+// resets it (Jump_AnchorGround, Jump_KeepHop).
+#define JT_WORLD_STABLE 5
+#define JT_WORLD_GRACE 2 // frames with no plan before the shown one starts to go (a re-anchor's gap)
+typedef struct JumpWorld
+{
+    s16 floor;            // the floor it lands on (JumpRoute floor), -1 none
+    u8 kind, aerial, hop, stick;
+    u8 have;              // a plan this frame
+    u8 handed;            // the live cue's bracket took over in its place: not drawn again until the plan changes
+    u8 follow;            // no plan any more, but the live cue counts down to the same spot: held for it
+    int gone;             // frames with no plan
+    int stable;           // frames the same plan has held
+    float alpha;          // 0 to 1
+    float x, y;           // the spot as drawn
+    float tx, ty;         // ... where the plan lands
+    int leave_age;        // a plan on another floor, fading in place: frames since, -1 none
+    float leave_x, leave_y, leave_alpha;
+    u8 leave_kind;
+    // quiet while dash dancing: the stick turned twice in DD_WINDOW frames,
+    // and hasn't been calm DD_CALM since (Jump_World)
+    u8 quiet;
+    float calm;           // 1, down to 0 while quiet: the hop previews' spots go with it
+    // the aerial habit: the kept AI routes have one with an aerial pressed
+    // this session (ai_used), and which those are, as Jump_Cost last
+    // weighed them
+    u8 habit, used_mask;
+} JumpWorld;
+static JumpWorld jt_world = {.floor = -1, .leave_age = -1, .calm = 1.f};
 static JumpRoute gt_plan;       // the standstill plan shown last, with its double jump
 static u8 gt_plan_ok;
 static u8 gt_squat_short;       // the jumpsquat is a short hop's
@@ -179,11 +219,17 @@ static int Jump_E(void)
 // that height. For an AI, (x, y) is where the plain fall has him on the
 // frame the aerial touches down, which for a rising one can be well above
 // the floor or, coming up through a platform, a little under it. Platforms
-// move on some stages, so this is worked out each time.
-static int Jump_Where(float x, float y)
+// move on some stages, so this is worked out each time. Also sets the
+// route's floor and its spot there: x, on the floor (jt_world). The stage's
+// own lines are one floor, so walking its joins isn't a new destination.
+#define JFLOOR_STAGE 0x7FFF
+static int Jump_Where(JumpRoute *route, float x, float y)
 {
     FloorLine *best = 0;
     float best_y = 0, l, ly, r, ry;
+    route->floor = -1;
+    route->spot_x = x;
+    route->spot_y = y;
     for (int i = 0; i < floor_num; i++)
     {
         FloorLine *f = &floor_cache[i];
@@ -199,6 +245,8 @@ static int Jump_Where(float x, float y)
     }
     if (!best)
         return 0;
+    route->floor = best->is_platform ? best->id : JFLOOR_STAGE;
+    route->spot_y = best_y;
     if (!best->is_platform)
         return JWHERE_FLOOR;
     int where = JWHERE_PLATFORM;
@@ -276,16 +324,31 @@ static int Jump_Vertical(JumpRoute *r)
 // 0.9.29: the shown route leaned to backward double jumps whose landing
 // press was the strict one), and drift is harder to repeat than straight up:
 // a drift-back held diagonal gives a straight-up one 10 frames (Stephen,
-// 0.9.30: mostly vertical jumps are what's played). Letting go is free.
-// Prefer Soonest keeps only the window's term.
+// 0.9.30: mostly vertical jumps are what's played). Each stick change the
+// route asks for costs 3: a change mid-route is the least repeatable thing
+// a route can ask (Fable's live paths plan). Prefer Soonest keeps only the
+// window's term, and the floor's.
+// A route landing on a floor other than the one the world shows costs
+// JT_STAY: a re-anchor on a dash's turn keeps the shown platform unless the
+// other is at least that much better, or the old one can't be reached any
+// more (Fable's live paths plan: nothing held the destination across
+// anchors, so it flipped with every turn).
+#define JT_STAY 4
 static int Jump_Cost(JumpRoute *r)
 {
     int cost = r->act;
     int w = Jump_Wide(r);
     if (w < 3)
         cost += 2 * (3 - w);
+    if (jt_world.alpha > 0 && jt_world.floor >= 0 && r->floor != jt_world.floor)
+        cost += JT_STAY;
     if (Options_Jump[JOPT_PREFER].val == PREFER_SOONEST)
         return cost;
+    cost += 3 * r->changes;
+    // an aerial not pressed this session, when a route with one that was
+    // lands too: the soft pin to habit (AI Aerial is the hard one)
+    if (r->kind == LAND_AI && jt_world.habit && !ai_used[r->aerial - TS_AIRN])
+        cost += 2;
     int dj = !r->hop || r->hj >= 0;
     if (dj && jt_stick_xy[r->stick][0] * jt_start.facing < 0)
         cost += 4;
@@ -597,7 +660,7 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
         r->kind = LAND_NIL;
         r->land = off + p->land_frame;
         r->act = r->land;
-        r->where = Jump_Where(p->pos[p->land_frame].X, p->pos[p->land_frame].Y);
+        r->where = Jump_Where(r, p->pos[p->land_frame].X, p->pos[p->land_frame].Y);
     }
 
     int normal_lag = (int)fp->attr.normal_landing_lag;
@@ -635,7 +698,7 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
                 r->land = off + touch;
                 r->act = r->land + normal_lag;
                 int at = touch <= p->num ? touch : p->num;
-                r->where = Jump_Where(p->pos[at].X, p->pos[at].Y);
+                r->where = Jump_Where(r, p->pos[at].X, p->pos[at].Y);
                 windows++;
             }
             k += w - 1;

@@ -170,6 +170,36 @@ static void Draw_Path(Vec2 *pos, float *bottom, int from, int to, GXColor color,
         World_Vtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Flow(color, i, from, to));
 }
 
+// How much of a path shows: Path Detail at full speed, all of it in Frame
+// Advance, a paused, planning moment, which needs no setting (Fable's live
+// paths plan: full arcs belong to planning; at speed, where you land).
+static int Path_Detail(void)
+{
+    return Options_Game[GOPT_FRAME_ADV].val ? DETAIL_FULL : Options_Paths[POPT_DETAIL].val;
+}
+
+// The lead: a heading stub from Falcon's feet, fading from 0.9 there to
+// nothing at its end, so it moves with him and never reads as a line
+// across the stage. No flow pulse; only the alpha goes down, so it fades
+// into what's behind it (Fable's live paths plan).
+static GXColor Path_Taper(GXColor c, int i, int from, int to, float a)
+{
+    float k = (to > from ? 0.9f * (1.f - (float)(i - from) / (to - from)) : 0.9f) * a;
+    c.a = c.a * (k < 0 ? 0 : k > 1 ? 1 : k);
+    return c;
+}
+
+static void Draw_Lead(Vec2 *pos, float *bottom, int from, int to, GXColor color, u8 size, float a)
+{
+    int count = to - from + 1;
+    if (count < 2)
+        return;
+
+    World_Start(count, GX_LINESTRIP, size);
+    for (int i = from; i <= to; i++)
+        World_Vtx(pos[i].X, pos[i].Y + bottom[i], 0, Path_Taper(color, i, from, to, a));
+}
+
 // The paths look different from each other: the landing path is solid, the
 // short hop preview dashed (a dash every other frame, so it stays readable
 // where it runs along the full hop's line) and the body path dotted.
@@ -442,14 +472,21 @@ static void Draw_Windows(Prediction *p)
     }
 }
 
-static void Draw_Prediction(Prediction *p, int body, int style)
+// full: the whole line and body path. At full speed they're left out, and
+// the window bands, the aerial picker, the touchdown's ECB and the
+// fastfall tick stay: the band your feet pass through and the spot you
+// land on (Fable's live paths plan: the keep-holding line, redrawn from
+// the stick every frame, swept the screen).
+static void Draw_Prediction(Prediction *p, int body, int style, int full)
 {
     int last = p->land_frame ? p->land_frame : p->num;
     int certain = p->land_frame && p->uncertain_from > p->land_frame;
     int highlight = certain && Kind_Shown(p->land_kind);
     int from = 0;
 
-    int line = Options_Paths[POPT_PATH].val;
+    int tick = Options_Paths[POPT_PATH].val;
+    int line = tick && full;
+    body = body && full;
 
     // an aerial interrupt still ahead: past its window the path only shows
     // where Falcon goes if he skips it (usually on up through the platform
@@ -492,7 +529,7 @@ static void Draw_Prediction(Prediction *p, int body, int style)
     }
 
     // short white tick where a pending fastfall kicks in
-    if (line && p->fastfall_frame && p->fastfall_frame <= last)
+    if (tick && p->fastfall_frame && p->fastfall_frame <= last)
     {
         int k = p->fastfall_frame;
         float y = p->pos[k].Y + p->bottom[k];

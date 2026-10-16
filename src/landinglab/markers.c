@@ -60,6 +60,21 @@ static void Marker_Due(Marker *m, int due)
         m->due = due;
 }
 
+// Only the marker of the next press: the one due soonest (one not counted
+// is later than any that is), or the first placed when none is counted.
+static void Markers_Next(void)
+{
+    int best = 0;
+    for (int i = 1; i < mk_num; i++)
+        if (mk[i].due >= 0 && (mk[best].due < 0 || mk[i].due < mk[best].due))
+            best = i;
+    if (mk_num > 1)
+    {
+        mk[0] = mk[best];
+        mk_num = 1;
+    }
+}
+
 static void Marker_Glyph(Marker *m, int glyph, GXColor c)
 {
     if (m && glyph && m->n < 3)
@@ -294,15 +309,25 @@ static void Markers_Draw(void)
         }
         if (r->kind == LAND_AI && r->press >= from)
             Route_Marker(r->press, GLYPH_AERIAL, color_in_aerial, Aerial_Glyph(r->aerial, facing), color_in_aerial);
+        // on the way back at full speed, the next press's alone, as a
+        // jump's (Fable's live paths plan); hanging, all of them
+        if (hang_ledge < 0 && route_active && Path_Detail() != DETAIL_FULL)
+            Markers_Next();
         // beside the line on the stage's side, clear of Falcon hanging
         // and dropping off it
         Markers_Flush(facing > 0 ? 1 : -1);
         return;
     }
 
-    // a jump: the stick and the jump where it is due, then the aerial
-    if (Jump_Showing() && jt_path_num >= 2)
+    // a jump: the stick and the jump where it is due, then the aerial. At
+    // full speed only the next press's, while its lead shows (Fable's live
+    // paths plan); all of them in Full and Frame Advance
+    int full = Path_Detail() == DETAIL_FULL;
+    if (Jump_Showing() && jt_path_num >= 2 && (full || Jump_LeadOn()))
     {
+        float base = vis_k;
+        if (!full)
+            vis_k = base * jt_world.alpha;
         JumpRoute *r = &jt_route;
         int e = Jump_E();
         int i;
@@ -340,8 +365,11 @@ static void Markers_Draw(void)
             if (!(jt_ground && gt_still))
                 Marker_Due(m, r->press - e - 1);
         }
+        if (!full)
+            Markers_Next();
         // on the side the path came from, out of its way
         Markers_Flush(jt_path[jt_path_num - 1].X >= jt_path[0].X ? -1 : 1);
+        vis_k = base;
     }
 
     // the next waveland's airdodge, while its timer runs

@@ -56,18 +56,19 @@ Wavelands and wavedashes, timed at the feet. The AI cues go off and the Waveland
 
 ### Ledge Drill
 
-Ledge routes from the ledge, both kinds, reset to the same ledge each time. NIL cues go on and the waveland cues off. The frame dots are Always, as in Defaults.
+Ledge routes from the ledge, both kinds, reset to the same ledge each time. NIL cues go on and the waveland cues off. The frame dots are Always, as in Defaults. Path Detail is Full: a route from the ledge holds still, so it's drawn whole on the way back too.
 
 | Menu | Option | Defaults | Ledge Drill |
 | --- | --- | --- | --- |
 | Cues | NIL Cues | Off | On |
 | Cues | Waveland Cues | Platforms | Off |
+| Paths | Path Detail | Lead | Full |
 | Ledge Practice | Route Kind | AI | Both |
 | Ledge Practice | Reset | None | Same Side |
 
 ### Everything
 
-Every cue, path and timer that has a plain on switch, for exploring rather than playing. Near You is Pincers, which are drawn clear of the body. Body Path and Jump Preview stay off, and Frame Dots show only in Frame Advance. Jump Timing, its path and its plan text are on.
+Every cue, path and timer that has a plain on switch, for exploring rather than playing. Near You is Pincers, which are drawn clear of the body. Body Path and Jump Preview stay off, and Frame Dots show only in Frame Advance. Jump Timing, its path and its plan text are on. Path Detail stays at Lead: at full speed the jump is its spot and a short lead, and Frame Advance shows it whole.
 
 | Menu | Option | Defaults | Everything |
 | --- | --- | --- | --- |
@@ -116,7 +117,7 @@ Name grid inputs (the same grid names camera views):
 
 ## What a preset stores
 
-A preset stores every list, number and toggle in the Cues, Intensity by Group, Rumble, Timers, Paths, HUD, Sounds, Ledge Practice, Jump Timing, Camera and Speed menus. That is 72 options.
+A preset stores every list, number and toggle in the Cues, Intensity by Group, Rumble, Timers, Paths, HUD, Sounds, Ledge Practice, Jump Timing, Camera and Speed menus. That is 74 options.
 
 It does not store:
 

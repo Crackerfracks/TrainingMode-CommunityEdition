@@ -33,6 +33,7 @@ void Event_Init(GOBJ *gobj)
     gl_pre_buf = calloc(sizeof(float) * 4 * GL_X);
     gl_dj = calloc(sizeof(float) * GT_STILL_STICKS * GL_X);
     gl_gen = -1;
+    memset(ai_used, 0, sizeof(ai_used)); // the session's aerials start over with the event (Jump_Cost)
 #ifdef LL_GROUND_GUIDE
     gd_mem = (u8 *)(((u32)calloc(GD_STRIDE * GD_SLOTS + 32) + 31) & ~31);
     for (int j = 0; j < GD_SLOTS; j++)
@@ -278,6 +279,8 @@ static void Event_ThinkFrame(GOBJ *event)
             press_note = 0; // a new jump or press: the old note is stale
         if (prev_tracked_air && ts != prev_ts)
             Press_CheckMissed(fp, ts);
+        if (ts != prev_ts && Tracked_IsAerial(ts))
+            Aerial_Used(ts);
         if (!prev_tracked_air || Segment_InputChanged(fp, ts))
             Segment_Start(fp);
         else
@@ -325,6 +328,7 @@ static void Event_ThinkFrame(GOBJ *event)
     int t_solve = OSGetTick();
     Jump_Solve(fp);
     Jump_Publish(fp);
+    Jump_World(fp);
     if (jt_active && jt_ground && jt_done && Options_Jump[JOPT_SHOW].val)
         Gl_Idle(fp, LR_BUDGET); // the hop library, in the frames the jump search leaves
 #ifdef LL_GROUND_GUIDE

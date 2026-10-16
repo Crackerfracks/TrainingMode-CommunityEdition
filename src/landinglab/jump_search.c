@@ -307,7 +307,7 @@ static JumpRoute *Jump_Verify(FighterData *fp, int e)
 static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
 {
     JumpRoute was = *cur;
-    int k = was.kind == LAND_AI;
+    int k = was.kind == LAND_AI, made = 0;
     for (int tries = 0; tries < JT_VERIFY; tries++)
     {
         JumpRoute *x = 0;
@@ -319,7 +319,25 @@ static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
                 x = y;
         }
         if (!x)
-            return 0;
+        {
+            // not among the ones kept (the lists fill with other shapes,
+            // or the search hasn't come to that frame): predict it now.
+            // Without it the search's later hop took over for a frame or
+            // two, then the next anchor brought "now" back, 11-15 times a
+            // walk under a platform (0.9.34, CHURN-0934)
+            if (made || e + 1 >= JT_D)
+                return 0;
+            made = 1;
+            JumpCand c = {e, was.stick, was.hold, was.hop, was.hj, 0, was.neutral};
+            JumpRoute found[JT_TRY];
+            int found_n;
+            Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
+            for (int i = 0; i < found_n; i++)
+                if (Jump_OnTarget(&found[i]))
+                    Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+            tries--; // the prediction isn't a try: look again
+            continue;
+        }
         if (!x->lib)
         {
             *out = *x;

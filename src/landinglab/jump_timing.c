@@ -302,10 +302,13 @@ static int Jump_Better(JumpRoute *a, JumpRoute *b)
         return a->valid;
     if (!a->valid)
         return 0;
-    if (a->late != b->late)
-        return b->late;
+    // Vertical asks for straight up first, even when its double jump waits
+    // for the hop to fall (1b6d32e: standing, a late straight-up one lost to
+    // a drifting one)
     if (Options_Jump[JOPT_PREFER].val == PREFER_VERTICAL && Jump_Vertical(a) != Jump_Vertical(b))
         return Jump_Vertical(a);
+    if (a->late != b->late)
+        return b->late;
     if (Jump_Cost(a) != Jump_Cost(b))
         return Jump_Cost(a) < Jump_Cost(b);
     if (a->act != b->act)

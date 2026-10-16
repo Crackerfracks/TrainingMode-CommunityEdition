@@ -173,6 +173,8 @@ static void Jump_Anchor(FighterData *fp, int ts)
     jt_steps = 0;
     jt_tries = 0;
     jt_best_n[0] = 0;
+    jt_vert.valid = 0;
+    jt_neutral_n = 0;
     jt_best_n[1] = 0;
     jt_have = 0;
 }
@@ -382,6 +384,8 @@ static void Jump_AnchorGround(FighterData *fp, int sid)
     jt_steps = 0;
     jt_tries = 0;
     jt_best_n[0] = 0;
+    jt_vert.valid = 0;
+    jt_neutral_n = 0;
     jt_best_n[1] = 0;
     jt_have = 0;
 }
@@ -868,20 +872,14 @@ static void Jump_Log(void)
                      gl_direct, gl_verified, gl_rejected);
     // the soonest straight-up one too, to weigh drift against (Stephen,
     // 0.9.30: vertical jumps are what's played most)
-    JumpRoute *v = 0;
-    for (int k = 0; k < 2; k++)
-        for (int i = 0; i < jt_best_n[k]; i++)
-        {
-            JumpRoute *x = &jt_best[k][i];
-            if ((x->hop ? x->hj >= 0 : 1) && x->stick == JT_UP && x->kind == LAND_AI && (!v || Jump_Better(x, v)))
-                v = x;
-        }
+    JumpRoute *v = jt_vert.valid ? &jt_vert : 0;
     if (b)
         n += sprintf(buf + n, " act %d cost %d", b->act, Jump_Cost(b));
     if (v)
         n += sprintf(buf + n, " vert d %d act %d cost %d neutral %d", v->d, v->act, Jump_Cost(v), v->neutral);
     else
         n += sprintf(buf + n, " vert none");
+    n += sprintf(buf + n, " neutral found %d", jt_neutral_n);
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)

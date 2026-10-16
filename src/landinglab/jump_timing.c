@@ -86,6 +86,8 @@ static int jt_cache_n;          // ... how many of them: past that the fall land
 static SimStart jt_start;       // the anchor: Falcon as the search started
 static int jt_anchor;           // its game frame
 static int jt_next;             // the next candidate to simulate
+static JumpRoute jt_vert;       // the best straight-up AI found, kept or not (Jump_Insert), for the log
+static int jt_neutral_n;        // ... and how many AIs with the stick let go through the hop were found
 static int jt_twin;             // ... tried again, the stick let go through the hop (Jump_Solve)
 static int jt_done;             // the search has been through every candidate
 static int jt_found;            // routes it found
@@ -331,6 +333,12 @@ static int Jump_First(JumpRoute *r)
 // Put a route in a kind's list, in order, as Route_Insert does.
 static void Jump_Insert(JumpRoute *a, int *count, JumpRoute *r)
 {
+    // the lists keep the JT_BEST soonest, which pushed every straight-up one
+    // out while moving (ca72c6f: "vert none" at every moving anchor), so the
+    // best of those is kept aside to weigh them by
+    if (r->kind == LAND_AI && r->stick == JT_UP && (!r->hop || r->hj >= 0) && Jump_Better(r, &jt_vert))
+        jt_vert = *r;
+    jt_neutral_n += r->kind == LAND_AI && r->neutral;
     int n = *count;
     for (int i = 0; i < n; i++)
     {

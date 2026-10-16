@@ -78,6 +78,7 @@ typedef struct JumpRoute
     s16 land;   // touchdown
     s16 act;    // the frame Falcon can act: the touchdown for a NIL, the end of the landing lag for an AI
     u8 lib;     // laid out from the hop library, not predicted yet (Gl_Direct): checked before it's shown
+    u8 neutral; // a hop and double jump: the stick let go from the takeoff to the double jump
 } JumpRoute;
 
 static SimState *jt_cache;      // [JT_D], allocated in Event_Init: the fall to jump from, d frames in
@@ -85,6 +86,7 @@ static int jt_cache_n;          // ... how many of them: past that the fall land
 static SimStart jt_start;       // the anchor: Falcon as the search started
 static int jt_anchor;           // its game frame
 static int jt_next;             // the next candidate to simulate
+static int jt_twin;             // ... tried again, the stick let go through the hop (Jump_Solve)
 static int jt_done;             // the search has been through every candidate
 static int jt_found;            // routes it found
 static float jt_bottom;         // how far down a fall is followed
@@ -317,7 +319,7 @@ static int Jump_Better(JumpRoute *a, JumpRoute *b)
 static int Jump_Same(JumpRoute *a, JumpRoute *b)
 {
     return a->kind == b->kind && a->d == b->d && a->stick == b->stick && a->aerial == b->aerial && a->press == b->press &&
-           a->hop == b->hop && a->hj == b->hj;
+           a->hop == b->hop && a->hj == b->hj && a->neutral == b->neutral;
 }
 
 // The first input a route asks for: the hop, or the double jump.
@@ -373,6 +375,7 @@ typedef struct JumpCand
     int hop;   // on the ground: GT_SH or GT_FH
     int hj;    // ... a double jump this many frames after the takeoff, or -1
     int v;     // ... which of the standstill variants (Gt_Variant) it is
+    int neutral; // ... with the stick let go from the takeoff to the double jump
 } JumpCand;
 
 static u8 jt_try_predicted; // the last Jump_Try got as far as its prediction (pred_route is its)
@@ -427,11 +430,14 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
         }
         if (c->hj >= 0)
         {
-            // the hop with the stick as on the ground, then the double jump
+            // the hop with the stick as on the ground, or let go from the
+            // takeoff (a straight-up double jump that drifts least: Stephen,
+            // 0.9.30, mostly vertical jumps are what's played), then the
+            // double jump
             SimStart st = ps;
             SimState s;
             SimStep step;
-            st.stick_x = jt_stick_x;
+            st.stick_x = c->neutral ? 0 : jt_stick_x;
             Sim_Init(&st, &s);
             for (int i = 0; i < c->hj; i++)
             {
@@ -534,8 +540,9 @@ static void Jump_Try(FighterData *fp, JumpCand *c, JumpRoute *out, int *n_out, V
     base.d = d;
     base.dj = !air_like && c->hj >= 0 ? off : d + 1;
     base.press = -1;
-    base.changes = air_like ? Jump_Changes(stick, hold) : c->hj >= 0 ? 1 + Jump_Changes(stick, hold) : 1 + !hold;
+    base.changes = air_like ? Jump_Changes(stick, hold) : c->hj >= 0 ? 1 + Jump_Changes(stick, hold) + (c->neutral != 0) : 1 + !hold;
     base.late = late_dj;
+    base.neutral = !air_like && c->hj >= 0 && c->neutral;
 
     int nr = 0;
     if (p->land_frame && p->land_kind == LAND_NIL && p->uncertain_from > p->land_frame)

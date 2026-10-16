@@ -17,6 +17,7 @@ static int Gt_Variant(int i, JumpCand *c)
 {
     int want = JT_HOP_SETTING;
     c->hj = -1;
+    c->neutral = 0;
     c->stick = JT_UP;
     c->v = i;
     {
@@ -43,6 +44,7 @@ static int Gt_Variant(int i, JumpCand *c)
 
 static int Jump_Cand(int i, JumpCand *c)
 {
+    c->neutral = 0;
     if (jt_ground && gt_still)
     {
         c->d = 0;
@@ -103,11 +105,29 @@ static void Jump_Solve(FighterData *fp)
         // pushed every hop 20 frames out, and none matched the standing plan)
         int lead = jt_ground ? 0 : Jump_Lead();
         if (!(jt_ground && gt_still) && jt_next < (e + lead) * Jump_Stride())
+        {
             jt_next = (e + lead) * Jump_Stride();
+            jt_twin = 0;
+        }
         if (jt_next >= total)
             break;
         JumpCand c;
-        int ok = Jump_Cand(jt_next++, &c);
+        int ok = Jump_Cand(jt_next, &c);
+        // moving, a hop then a double jump straight up is tried twice: the
+        // stick kept through the hop, then let go from the takeoff, the one
+        // that drifts least (Stephen, 0.9.30: mostly vertical jumps are
+        // what's played; walking, none was found at all)
+        if (jt_twin)
+        {
+            c.neutral = 1;
+            jt_twin = 0;
+            jt_next++;
+        }
+        else if (ok > 0 && jt_ground && !gt_still && (c.hop == GT_SH || c.hop == GT_FH) && c.hj >= 0 && c.stick == JT_UP &&
+                 fabs(jt_stick_x) >= JT_HOP_STILL)
+            jt_twin = 1; // this one again next, let go
+        else
+            jt_next++;
         if (ok < 0)
         {
             jt_next = total;
@@ -170,7 +190,7 @@ static void Jump_Path(FighterData *fp)
         return;
     JumpRoute found[JT_TRY];
     int found_n;
-    JumpCand c = {r->d, r->stick, r->hold, r->hop, r->hj, 0};
+    JumpCand c = {r->d, r->stick, r->hold, r->hop, r->hj, 0, r->neutral};
     Jump_Try(fp, &c, found, &found_n, jt_path, jt_path_bottom, &jt_path_num);
     if (jt_path_num > r->land + 1 && r->land > 0)
         jt_path_num = r->land + 1; // up to its own touchdown
@@ -197,7 +217,7 @@ static void Jump_Text(JumpRoute *r, int e)
     if (r->hop && r->hp > from)
         from = r->hp;
     if (r->hop && r->hj >= 0)
-        t += sprintf(t, ", DJ %s +%d", jt_stick_names[r->stick], r->dj - from);
+        t += sprintf(t, "%s, DJ %s +%d", r->neutral ? ", let go" : "", jt_stick_names[r->stick], r->dj - from);
     else if (r->hop)
         ;
     else if (until > 0)
@@ -240,7 +260,7 @@ static void Jump_Real(FighterData *fp, JumpRoute *b)
         if (&jt_best[k][i] != b)
             jt_best[k][n++] = jt_best[k][i];
     jt_best_n[k] = n;
-    JumpCand c = {was.d, was.stick, was.hold, was.hop, was.hj, 0};
+    JumpCand c = {was.d, was.stick, was.hold, was.hop, was.hj, 0, was.neutral};
     JumpRoute found[JT_TRY];
     int found_n, kept = 0;
     Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
@@ -294,7 +314,7 @@ static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
         for (int i = 0; i < jt_best_n[k] && !x; i++)
         {
             JumpRoute *y = &jt_best[k][i];
-            if (y->hop == was.hop && y->hj == was.hj && y->stick == was.stick && y->hold == was.hold &&
+            if (y->hop == was.hop && y->hj == was.hj && y->stick == was.stick && y->hold == was.hold && y->neutral == was.neutral &&
                 y->aerial == was.aerial && y->hp == e + 1)
                 x = y;
         }
@@ -360,9 +380,9 @@ static void Jump_Publish(FighterData *fp)
     if (!b)
         return;
     if (Log_Level() >= LOG_ALL && (!Jump_Same(b, &jt_route) || b->dj != jt_route.dj))
-        OSReport("LLJUMPR %d anchor %d hop %d hj %d dj %d stick %d hold %d aerial %d press %d land %d on %d kind %d\n",
+        OSReport("LLJUMPR %d anchor %d hop %d hj %d dj %d stick %d hold %d aerial %d press %d land %d on %d kind %d neutral %d\n",
                  event_vars->game_timer, jt_anchor, b->hop, b->hj, b->dj, b->stick, b->hold, b->aerial, b->press, b->land,
-                 b->where, b->kind);
+                 b->where, b->kind, b->neutral);
     jt_route = *b;
     jt_route_abs = jt_anchor;
     Jump_Path(fp);

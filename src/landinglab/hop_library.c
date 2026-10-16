@@ -342,7 +342,7 @@ static int Gl_Worth(FighterData *fp, JumpCand *c, int build)
                 int n = k - c->hj; // frames from the double jump's own, which is 1
                 if (c->hj >= GL_X || n < 1 || n >= GL_X)
                     continue;
-                x = gl_pre_sx[c->hj] + gl_dj[c->stick * GL_X + n];
+                x = (c->neutral ? gl_pre_0 : gl_pre_sx)[c->hj] + gl_dj[c->stick * GL_X + n];
             }
             for (int f = 0; f < floor_num; f++)
             {
@@ -398,7 +398,7 @@ static int Gl_Direct(FighterData *fp, JumpCand *c, JumpRoute *out)
                 int m = t - c->hj;
                 if (c->hj >= GL_X || m < 1 || m >= GL_X)
                     continue;
-                x = gl_pre_sx[c->hj] + gl_dj[c->stick * GL_X + m];
+                x = (c->neutral ? gl_pre_0 : gl_pre_sx)[c->hj] + gl_dj[c->stick * GL_X + m];
             }
             int inside = 0;
             for (int f = 0; f < floor_num && !inside; f++)
@@ -419,10 +419,11 @@ static int Gl_Direct(FighterData *fp, JumpCand *c, JumpRoute *out)
             r->hold = c->hold;
             r->hop = c->hop;
             r->hj = c->hj;
+            r->neutral = c->hj >= 0 && c->neutral;
             r->hp = c->d + 1;
             r->d = c->d;
             r->dj = c->hj >= 0 ? c->d + gl_path_until + c->hj + 1 : c->d + 1;
-            r->changes = c->hj >= 0 ? 1 + Jump_Changes(c->stick, c->hold) : 1 + !c->hold;
+            r->changes = c->hj >= 0 ? 1 + Jump_Changes(c->stick, c->hold) + (c->neutral != 0) : 1 + !c->hold;
             r->late = lr->late;
             r->aerial = lr->aerial;
             r->press = lr->press == 255 ? -1 : c->d + lr->press;

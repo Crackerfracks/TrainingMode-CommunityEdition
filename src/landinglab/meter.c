@@ -517,12 +517,17 @@ static void Lane_Track(Lane *L, int l, MeterRow *r, int t)
     int d = 0;
     // (a target held in the window, as the hop offered "now" while walking,
     // is no re-timing: the rest of the row keeps its rows. Neither is a plan
-    // held a frame on, whose notes hold still: 0.9.32 slid them 3 rows off.
+    // held a frame on, whose notes hold still: 0.9.32 slid them 3 rows off,
+    // so its rows are judged against last frame's, not a step on.
     // A preload set down or laid out again is judged too, but only a swap:
     // within a few rows it eases on by itself (settle); 0.9.32 jumped up
     // to 24 rows from standing to walking)
+    // (0.9.35: under the top platform its double jump came a frame later
+    // every third frame, and snapped a row)
+    if (r->held && L->k_prev >= 0)
+        from = L->k_prev;
     int park_change = L->parked != r->parked;
-    if (t >= 0 && L->k_prev >= 0 && !(t == 0 && L->k_prev == 0) && !r->held && !Row_Ending(r) &&
+    if (t >= 0 && L->k_prev >= 0 && !(t == 0 && L->k_prev == 0) && !Row_Ending(r) &&
         (park_change || (!L->parked && !r->parked)))
         d = t - from;
     if (park_change && d >= -MT_SLIDE_MAX && d <= MT_SLIDE_MAX)

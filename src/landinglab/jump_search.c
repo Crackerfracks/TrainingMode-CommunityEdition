@@ -489,19 +489,40 @@ static int Jump_LeadOn(void)
 
 // The jump's lead as it's drawn this frame: its frames and its gate (-1
 // none), or 0 when none shows.
+// The plan's double jump out, its lead on to the aerial: the route it
+// was, or 0 (jt_tail; its path is still the one drawn, until another plan
+// lays out its own).
+static JumpRoute *Jump_Tail(void)
+{
+    if (jt_tail_abs < 0 || Jump_Showing() || jt_path_anchor != jt_tail_abs ||
+        event_vars->game_timer - jt_tail_abs >= jt_tail.press)
+    {
+        jt_tail_abs = -1;
+        return 0;
+    }
+    return &jt_tail;
+}
+
 static int Jump_LeadRange(int *from, int *to, int *gate)
 {
     *from = *to = *gate = -1;
-    if (!Options_Jump[JOPT_PATH].val || !Jump_LeadOn())
+    if (!Options_Jump[JOPT_PATH].val || jt_path_num < 2)
         return 0;
-    int e = Jump_E() > 0 ? Jump_E() : 0;
+    JumpRoute *r = &jt_route;
+    int e;
+    if (Jump_LeadOn())
+        e = Jump_E() > 0 ? Jump_E() : 0;
+    else if (Path_Detail() == DETAIL_LEAD && (r = Jump_Tail()) != 0)
+        e = event_vars->game_timer - jt_tail_abs;
+    else
+        return 0;
     if (e >= jt_path_num - 1)
         return 0;
     *from = e;
-    *gate = Jump_NextGate(&jt_route, e);
+    *gate = Jump_NextGate(r, e);
     if (*gate >= jt_path_num)
         *gate = -1;
-    *to = Lead_End(e, *gate, jt_route.land, jt_path_num);
+    *to = Lead_End(e, *gate, r->land, jt_path_num);
     return *to > e;
 }
 
@@ -754,6 +775,19 @@ static void Preview_Spots(void)
 // too distracting", drawn all over the screen while dash dancing.)
 static void Draw_JumpPath(void)
 {
+    if (!Jump_Showing() && Jump_Tail())
+    {
+        // after the double jump, on to the aerial's gate, committed
+        int lf, lt, gate;
+        if (!Jump_LeadRange(&lf, &lt, &gate))
+            return;
+        GXColor c = land_kind_colors[jt_tail.kind];
+        Draw_Lead(jt_path, jt_path_bottom, lf, lt, Color_Fill(color_plate, 0.75f), 42, 1.f);
+        Draw_Lead(jt_path, jt_path_bottom, lf, lt, c, 24, 1.f);
+        if (gate >= 0)
+            Draw_Gate(jt_path, jt_path_bottom, jt_path_num, gate, color_in_aerial);
+        return;
+    }
     if (!Jump_Showing() || !Options_Jump[JOPT_PATH].val || jt_path_num < 2)
         return;
     int from = Jump_E();

@@ -596,6 +596,13 @@ static void Jump_Ending(FighterData *fp, int sid, int prev_sid)
         jt_end_age = -1;
     int jts = Tracked_Index(sid); // Kirby's and Jigglypuff's air jumps are their own states
     int dj = (Is_DoubleJump(jts) || Is_MultiJump(jts)) && prev_sid != sid;
+    // the double jump out: the plan ends, but its lead goes on to the
+    // aerial's gate (0.9.36: nothing led to the nair after the DJ)
+    if (dj && jt_have && jt_route.kind == LAND_AI && jt_path_anchor == jt_route_abs)
+    {
+        jt_tail = jt_route;
+        jt_tail_abs = jt_route_abs;
+    }
     if (jt_due >= 0 && (dj || jt_due == 0))
     {
         jt_end_age = 0;

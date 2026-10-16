@@ -119,6 +119,8 @@ static float *jt_path_bottom;
 static int jt_path_num;
 static JumpRoute jt_path_of;    // the route the path is for
 static int jt_path_anchor = -1;
+static JumpRoute jt_tail;       // the AI route whose double jump just came out: its lead runs on to the aerial
+static int jt_tail_abs = -1;    // ... its anchor (and its path's), -1 none
 static int jt_target;           // Land On as the search started
 static int jt_hop;              // From the Ground as the search started
 static int jt_steps, jt_tries;  // the search's cost, for the log

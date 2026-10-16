@@ -151,14 +151,17 @@ static void Hud_RectFade(float x0, float y0, float x1, float y1, float fy0, floa
 #define HW_FADE_FROM 14 // the highway's rows that fade: the plate and lines from here
 #define HW_NOTE_FROM 20 // ... the notes from here
 
-// One lane of the highway, lx to rx: its cells as notes, a cell a frame up
-// from the hit line. o is the slot's other row, if any: this one's frames
-// in the air don't cross its notes.
-static void Hw_Lane(MeterRow *r, MeterRow *o, float glyph_x, float lx, float rx, float line_y)
+// A row's cells on a highway lane, shift rows up from their place, at a_k
+// of their strength, none under row from. A window's first frame is its
+// head, one row at full strength, and its later frames a fainter, narrower
+// tail behind it, so the head is what reads as due: the window is open
+// while a head is in the box (conveyor measurements, 2026-10-16: the 2-4
+// row body was read as the note, a frame or two early).
+static void Hw_Cells(MeterRow *r, MeterRow *o, float lx, float rx, float line_y, float shift, float a_k, float from)
 {
-    float in = 0.15f, top = line_y + HW_ROWS * HW_PITCH;
+    float in = 0.15f, top = line_y + HW_ROWS * HW_PITCH, floor_y = line_y + from * HW_PITCH + 0.04f;
     float dim = r->dim ? 0.5f : 1.f, base_k = vis_k;
-    int len = r->len < HW_ROWS ? r->len : HW_ROWS;
+    int len = r->len < MT_CELLS ? r->len : MT_CELLS;
 
     for (int k = 0; k < len; k++)
     {
@@ -173,11 +176,11 @@ static void Hw_Lane(MeterRow *r, MeterRow *o, float glyph_x, float lx, float rx,
             while (j + 1 < len && r->cell[j + 1] == kind && r->tone[j + 1] == tone && r->alpha[j + 1] == al)
                 j++;
         }
-        float a = al / 255.f * dim;
+        float a = al / 255.f * dim * a_k;
         GXColor col = Tone_Color(r, tone);
-        float at = Note_At(r, k, HW_ROWS);
+        float at = Note_At(r, k, HW_ROWS) + shift;
         float y0 = line_y + at * HW_PITCH + 0.04f;
-        float y1 = line_y + (Note_At(r, j, HW_ROWS) + 1.f) * HW_PITCH - 0.04f;
+        float y1 = line_y + (Note_At(r, j, HW_ROWS) + shift + 1.f) * HW_PITCH - 0.04f;
         if (y0 >= top - 0.1f)
         {
             k = j;
@@ -185,13 +188,30 @@ static void Hw_Lane(MeterRow *r, MeterRow *o, float glyph_x, float lx, float rx,
         }
         if (y1 > top)
             y1 = top;
+        if (y0 < floor_y)
+            y0 = floor_y; // (slid past the line: frames before its first target)
+        if (y1 <= y0)
+        {
+            k = j;
+            continue;
+        }
         float yc = (y0 + y1) / 2, mid = (lx + rx) / 2, lag = (rx - lx) * 0.24f;
         vis_k = base_k * Note_Far(at, HW_NOTE_FROM, HW_ROWS);
         switch (kind)
         {
         case CELL_PRESS:
-            Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(col, a));
+        {
+            float hy = Row_WindowTail(r, k) ? y0 : line_y + (at + 1.f) * HW_PITCH - 0.04f;
+            if (hy > y1)
+                hy = y1;
+            if (hy < y0)
+                hy = y0;
+            if (hy > y0)
+                Hud_Rect(lx + in, y0, rx - in, hy, Color_Fill(col, a));
+            if (y1 > hy)
+                Hud_Rect(lx + in + 0.1f, hy, rx - in - 0.1f, y1, Color_Fill(col, a * 0.4f));
             break;
+        }
         case CELL_ACT:
             Hud_Rect(lx + in, y0, rx - in, y1, Color_Fill(col, a));
             Hud_Rect(lx + in, y0, rx - in, y0 + 0.2f * HW_PITCH + 0.04f, Color_Fill(color_white, a * 0.9f));
@@ -213,12 +233,28 @@ static void Hw_Lane(MeterRow *r, MeterRow *o, float glyph_x, float lx, float rx,
         }
         k = j;
     }
+    vis_k = base_k;
+}
+
+// One lane of the highway, lx to rx: its cells as notes, a cell a frame up
+// from the hit line, a re-timed plan slid (r->slide), and the plan it
+// swapped out stepping down fading, never into the window. o is the slot's
+// other row, if any: this one's frames in the air don't cross its notes.
+static void Hw_Lane(MeterRow *r, MeterRow *o, float glyph_x, float lx, float rx, float line_y)
+{
+    float dim = r->dim ? 0.5f : 1.f, base_k = vis_k, in_a = 1.f - r->arrive;
+    int la;
+    MeterRow *lv = Lane_Leave(r, &la);
+    if (lv)
+        Hw_Cells(lv, o, lx, rx, line_y, lv->slide - la, 1.f - la / 5.f, 1.f);
+    Hw_Cells(r, o, lx, rx, line_y, r->slide, in_a, 0);
+    int len = r->len < MT_CELLS ? r->len : MT_CELLS;
     for (int k = 0; k < len; k++)
     {
-        float at = Note_At(r, k, HW_ROWS);
+        float at = Note_At(r, k, HW_ROWS) + r->slide;
         vis_k = base_k * Note_Far(at, HW_NOTE_FROM, HW_ROWS);
-        if (r->glyph[k] && at < HW_ROWS - 0.5f)
-            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim));
+        if (r->glyph[k] && at < HW_ROWS - 0.5f && at > -0.01f)
+            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim * in_a));
     }
     vis_k = base_k;
 }
@@ -286,13 +322,23 @@ static int Hw_FrameRank(MeterRow *r)
     return r->flash >= 0 || r->hot >= 2 ? 3 : r->hot ? 2 : r->implode >= 0 ? 1 : 0;
 }
 
+// The window's frame's thickness: heavier with Cell Size, as the rows are.
+static float Hw_FrameT(void)
+{
+    return 0.14f * (0.5f + 0.5f * WIDE_K);
+}
+
 // The window's frame, lit while r's press is due (white on its first or
 // last frame), in r's ending colors as it fades. Heavier at rest than it
 // was, so the eye finds it first (visual audit, 2026-10-15: thinner than
-// the belt's fifth-frame lines).
+// the belt's fifth-frame lines). Its lid sits just over the window's row,
+// so a note a frame early sits on the lid, never in the box, and its floor
+// stops at the line (conveyor measurements, 2026-10-16: the lid was entered
+// a frame before the press, and the floor ate the window's row).
 static void Hw_WindowFrame(MeterRow *r, float lx, float rx, float line_y)
 {
-    float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - 0.14f, wy1 = line_y + hw_pitch + 0.1f;
+    float t = Hw_FrameT();
+    float wx0 = lx - 0.12f, wx1 = rx + 0.12f, wy0 = line_y - t, wy1 = line_y + hw_pitch + 0.04f;
     int hot = r->dim ? 0 : r->flash >= 0 ? 2 : r->hot;
     int ending = !r->dim && r->implode >= 0;
     GXColor dc = r->implode_tone == TONE_MISS ? color_miss : color_skip;
@@ -301,16 +347,18 @@ static void Hw_WindowFrame(MeterRow *r, float lx, float rx, float line_y)
     GXColor fc = hot >= 2 ? color_white : hot ? Color_Mix(r->color, color_white, 0.4f)
                  : ending ? Color_Mix(dc, color_white, 0.3f)
                           : Color_Over(color_white, r->dim ? 0.3f : 0.6f);
-    float t = hot >= 2 ? 0.16f : 0.14f;
+    if (hot >= 2)
+        t += 0.02f;
     Hud_Frame(wx0, wy0, wx1, wy1, t, fc);
-    Hud_Rect(wx0, wy0, wx1, wy0 + t + 0.06f, fc); // the floor of it, heavier
+    Hud_Rect(wx0, wy0, wx1, wy0 + t, fc); // the floor of it, heavier
 }
 
 // An empty slot's window: its frame, faint, and no floor, so the lane is
-// there with nothing due.
+// there with nothing due (brighter: 0.25 was lost over the stage, 0.9.30
+// stills).
 static void Hw_EmptyWindow(float lx, float rx, float line_y)
 {
-    Hud_Frame(lx - 0.12f, line_y - 0.14f, rx + 0.12f, line_y + hw_pitch + 0.1f, 0.1f, Color_Over(color_white, 0.25f));
+    Hud_Frame(lx - 0.12f, line_y - Hw_FrameT(), rx + 0.12f, line_y + hw_pitch + 0.04f, 0.1f, Color_Over(color_white, 0.4f));
 }
 
 // The highway (Fixed Strip): a vertical lane a slot, notes falling onto a

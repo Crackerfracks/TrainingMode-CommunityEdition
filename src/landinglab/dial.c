@@ -62,7 +62,7 @@ static void Dial_One(MeterRow *r, float cx, float cy)
     if (a >= 0)
     {
         int tone = r->tone[a];
-        float al = r->alpha[a] / 255.f * dim;
+        float al = r->alpha[a] / 255.f * dim * (1.f - r->arrive);
         GXColor col = Tone_Color(r, tone);
         int hot = r->flash >= 0 ? 2 : r->hot;
         float span = (n + r->spent) * DL_DEG;
@@ -87,10 +87,13 @@ static void Dial_One(MeterRow *r, float cx, float cy)
         }
 
         // the hand, in the middle of its frame's slice, past the rim: a
-        // white core in its color, over a dark halo
-        if (a <= 21)
+        // white core in its color, over a dark halo. A re-timed plan's hand
+        // slides to its new place (r->slide); the wedge, the window, never
+        // moves
+        float ah = a + r->slide;
+        if (ah <= 21)
         {
-            float deg = (r->spent - a + 0.5f) * DL_DEG, hx, hy;
+            float deg = (r->spent - ah + 0.5f) * DL_DEG, hx, hy;
             Dial_Pt(cx, cy, R + 0.35f, deg, &hx, &hy);
             GXColor hc = tone == TONE_CUE ? Color_Mix(r->color, color_white, hot ? 1.f : 0.55f) : Tone_Color(r, tone);
             Hud_Seg(cx, cy, hx, hy, 0.42f, Color_Over(color_plate, 0.6f * al));
@@ -137,10 +140,11 @@ static void Dial_Draw(FighterData *fp)
         int m = Slot_Rows(s, sr);
         if (m == 0)
         {
-            // empty: a faint rim and a dot, no face
+            // empty: a faint rim and a dot, no face (brighter: they were
+            // lost over the stage, 0.9.30 stills)
             vis_k = base_k * plate_k;
-            Dial_Band(cx, cy, DL_R - 0.05f, DL_R + 0.05f, 0, 360, Color_Over(color_white, 0.18f));
-            Hud_Disc(cx, cy, 0.12f, Color_Over(color_white, 0.18f));
+            Dial_Band(cx, cy, DL_R - 0.08f, DL_R + 0.08f, 0, 360, Color_Over(color_white, 0.35f));
+            Hud_Disc(cx, cy, 0.16f, Color_Over(color_white, 0.35f));
             Slot_Swatch(s, 0, cx, y0 + 0.75f, 0.9f, 0.45f, SLOT_DIM);
             continue;
         }

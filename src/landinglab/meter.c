@@ -110,6 +110,8 @@ typedef struct MeterRow
     u8 span;      // cells from the gate its first window was at when it came up (Note Travel)
     u8 parked;    // a preload: laid out from a press that hasn't happened, not moving yet
     u8 settle;    // frames since it stopped being parked and set down, + 1 (0: none)
+    float slide;  // rows added to every cell's place while a re-timed plan eases to its true row (0: none)
+    float arrive; // the notes' opacity still to come in after a plan swap (0: none)
     char label[8];
     char info[24];
 } MeterRow;
@@ -355,9 +357,25 @@ typedef struct Lane
     u8 dim;      // an alternate route's
     u8 parked;   // its row was a preload last frame
     u8 settle;   // ... and the row's settle
+    u8 leave_age; // frames since its plan was swapped out (meter_leave), 0 none
+    float slide; // rows its notes are drawn off their true place, easing to 0
+    float drop;  // ... and how high a swapped-in plan still hangs over its own
     MeterRow last;
 } Lane;
 static Lane lanes[MT_LANES];
+// Each lane's plan that was swapped out, drawn fading as it steps down
+// (calloc'd in Event_Init).
+static MeterRow *meter_leave;
+
+// A plan re-timed by a few frames slides to its new place; one that moves
+// further is a swap: the old plan leaves, fading as it steps down, and the
+// new one drops in from up the belt (conveyor measurements, 2026-10-16:
+// walking, the notes hopped a row each time the plan's timing shifted a
+// frame, and a later plan teleported 19-27 rows up the lane).
+#define MT_SLIDE_MAX 3
+#define MT_LEAVE 4     // frames a swapped-out plan fades over
+#define MT_DROP_MAX 17 // rows a swapped-in plan drops from at most: its first step stays under 8 rows
+static int Strip_Track(void); // the fixed strip's rows (meter_placement)
 
 static int Str_Same(const char *a, const char *b)
 {
@@ -401,14 +419,140 @@ static int Lane_Free(const int *taken, int slot, int dim)
     return -1;
 }
 
-// The first cell that is a window to press in, a touchdown or the first
-// frame to act, or -1.
-static int Row_FirstTarget(MeterRow *r)
+// The first cell from k = from on that is a window to press in, a
+// touchdown or the first frame to act, or -1.
+static int Row_TargetFrom(MeterRow *r, int from)
 {
-    for (int k = 0; k < r->len && k < MT_CELLS; k++)
+    for (int k = from; k < r->len && k < MT_CELLS; k++)
         if (r->cell[k] == CELL_PRESS || r->cell[k] == CELL_LAND || r->cell[k] == CELL_ACT)
             return k;
     return -1;
+}
+
+static int Row_FirstTarget(MeterRow *r)
+{
+    return Row_TargetFrom(r, 0);
+}
+
+// Whether a row plays a hit, miss or skip, or the flash on the first frame
+// Falcon can act.
+static int Row_Ending(MeterRow *r)
+{
+    return r->burst >= 0 || r->implode >= 0 || r->flash >= 0;
+}
+
+static int Row_Empty(MeterRow *r)
+{
+    for (int k = 0; k < r->len && k < MT_CELLS; k++)
+        if (r->cell[k] != CELL_NONE)
+            return 0;
+    return 1;
+}
+
+// A row with no cells, only an ending (a ledge route's miss, "Route"),
+// hands the ending to the live row of its slot and goes, so the fold plays
+// in the slot where the note was due and the new route has that slot from
+// its first frame (smoke 0.9.30: after a miss the chosen route took the NIL
+// slot's second lane until the next drop). Returns the rows left.
+static int Meter_HandEndings(MeterRow *built, int n)
+{
+    for (int i = 0; i < n; i++)
+    {
+        MeterRow *e = &built[i];
+        if (!Row_Empty(e) || !(Row_Ending(e) || e->ghost[0] >= 0))
+            continue;
+        for (int j = 0; j < n; j++)
+        {
+            MeterRow *o = &built[j];
+            if (j == i || o->dim || Row_Empty(o) || Row_Ending(o) || Lane_Slot(o) != Lane_Slot(e))
+                continue;
+            o->implode = e->implode;
+            o->implode_tone = e->implode_tone;
+            o->burst = e->burst;
+            o->flash = e->flash;
+            for (int g = 0; g < 4; g++)
+                if (e->ghost[g] >= 0)
+                    Row_Ghost(o, e->ghost[g], e->ghost_bright[g]);
+            for (int m = i; m + 1 < n; m++)
+                built[m] = built[m + 1];
+            n--;
+            i--;
+            break;
+        }
+    }
+    return n;
+}
+
+// A lane's plan this frame against the last: a re-timing of a few frames
+// slides (the note keeps last frame's place a step on, then eases to its
+// true row a third of the way a frame); more is a swap. The slide and drop
+// are scaled to nothing by the row over the window, so the window and the
+// hit, miss and skip in it never move.
+static void Lane_Track(Lane *L, int l, MeterRow *r, int t)
+{
+    L->slide -= L->slide / 3;
+    if (L->slide > -0.12f && L->slide < 0.12f)
+        L->slide = 0;
+    L->drop *= 0.6f;
+    if (L->drop < 0.3f)
+        L->drop = 0;
+    if (L->leave_age)
+        L->leave_age = L->leave_age < MT_LEAVE ? L->leave_age + 1 : 0;
+    // where this frame's first target would be had nothing changed: last
+    // frame's a step on, or its next one past the window
+    int from = -1;
+    if (L->k_prev > 0)
+        from = L->k_prev - 1;
+    else if (L->k_prev == 0)
+    {
+        int w = Row_TargetFrom(&L->last, 1);
+        from = w > 0 ? w - 1 : -1;
+    }
+    int d = 0;
+    if (t >= 0 && L->k_prev >= 0 && !L->parked && !r->parked && !Row_Ending(r))
+        d = t - from;
+    if (d != 0 && from >= 0 && d >= -MT_SLIDE_MAX && d <= MT_SLIDE_MAX)
+    {
+        L->slide -= d;
+        if (L->slide < -MT_SLIDE_MAX)
+            L->slide = -MT_SLIDE_MAX;
+        if (L->slide > MT_SLIDE_MAX)
+            L->slide = MT_SLIDE_MAX;
+    }
+    else if ((d > MT_SLIDE_MAX || d < -MT_SLIDE_MAX) && t > 0 && meter_leave)
+    {
+        meter_leave[l] = L->last;
+        L->leave_age = 1;
+        L->slide = 0;
+        int track = Strip_Track(), drop = track - 1 - t; // (its first target on the belt)
+        if (drop > MT_DROP_MAX)
+            drop = MT_DROP_MAX;
+        if (drop > 3 * (t - 1))
+            drop = 3 * (t - 1); // a near one drops from nearer, so it's down by the window
+        L->drop = t >= 4 && t < track ? drop : 0;
+        if (cue_log)
+            OSReport("LLLANE %d %s lane %d swap %d -> %d\n", event_vars->game_timer, L->label, l, from, t);
+    }
+    float k = Clamp01((t - 1) / 4.f);
+    r->slide = (L->slide + L->drop) * k;
+    r->arrive = L->leave_age ? 1.f - Clamp01(L->leave_age / 3.f) : 0;
+}
+
+// The nearest whole row to v.
+static int Row_Round(float v)
+{
+    return v >= 0 ? (int)(v + 0.5f) : -(int)(0.5f - v);
+}
+
+// The plan lane l swapped out, as it shows age frames on (1 to MT_LEAVE),
+// or 0.
+static MeterRow *Lane_Leave(MeterRow *r, int *age)
+{
+    int l = r - meter;
+    if (!meter_leave || l < 0 || l >= MT_LANES || !lanes[l].used || !lanes[l].leave_age)
+        return 0;
+    *age = lanes[l].leave_age;
+    return &meter_leave[l];
 }
 
 static void Meter_Settle(void)
@@ -417,6 +561,7 @@ static void Meter_Settle(void)
     int now = event_vars->game_timer, n = meter_rows;
     int taken[MT_LANES], at[MT_ROWS];
     memcpy(built, meter, n * sizeof(MeterRow));
+    n = Meter_HandEndings(built, n);
     for (int l = 0; l < MT_LANES; l++)
     {
         taken[l] = -1;
@@ -471,6 +616,7 @@ static void Meter_Settle(void)
             continue;
         Lane *L = &lanes[at[i]];
         int t = Row_FirstTarget(&built[i]);
+        Lane_Track(L, at[i], &built[i], t);
         if (t >= 0 && (L->k_prev < 0 || t > L->k_prev))
             L->k0 = t; // a new window (or one further out than the last)
         L->k_prev = t;
@@ -515,6 +661,7 @@ static void Meter_Settle(void)
         }
         // going: fades out over MT_LINGER frames
         *r = L->last;
+        L->leave_age = 0;
         r->fade *= 1.f - (float)(now - L->seen) / (MT_LINGER + 1);
         r->hot = 0;
         r->flash = r->burst = r->implode = -1;
@@ -691,6 +838,49 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
     }
 }
 
+// One cell of the meter's rows, cx0 to cx1 and y0 to y1 (ch tall).
+static void Mt_Cell(int kind, GXColor col, float a, float cx0, float cx1, float y0, float y1, float ch, float scale)
+{
+    switch (kind)
+    {
+    case CELL_PRESS:
+        Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
+        break;
+    case CELL_ACT:
+        Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
+        Hud_Rect(cx0, y1 - 0.2f * ch, cx1, y1, Color_Fill(color_white, a * 0.9f));
+        break;
+    case CELL_AIR:
+        Hud_Rect(cx0, y0 + ch * 0.38f, cx1, y0 + ch * 0.62f, Color_Fill(col, a * 0.5f));
+        break;
+    case CELL_LAND:
+    {
+        float w = 1.4f * PX * scale;
+        Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_plate, a * 0.6f));
+        Hud_Frame(cx0, y0, cx1, y1, w, Color_Fill(col, a));
+        Hud_Rect(cx0, y0, cx1, y0 + ch * 0.24f, Color_Fill(col, a));
+        break;
+    }
+    case CELL_LAG:
+        Hud_Rect(cx0, y0, cx1, y0 + ch * 0.55f, Color_Fill(col, a * 0.75f));
+        break;
+    case CELL_TAIL:
+        Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_galint, a));
+        break;
+    }
+}
+
+// Whether cell k of a row is a window's later frame: the tail behind its
+// head (the first frame), drawn fainter on every strip, so the note's
+// first frame is what reads as due (conveyor measurements, 2026-10-16: the
+// window's 2-4 frame body was read as the note, a frame or two early).
+static int Row_WindowTail(MeterRow *r, int k)
+{
+    return k > 0 && k < MT_CELLS && r->cell[k] == CELL_PRESS && r->cell[k - 1] == CELL_PRESS && r->tone[k - 1] == r->tone[k];
+}
+
+static void Slot_Swatch(int s, MeterRow *r, float cx, float cy, float w, float h, float k); // meter_placement
+
 // The meter with its gate's left edge at gx and its bottom at base. scale
 // is 1 above Falcon and MT_FIXED for the fixed strip, which also gets
 // labels. A row a slot, bottom up (Meter_Settle); the fixed strip always
@@ -768,46 +958,36 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                                                                                         : Color_Fill(color_white, empty_a * dim));
             }
 
+            // a plan swapped out: its cells step on toward the gate,
+            // fading, but never into it, and with no glyphs
+            int la;
+            MeterRow *lv = Lane_Leave(r, &la);
+            for (int k = 0; lv && k < lv->len && k < MT_CELLS; k++)
+            {
+                float at = Note_At(lv, k, len) + lv->slide - la;
+                if (lv->cell[k] == CELL_NONE || lv->cell[k] == CELL_AIR || at < 0.99f || at > len - 0.5f)
+                    continue;
+                float a = lv->alpha[k] / 255.f * (lv->dim ? 0.5f : 1.f) * (1.f - la / 5.f) * (Row_WindowTail(lv, k) ? 0.5f : 1.f);
+                Mt_Cell(lv->cell[k], Tone_Color(lv, lv->tone[k]), a, gx + at * pitch, gx + at * pitch + cw, y0, y1, ch, scale);
+            }
+
+            float in_a = 1.f - r->arrive;
             for (int k = 0; k < r->len && k < len; k++)
             {
                 int kind = r->cell[k];
                 if (kind == CELL_NONE || (kind == CELL_AIR && Row_NoteAt(o, k)))
                     continue;
-                float a = r->alpha[k] / 255.f * dim;
+                float a = r->alpha[k] / 255.f * dim * in_a;
+                if (Row_WindowTail(r, k))
+                    a *= 0.5f;
                 GXColor col = Tone_Color(r, r->tone[k]);
-                float at = Note_At(r, k, len);
-                if (at > len - 0.5f)
-                    continue; // still off the far end
+                float at = Note_At(r, k, len) + r->slide;
+                if (at > len - 0.5f || at < -0.01f)
+                    continue; // still off the far end, or slid past the gate (frames before its first target)
                 float cx0 = gx + at * pitch, cx1 = cx0 + cw;
-                switch (kind)
-                {
-                case CELL_PRESS:
-                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
-                    break;
-                case CELL_ACT:
-                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(col, a));
-                    Hud_Rect(cx0, y1 - 0.2f * ch, cx1, y1, Color_Fill(color_white, a * 0.9f));
-                    break;
-                case CELL_AIR:
-                    Hud_Rect(cx0, y0 + ch * 0.38f, cx1, y0 + ch * 0.62f, Color_Fill(col, a * 0.5f));
-                    break;
-                case CELL_LAND:
-                {
-                    float w = 1.4f * PX * scale;
-                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_plate, a * 0.6f));
-                    Hud_Frame(cx0, y0, cx1, y1, w, Color_Fill(col, a));
-                    Hud_Rect(cx0, y0, cx1, y0 + ch * 0.24f, Color_Fill(col, a));
-                    break;
-                }
-                case CELL_LAG:
-                    Hud_Rect(cx0, y0, cx1, y0 + ch * 0.55f, Color_Fill(col, a * 0.75f));
-                    break;
-                case CELL_TAIL:
-                    Hud_Rect(cx0, y0, cx1, y1, Color_Fill(color_galint, a));
-                    break;
-                }
+                Mt_Cell(kind, col, a, cx0, cx1, y0, y1, ch, scale);
                 if (r->glyph[k])
-                    Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, 0.36f * scale, Color_Fill(color_white, 0.95f * dim));
+                    Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, 0.36f * scale, Color_Fill(color_white, 0.95f * dim * in_a));
             }
         }
     }
@@ -883,8 +1063,16 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 int b = r->ghost_bright[g];
                 float grow = (b ? 0.1f + 1.2f * Ease_Out(q) : 0.05f + 0.55f * Ease_Out(q)) * scale;
                 GXColor tint = Color_Mix(r->color, color_white, b ? 0.35f : 0.2f);
-                Hud_Rect(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
-                Hud_Frame(gx - grow, gy0 - grow, gx + cw + grow, gy1 + grow, 1.6f * PX * scale, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
+                // the fixed strip's swells up and down only as far as its
+                // plate (0.9.30 stills: a double jump's ran off the screen's
+                // bottom edge)
+                float lo = gy0 - grow, hi = gy1 + grow;
+                if (labels && lo < plate_y0)
+                    lo = plate_y0;
+                if (labels && hi > plate_y1 + glyph_h)
+                    hi = plate_y1 + glyph_h;
+                Hud_Rect(gx - grow, lo, gx + cw + grow, hi, Color_Over(tint, (b ? 0.55f : 0.22f) * fade));
+                Hud_Frame(gx - grow, lo, gx + cw + grow, hi, 1.6f * PX * scale, Color_Over(tint, (b ? 0.95f : 0.45f) * fade));
             }
             if (r->burst >= 0)
             {
@@ -930,21 +1118,33 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
     // ticks (the game aligns them, so they can't run long). No numbers past
     // the cells: changing every frame they can't be read at speed, and they
     // ran into the stock icon and "0%" (Stephen, 10-03; visual audit,
-    // 2026-10-15). The panel says them
+    // 2026-10-15). The panel says them. Always the slot's own word, never
+    // the row's (WD, HOP, 1st, Route), so a row's label never changes
+    // under it; the rest's slot has its row's swatch (0.9.30 stills: the
+    // labels differed in all six moments)
     for (int s = 0; s < rows; s++)
     {
         MeterRow *sr[2];
         int m = Slot_Rows(s, sr);
         float y0 = base + s * (ch + gap);
         float ty = Text_MidY(y0 + ch / 2, ST_TEXT);
+        float lx = gx - MT_LABEL_GAP * scale;
         GXColor tc;
+        if (s >= MT_SLOTS_SHOWN)
+        {
+            if (m == 0)
+                continue; // (shown only while it has a row)
+            vis_k = base_k * sr[0]->fade;
+            Slot_Swatch(s, sr[0], lx - 0.5f, y0 + ch / 2, 0.9f, 0.5f, 1.f);
+            continue;
+        }
         if (m == 0)
         {
             // an empty slot: its kind's name, dimmed
             vis_k = base_k * plate_k;
-            tc = Color_Fill(Color_Mix(Slot_Color(s), color_white, 0.35f), 0.35f);
+            tc = Color_Fill(Color_Mix(Slot_Color(s), color_white, 0.35f), 0.5f);
             tc.a = 255;
-            Hud_TextAligned(slot_labels[s], gx - MT_LABEL_GAP * scale, ty, ST_TEXT, tc, 2);
+            Hud_TextAligned(slot_labels[s], lx, ty, ST_TEXT, tc, 2);
             continue;
         }
         MeterRow *r = sr[0];
@@ -953,7 +1153,7 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
         if (r->dim)
             tc = Color_Fill(tc, 0.6f);
         tc.a = 255;
-        Hud_TextAligned(r->label, gx - MT_LABEL_GAP * scale, ty, ST_TEXT, tc, 2);
+        Hud_TextAligned(slot_labels[s], lx, ty, ST_TEXT, tc, 2);
     }
     vis_k = base_k;
 }

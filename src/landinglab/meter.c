@@ -115,6 +115,7 @@ typedef struct MeterRow
     u8 span;      // cells from the gate its first window was at when it came up (Note Travel)
     u8 parked;    // a preload: laid out from a press that hasn't happened, not moving yet
     u8 settle;    // frames since it stopped being parked and set down, + 1 (0: none)
+    u8 held;      // the same plan held a frame on (a hop offered "now" while walking): no re-timing to slide
     float slide;  // rows added to every cell's place while a re-timed plan eases to its true row (0: none)
     float arrive; // the notes' opacity still to come in after a plan swap (0: none)
     char label[8];
@@ -515,9 +516,17 @@ static void Lane_Track(Lane *L, int l, MeterRow *r, int t)
     }
     int d = 0;
     // (a target held in the window, as the hop offered "now" while walking,
-    // is no re-timing: the rest of the row keeps its rows)
-    if (t >= 0 && L->k_prev >= 0 && !(t == 0 && L->k_prev == 0) && !L->parked && !r->parked && !Row_Ending(r))
+    // is no re-timing: the rest of the row keeps its rows. Neither is a plan
+    // held a frame on, whose notes hold still: 0.9.32 slid them 3 rows off.
+    // A preload set down or laid out again is judged too, but only a swap:
+    // within a few rows it eases on by itself (settle); 0.9.32 jumped up
+    // to 24 rows from standing to walking)
+    int park_change = L->parked != r->parked;
+    if (t >= 0 && L->k_prev >= 0 && !(t == 0 && L->k_prev == 0) && !r->held && !Row_Ending(r) &&
+        (park_change || (!L->parked && !r->parked)))
         d = t - from;
+    if (park_change && d >= -MT_SLIDE_MAX && d <= MT_SLIDE_MAX)
+        d = 0;
     if (d != 0 && from >= 0 && d >= -MT_SLIDE_MAX && d <= MT_SLIDE_MAX)
     {
         L->slide -= d;

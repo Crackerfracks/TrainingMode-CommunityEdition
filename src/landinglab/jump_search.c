@@ -547,6 +547,7 @@ static void Meter_AddJump(void)
         for (int n = e + 1; n < at; n++)
             Route_Cell(row, -e - 1, n, CELL_AIR, 0);
         Route_Cell(row, -e - 1, at, CELL_PRESS, step == 0 ? GLYPH_JUMP : Jump_DJGlyph(r));
+        row->held = jt_hop_now_age > 0; // the same plan a frame on: its notes hold still
         // a hop offered "now" frame after frame while he walks is an offer,
         // not an alarm: white only on its first frame, its own color after
         // (Fable's Conveyor feel plan, 2026-10-16)
@@ -572,6 +573,7 @@ static void Meter_AddJump(void)
     if (!row)
         return;
     row->fade = Fade_Factor(VG_TIMERS, r->kind == LAND_AI ? CUE_AI : CUE_NIL); // as the AI or NIL timer's own
+    row->held = jt_hop_now_age > 0;
     Row_Jump(row, r, e);
 }
 

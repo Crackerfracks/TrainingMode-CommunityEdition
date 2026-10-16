@@ -60,8 +60,13 @@ static JumpRoute *Jump_Find(JumpRoute *r, int anchor)
         for (int i = 0; i < jt_best_n[k]; i++)
         {
             JumpRoute *x = &jt_best[k][i];
+            // (a hop's frame too: walking under the top platform, the hop a
+            // frame later with its double jump a frame sooner has the same
+            // double jump and aerial, and was found in the held one's place,
+            // the next frame it was gone; 0.9.36 topR, 3 rows a cycle)
             if (x->kind == r->kind && x->stick == r->stick && x->aerial == r->aerial && x->hop == r->hop && x->neutral == r->neutral &&
-                x->dj == r->dj + shift && (r->kind != LAND_AI || x->press == r->press + shift))
+                x->dj == r->dj + shift && (r->kind != LAND_AI || x->press == r->press + shift) &&
+                (!r->hop || (x->hj == r->hj && x->hp == r->hp + shift)))
                 return x;
         }
     }

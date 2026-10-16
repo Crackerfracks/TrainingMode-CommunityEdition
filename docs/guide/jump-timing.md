@@ -18,7 +18,7 @@ The Jump Timing menu, in menu order.
 | Warning | 12 Frames, 16 Frames, 20 Frames, 24 Frames, 30 Frames | 20 Frames | Only show a jump at least this far ahead, so there's time to see it coming. Jumps due sooner are left out. |
 | Path | Off, On | Off | Draws the shown jump's path in its color, with a yellow bar across it where you are on the jump's frame and a pink one on the aerial's. |
 | Plan Text | Off, On | Off | Spells the shown jump out in the info panel, as in "DJ up in 6f, nair +11-13: AI". The first press counts frames from now; each "+" counts from the press before it, so that nair comes 11 to 13 frames after the double jump. |
-| Prefer | Soonest, Balanced, Vertical | Balanced | Which jump to show when several land. Soonest: the one that lets you act first. Balanced: a double jump straight up (stick let go) when it acts at most about 10 frames later than a drifting one. Vertical: a straight-up one whenever one lands, even much later. While walking or running, a straight-up plan reads "SH now, let go, DJ up": let go of the stick once you leave the ground. |
+| Prefer | Soonest, Balanced, Vertical | Vertical | Which jump to show when several land. Soonest: the one that lets you act first. Balanced: a double jump straight up (stick let go) when it acts at most about 10 frames later than a drifting one. Vertical: a straight-up one whenever one lands, even much later. While walking or running, a straight-up plan reads "SH now, let go, DJ up": let go of the stick once you leave the ground. |
 
 ## How to read it
 

@@ -271,7 +271,7 @@ static EventOption Options_Jump[JOPT_COUNT] = {
     {
         .kind = OPTKIND_STRING,
         .name = "Prefer",
-        .val = PREFER_BALANCED,
+        .val = PREFER_VERTICAL, // what's played most (Stephen, 0.9.30)
         .value_num = countof(jump_prefer_names),
         .values = jump_prefer_names,
         .desc = {"Soonest: the jump that lets you act first.",

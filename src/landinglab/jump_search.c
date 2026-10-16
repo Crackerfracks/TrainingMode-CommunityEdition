@@ -370,7 +370,12 @@ static void Jump_Publish(FighterData *fp)
         cur = 0; // its press has come: the next hop takes over
     else if (!cur && jt_have)
         cur = Jump_Near(&jt_route, jt_route_abs, e); // the same plan, a frame or two off
-    if (cur && (!b || (b != cur && !(Jump_Cost(b) + JT_SWITCH <= Jump_Cost(cur) && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))))
+    // (Prefer Vertical: a straight-up one always takes a drifting one's
+    // place, which would otherwise stay up, being sooner; 14b02c7, dashing
+    // and running showed drift for half the way)
+    int to_vert = b && cur && Options_Jump[JOPT_PREFER].val == PREFER_VERTICAL && Jump_Vertical(b) && !Jump_Vertical(cur);
+    if (cur && !to_vert &&
+        (!b || (b != cur && !(Jump_Cost(b) + JT_SWITCH <= Jump_Cost(cur) && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))))
         b = cur;
     jt_have = b != 0;
     if (jt_ground)

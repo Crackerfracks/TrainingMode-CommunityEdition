@@ -151,24 +151,29 @@ static void World_GX(GOBJ *gobj, int pass)
     // a ledge route stays on top all the way down
     world_on_top = route_active;
 
+    int full = Path_Detail() == DETAIL_FULL;
     if (live_visible && route_active && !route_dj_done)
         ; // the route's own path shows where it goes
     else if (live_visible)
-        Draw_Prediction(pred_live, 1, LINE_SOLID);
+        Draw_Prediction(pred_live, 1, LINE_SOLID, full);
     else if (ghost_visible)
     {
-        Draw_Prediction(pred_seg, 0, LINE_SOLID);
-        if (Options_Paths[POPT_PATH].val)
+        // the landing just made, against what was predicted: whole lines
+        // only in Full and Frame Advance, as the live one (they stayed up
+        // 90 frames into a dash dance)
+        Draw_Prediction(pred_seg, 0, LINE_SOLID, full);
+        if (Options_Paths[POPT_PATH].val && full)
             Draw_Path(actual_pos, actual_bottom, 0, actual_num - 1, color_actual, 12);
     }
-    else
+    else if (full)
     {
         // the short hop is dashed, and only has a body line of its own
-        // when the full hop isn't shown
+        // when the full hop isn't shown. At full speed each is only its
+        // spot (Preview_Spots, on the HUD)
         if (preview_fh)
-            Draw_Prediction(pred_fh, 1, LINE_SOLID);
+            Draw_Prediction(pred_fh, 1, LINE_SOLID, 1);
         if (preview_sh)
-            Draw_Prediction(pred_sh, !preview_fh, LINE_DASHED);
+            Draw_Prediction(pred_sh, !preview_fh, LINE_DASHED, 1);
     }
     world_on_top = 0;
     world_add = 1;
@@ -309,6 +314,12 @@ static void Hud_GX(GOBJ *gobj, int pass)
     }
     Meter_Build();
     float strip_k = Group_K(route_rows_active ? VG_LEDGE : VG_TIMERS);
+    // where the shown plan and the hop previews land, under the live cues'
+    // brackets, which take over from them in the same place
+    vis_k = Group_K(VG_PATHS);
+    Preview_Spots();
+    vis_k = Group_K(VG_LEDGE); // as the jump's path
+    World_SpotDraw();
     vis_k = strip_k;
     Spot_Draw(fp);
     int near = Options_Timers[TOPT_NEAR].val;

@@ -220,6 +220,7 @@ enum options_paths
 {
     POPT_PATH,
     POPT_BODY,
+    POPT_DETAIL,
     POPT_ROUTE,
     POPT_INPUTS,
     POPT_WINDOWS,
@@ -237,13 +238,28 @@ static EventOption Options_Paths[POPT_COUNT] = {
         .name = "Landing Path",
         .desc = {"Draw where your ECB bottom goes if you keep",
                  "holding the stick and press nothing, in the",
-                 "landing's color when its cue is on."},
+                 "landing's color when its cue is on. Below Path",
+                 "Detail Full, only its bands and touchdown show."},
     },
     {
         .kind = OPTKIND_TOGGLE,
         .name = "Body Path",
         .desc = {"Also draw a dotted line through your body,",
                  "which is easier to follow than the ECB bottom."},
+    },
+    {
+        // at full speed a route is at most a spot and a short lead; the
+        // whole arc is for Frame Advance (Stephen, 0.9.35: the live path
+        // was "WAY too distracting"; Fable's live paths plan)
+        .kind = OPTKIND_STRING,
+        .name = "Path Detail",
+        .val = DETAIL_LEAD,
+        .value_num = countof(detail_names),
+        .values = detail_names,
+        .desc = {"How much of a path shows at full speed. Lead: the",
+                 "next few frames and press, and where you land.",
+                 "Spot: only where you land. Full: the whole path.",
+                 "Frame Advance always shows the whole path."},
     },
     {
         .kind = OPTKIND_TOGGLE,

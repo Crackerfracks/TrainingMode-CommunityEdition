@@ -12,18 +12,20 @@ The Paths menu, in menu order.
 
 | Option | Values | Default | What it does |
 | --- | --- | --- | --- |
-| Landing Path | Off, On | Off | Draws where the bottom of your ECB goes if you keep holding the stick and press nothing. It uses the landing's color when its cue is on. |
-| Body Path | Off, On | Off | Also draws a dotted line through your body, which is easier to follow than the ECB bottom. |
+| Landing Path | Off, On | Off | Draws where the bottom of your ECB goes if you keep holding the stick and press nothing. It uses the landing's color when its cue is on. Below Path Detail Full, only its window bands, aerial picker, touchdown ECB and fastfall tick show, and no line is left after a landing. |
+| Body Path | Off, On | Off | Also draws a dotted line through your body, which is easier to follow than the ECB bottom. Shown with the whole Landing Path only. |
+| Path Detail | Lead, Spot, Full | Lead | How much of a path shows at full speed. Lead: the next few frames and the next press, plus where you land. Spot: only where you land. Full: the whole path. [Frame Advance](glossary.md#frame-advance) always shows the whole path. |
 | Ledge Route | Off, On | On | While you hang on a ledge and on the way back, draws the chosen route's path. Shown with Show Routes or Assist on in Ledge Practice. Jump Timing's path has its own toggle there. |
-| Input Markers | Off, On | On | Marks the inputs along the path where each is due, and which aerials interrupt. White: stick. Yellow: jump. Pink: aerial (the C-stick directions that work light up). Cyan: airdodge. A marker brightens over the last frames before its press, and on the press it fills with its color in a white frame. |
+| Input Markers | Off, On | On | Marks the inputs along the path where each is due, and which aerials interrupt. White: stick. Yellow: jump. Pink: aerial (the C-stick directions that work light up). Cyan: airdodge. A marker brightens over the last frames before its press, and on the press it fills with its color in a white frame. Below Path Detail Full, a jump or a ledge route on its way back shows only its next press's marker, with its lead. |
 | Window Bands | Off, On | On | Shades the stretch of the path where a press works: cyan for a [perfect waveland](glossary.md#perfect-waveland)'s airdodge, pink for an [AI](glossary.md#aerial-interrupt-ai)'s aerial. Your feet are in it on those frames. |
 | Marker Size | Small, Medium, Large | Small | How big the input markers and the aerial picker are. |
 | Frame Dots | Frame Advance, Always, Off | Always | A small ring on the paths at every frame. Closer rings mean slower movement. Shown only during [Frame Advance](glossary.md#frame-advance) (always on ledge routes), always, or never. |
 | Slide-off Line | Off, On | Off | When a waveland or wavedash would slide off the edge, draws where you go: full stick that way until it starts, then your real stick. |
-| Jump Preview | Both, Full hop, Short hop, Off | Off | On the ground, shows where a [full hop and a short hop](glossary.md#short-hop-and-full-hop) would go if you jumped now, holding the stick where it is. |
+| Jump Preview | Both, Full hop, Short hop, Off | Off | On the ground, shows where a [full hop and a short hop](glossary.md#short-hop-and-full-hop) would go if you jumped now, holding the stick where it is. Below Path Detail Full, only where each lands: the full hop's brackets solid, the short hop's hollow. They hide while you dash dance. |
 
 ## How to read it
 
+- At full speed a path is calm: a spot where you land, and with Path Detail at Lead a short lead from your feet with the next press's bar, fading out along its length. The whole path, every bar and every marker are for Frame Advance, or Path Detail Full. Ledge Route draws the whole route while you hang, and the lead on the way back.
 - The short hop path is dashed and the body path is dotted.
 - The ECB path is where the bottom of the diamond goes, not where the feet are drawn. Turn on Body Path if that is hard to follow.
 - Input marker colors: white for the stick, yellow for a jump, pink for an aerial, cyan for an airdodge. On an aerial marker, the C-stick directions that work light up.

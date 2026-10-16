@@ -37,6 +37,12 @@ void Event_PresetSave(GOBJ *menu);
 static const char *speed_names[] = {"1", "5/6", "2/3", "1/2", "1/4"};
 static const float speed_values[] = {1.f, 5.f / 6.f, 2.f / 3.f, 1.f / 2.f, 1.f / 4.f};
 static const char *preview_names[] = {"Both", "Full hop", "Short hop", "Off"};
+// How much of a path shows at full speed: the next few frames and the next
+// press with where it lands, where it lands alone, or all of it (Stephen,
+// 0.9.35: the live path line was "WAY too distracting"; Fable's live paths
+// plan). Frame Advance always shows all of it.
+enum { DETAIL_LEAD, DETAIL_SPOT, DETAIL_FULL };
+static const char *detail_names[] = {"Lead", "Spot", "Full"};
 static const char *panel_side_names[] = {"Auto", "Right", "Left"};
 static const char *tick_names[] = {"Frame Advance", "Always", "Off"};
 static const char *intensity_names[] = {"1 Faint", "2 Soft", "3 Standard", "4 Bold", "5 Boldest"};

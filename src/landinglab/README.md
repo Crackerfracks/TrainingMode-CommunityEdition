@@ -58,7 +58,7 @@ Each module starts with a comment saying what it holds and which modules it uses
 - `ground_guide.c`: The ground guide (only with LL_GROUND_GUIDE; shelved, see docs/ground-guide.md).
 - `jump_tracking.c`: Jump timing each frame: anchoring, run speed, extending and carrying the search, following a jump.
 - `hop_library.c`: The hop library: hops from the ground, built ahead of time per height.
-- `jump_search.c`: The jump search's candidates, solving, the chosen jump's text and meter rows, and the route and jump paths.
+- `jump_search.c`: The jump search's candidates, solving, the chosen jump's text and meter rows, the route and jump paths, and what the world shows of the plan (its spot and lead).
 - `markers.c`: The input markers along the paths, and the aerial pickers (Compass_Draw).
 - `ledge_practice.c`: Ledge practice while hanging: route text and menu, slips, ledge drops, Ledge_Think, and the test scripts' playroute.
 - `reset_drill.c`: The drill's resets, and the ledge start and camera callbacks.

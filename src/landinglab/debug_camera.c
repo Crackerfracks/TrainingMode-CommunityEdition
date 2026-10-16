@@ -122,6 +122,8 @@ static void Log_Camera(FighterData *fp)
 static void Draw_SlideOff(void);
 static void Draw_RoutePath(void);
 static void Draw_JumpPath(void);
+static void World_SpotDraw(void);
+static void Preview_Spots(void);
 static int Jump_Showing(void);
 static void Markers_Draw(void);
 static void Assist_Draw(void);

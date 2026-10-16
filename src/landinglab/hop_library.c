@@ -430,7 +430,7 @@ static int Gl_Direct(FighterData *fp, JumpCand *c, JumpRoute *out)
             r->press_w = lr->press_w;
             r->land = c->d + lr->land;
             r->act = c->d + lr->act;
-            r->where = Jump_Where(x, y);
+            r->where = Jump_Where(r, x, y);
         }
     }
     return n;

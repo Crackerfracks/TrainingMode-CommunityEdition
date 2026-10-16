@@ -305,18 +305,17 @@ static JumpRoute *Jump_Verify(FighterData *fp, int e)
 // whose notes come in, slide, and jump back when it hands over in turn
 // (repro-conveyor-f77, 2026-10-15: walking, the press kept sliding 16
 // frames out). 1 with it in out.
-static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
+static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int e, JumpRoute *out)
 {
-    JumpRoute was = *cur;
-    int k = was.kind == LAND_AI, made = 0;
+    int k = was->kind == LAND_AI, made = 0;
     for (int tries = 0; tries < JT_VERIFY; tries++)
     {
         JumpRoute *x = 0;
         for (int i = 0; i < jt_best_n[k] && !x; i++)
         {
             JumpRoute *y = &jt_best[k][i];
-            if (y->hop == was.hop && y->hj == was.hj && y->stick == was.stick && y->hold == was.hold && y->neutral == was.neutral &&
-                y->aerial == was.aerial && y->hp == e + 1)
+            if (y->hop == was->hop && y->hj == hj && y->stick == was->stick && y->hold == was->hold && y->neutral == was->neutral &&
+                y->aerial == was->aerial && y->hp == e + 1)
                 x = y;
         }
         if (!x)
@@ -329,7 +328,7 @@ static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
             if (made || e + 1 >= JT_D)
                 return 0;
             made = 1;
-            JumpCand c = {e, was.stick, was.hold, was.hop, was.hj, 0, was.neutral};
+            JumpCand c = {e, was->stick, was->hold, was->hop, hj, 0, was->neutral};
             JumpRoute found[JT_TRY];
             int found_n;
             Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
@@ -347,6 +346,22 @@ static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
         Jump_Real(fp, x);
     }
     return 0;
+}
+
+static int Jump_Again(FighterData *fp, JumpRoute *cur, int e, JumpRoute *out)
+{
+    JumpRoute was = *cur;
+    if (Jump_Again1(fp, &was, was.hj, e, out))
+        return 1;
+    // its double jump a frame later or sooner: walking under the top
+    // platform the same double jump lands only two frames in three, and
+    // the third kept the plan whose hop had gone by (0.9.37 topR, a row
+    // back every third frame)
+    if (was.hj < 0)
+        return 0;
+    if (Jump_Again1(fp, &was, was.hj + 1, e, out))
+        return 1;
+    return was.hj > 0 && Jump_Again1(fp, &was, was.hj - 1, e, out);
 }
 
 // After the search of this frame: the best jump still ahead is the one
@@ -367,7 +382,12 @@ static void Jump_Publish(FighterData *fp)
     {
         JumpRoute *was = Jump_Find(&jt_route, jt_route_abs);
         if (was && Jump_HopGone(was, e))
+        {
             has_again = Jump_Again(fp, was, e, &again);
+            if (Log_Level() >= LOG_ALL)
+                OSReport("LLAGAIN %d e %d hj %d -> %d hp %d dj %d age %d\n", event_vars->game_timer, e, was->hj,
+                         has_again ? again.hj : -9, has_again ? again.hp : -1, has_again ? again.dj : -1, jt_hop_now_age);
+        }
     }
     Jump_Prune(e);
     if (jt_ground && gt_still && !jt_done)

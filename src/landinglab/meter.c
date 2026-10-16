@@ -549,6 +549,17 @@ static void Lane_Track(Lane *L, int l, MeterRow *r, int t)
         if (cue_log)
             OSReport("LLLANE %d %s lane %d swap %d -> %d\n", event_vars->game_timer, L->label, l, from, t);
     }
+    else if (t < 0 && L->k_prev > 0 && !L->parked && !r->parked && !Row_Ending(r) && meter_leave)
+    {
+        // its plan went out past the belt's end (or away) before reaching
+        // the window: the notes fade out as a swap's do (0.9.33: the AI
+        // pair vanished in a frame when walking under the top platform)
+        meter_leave[l] = L->last;
+        L->leave_age = 1;
+        L->slide = 0;
+        if (cue_log)
+            OSReport("LLLANE %d %s lane %d swap %d -> none\n", event_vars->game_timer, L->label, l, L->k_prev);
+    }
     float k = Clamp01((t - 1) / 4.f);
     r->slide = (L->slide + L->drop) * k;
     r->arrive = L->leave_age ? 1.f - Clamp01(L->leave_age / 3.f) : 0;

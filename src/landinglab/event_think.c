@@ -42,6 +42,7 @@ void Event_Init(GOBJ *gobj)
     jt_path_bottom = calloc(sizeof(float) * JT_PATH);
     slide_pos = calloc(sizeof(Vec2) * 2 * SLIDE_MAX);
     slide_bottom = calloc(sizeof(float) * 2 * SLIDE_MAX);
+    meter_leave = calloc(sizeof(MeterRow) * MT_LANES);
 
     // HUD panel on the event gobj, paths on their own gobj in world space
     GObj_AddGXLink(gobj, Hud_GX, GXLINK_HUD, 80);

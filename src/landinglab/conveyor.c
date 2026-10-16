@@ -23,9 +23,12 @@
 #define CV_LIFT 0.4f // a preload's hover: most of a frame (0.22 didn't read as lifted)
 #define CV_FADE_FROM 22 // the belt's rows that fade: the plate, belt, rails and lines from here
 #define CV_NOTE_FROM 30 // ... the notes from here
-#define CV_SWATCH_W 0.55f // the key's swatches under the window
+// the key's swatches under the window, narrower than a share of the belt
+// and centered, so they read as a legend, not as column heads over a
+// three-share row (0.9.30 stills)
+#define CV_SWATCH_W 0.45f
 #define CV_SWATCH_H 0.4f
-#define CV_SWATCH_GAP 0.3f
+#define CV_SWATCH_GAP 0.22f
 
 // A row's kind, for its notes' shape and the key.
 static int Cv_Rank(MeterRow *r)
@@ -88,18 +91,24 @@ static void Cv_Round(float x0, float y0, float x1, float y1, GXColor c)
 // A note's body: a rim a pixel wide, lighter than its fill, round the
 // fill, with its corners cut. No strips overlap, so a faint note has no
 // brighter seams. An open end (the note goes on past it) has no rim.
-static void Cv_Body(float x0, float y0, float x1, float y1, GXColor col, float a, int open_lo, int open_hi)
+// (fill and rim at their own strengths: a window's tail is fainter)
+static void Cv_Body2(float x0, float y0, float x1, float y1, GXColor col, float fa, float ra, int open_lo, int open_hi)
 {
     GXColor rim = Color_Mix(col, color_white, 0.45f);
     rim.a = col.a;
     float ilo = open_lo ? y0 : y0 + PX, ihi = open_hi ? y1 : y1 - PX;
-    Hud_Rect(x0 + PX, ilo, x1 - PX, ihi, Color_Fill(col, a));
-    Hud_Rect(x0, ilo, x0 + PX, ihi, Color_Fill(rim, a));
-    Hud_Rect(x1 - PX, ilo, x1, ihi, Color_Fill(rim, a));
+    Hud_Rect(x0 + PX, ilo, x1 - PX, ihi, Color_Fill(col, fa));
+    Hud_Rect(x0, ilo, x0 + PX, ihi, Color_Fill(rim, ra));
+    Hud_Rect(x1 - PX, ilo, x1, ihi, Color_Fill(rim, ra));
     if (!open_lo)
-        Hud_Rect(x0 + PX, y0, x1 - PX, y0 + PX, Color_Fill(rim, a));
+        Hud_Rect(x0 + PX, y0, x1 - PX, y0 + PX, Color_Fill(rim, ra));
     if (!open_hi)
-        Hud_Rect(x0 + PX, y1 - PX, x1 - PX, y1, Color_Fill(rim, a));
+        Hud_Rect(x0 + PX, y1 - PX, x1 - PX, y1, Color_Fill(rim, ra));
+}
+
+static void Cv_Body(float x0, float y0, float x1, float y1, GXColor col, float a, int open_lo, int open_hi)
+{
+    Cv_Body2(x0, y0, x1, y1, col, a, a, open_lo, open_hi);
 }
 
 // One note: kind and tone of row r, from y0 up to y1 (open_lo / open_hi:
@@ -155,6 +164,60 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
     }
 }
 
+// A window's tail behind its head (Row_WindowTail): its later frames,
+// narrower and fainter, growing out of the head with no rim at its foot. A
+// hollow note's is its two side rails and a top rail.
+static void Cv_Tail(MeterRow *r, int tone, float a, float x0, float y0, float x1, float y1, int open_hi)
+{
+    GXColor col = Tone_Color(r, tone);
+    int rank = tone == TONE_JUMP ? 0 : Cv_Rank(r);
+    float hi = open_hi ? y1 : y1 - 0.05f;
+    x0 += 0.12f;
+    x1 -= 0.12f;
+    if (hi <= y0 || x1 <= x0)
+        return;
+    if (rank == 3 && tone != TONE_MISS && tone != TONE_SKIP)
+    {
+        float t = 2 * PX;
+        Hud_Rect(x0, y0, x0 + t, hi, Color_Fill(col, a * 0.7f));
+        Hud_Rect(x1 - t, y0, x1, hi, Color_Fill(col, a * 0.7f));
+        if (!open_hi)
+            Hud_Rect(x0 + t, hi - t, x1 - t, hi, Color_Fill(col, a * 0.7f));
+        return;
+    }
+    Cv_Body2(x0, y0, x1, hi, col, a * 0.4f, a * 0.7f, 1, open_hi);
+}
+
+// Cells k to e of row r as one note from y0 to y1 (lo / hi: it goes on
+// past that end). A window is a head, its first frame drawn one row tall
+// as the note, and a tail behind it, so the window is open while a head is
+// in the box (conveyor measurements, 2026-10-16: the 2-4 row body was read
+// as the note, a frame or two early).
+static void Cv_Run(MeterRow *r, int k, int e, float a, float x0, float y0, float x1, float y1, int lo, int hi)
+{
+    int kind = r->cell[k], tone = r->tone[k];
+    if (kind != CELL_PRESS)
+    {
+        Cv_Note(r, kind, tone, a, x0, y0, x1, y1, lo, hi);
+        return;
+    }
+    if (Row_WindowTail(r, k))
+    {
+        Cv_Tail(r, tone, a, x0, y0, x1, y1, hi);
+        return;
+    }
+    if (e > k)
+        Cv_Tail(r, tone, a, x0, y0 + CV_PITCH - 0.05f, x1, y1, hi);
+    Cv_Note(r, kind, tone, a, x0, y0, x1, y0 + CV_PITCH, 0, 0);
+}
+
+// The row a cell is drawn on, slid (r->slide) to the nearest whole row,
+// for the shares of the belt.
+static int Cv_Shift(MeterRow *r)
+{
+    return Row_Round(r->slide);
+}
+
 // The first note a row has at or past frame from, or -1.
 static int Cv_FirstClaim(MeterRow *r, int from)
 {
@@ -207,14 +270,24 @@ static void Conveyor_Draw(FighterData *fp)
     Hud_RectFade(br + 0.06f, line_y, br + 0.12f, top, fade_y, top, color_white, 0.2f * dim);
 
     // the notes: each row's runs of frames that keep their share of the
-    // belt, drawn whole, so a window reads as one note
-    int slot[MT_LANES][CV_ROWS], cnt[CV_ROWS];
-    for (int k = 0; k < CV_ROWS; k++)
+    // belt, drawn whole, so a window reads as one note. A re-timed plan's
+    // notes slide (r->slide), and take their shares where they're drawn
+    int slot[MT_LANES][MT_CELLS], cnt[CV_ROWS], sh[MT_LANES];
+    for (int j = 0; j < n; j++)
     {
-        cnt[k] = 0;
+        sh[j] = Cv_Shift(&meter[order[j]]);
+        for (int k = 0; k < MT_CELLS; k++)
+            slot[j][k] = -1;
+    }
+    for (int d = 0; d < CV_ROWS; d++)
+    {
+        cnt[d] = 0;
         for (int j = 0; j < n; j++)
         {
             MeterRow *r = &meter[order[j]];
+            int k = d - sh[j];
+            if (k < 0 || k >= MT_CELLS)
+                continue;
             // a preload hovers most of a frame up, so it takes its share of
             // the frame over each note too (Stephen, 0.9.28: moving, Jump
             // Timing's hop notes came up beside the wavedash's preload and
@@ -222,34 +295,84 @@ static void Conveyor_Draw(FighterData *fp)
             int claims = k < r->len && Cv_Claims(r->cell[k]);
             if (r->parked && k > 0 && k - 1 < r->len && Cv_Claims(r->cell[k - 1]))
                 claims = 1;
-            slot[j][k] = claims ? cnt[k]++ : -1;
+            slot[j][k] = claims ? cnt[d]++ : -1;
         }
     }
+
+    // a plan swapped out: its notes step on with the belt, fading, in their
+    // lane's share where it has one, never into the window, and with no
+    // glyphs, hot or ending (laid under the notes coming in)
+    for (int j = 0; j < n; j++)
+    {
+        int la;
+        MeterRow *lv = Lane_Leave(&meter[order[j]], &la);
+        if (!lv || lv->parked)
+            continue;
+        for (int k = 0; k < lv->len && k < MT_CELLS; k++)
+        {
+            int kind = lv->cell[k];
+            float at = k + lv->slide - la;
+            int d = Row_Round(at);
+            if (!Cv_Claims(kind) || at < 0.99f || d >= CV_ROWS)
+                continue;
+            int kc = d - sh[j], own = kc >= 0 && kc < MT_CELLS && slot[j][kc] >= 0;
+            int e = k;
+            while (e + 1 < lv->len && e + 1 < MT_CELLS && d + (e + 1 - k) < CV_ROWS && lv->cell[e + 1] == kind &&
+                   lv->tone[e + 1] == lv->tone[k] && lv->alpha[e + 1] == lv->alpha[k])
+            {
+                int dn = d + (e + 1 - k), kn = dn - sh[j];
+                int own_n = kn >= 0 && kn < MT_CELLS && slot[j][kn] >= 0;
+                if (own_n != own || (own && (slot[j][kn] != slot[j][kc] || cnt[dn] != cnt[d])))
+                    break;
+                e++;
+            }
+            float sx0 = bl + 0.15f, sx1 = br - 0.15f;
+            if (own)
+            {
+                float share = (CV_W - 0.3f) / cnt[d];
+                sx0 = bl + 0.15f + slot[j][kc] * share + (cnt[d] > 1 ? 0.06f : 0);
+                sx1 = sx0 + share - (cnt[d] > 1 ? 0.12f : 0);
+            }
+            float y0 = line_y + at * CV_PITCH, y1 = line_y + (e + 1 + lv->slide - la) * CV_PITCH;
+            if (y1 > top)
+                y1 = top;
+            int lo = k > 0 && lv->cell[k - 1] == kind && lv->tone[k - 1] == lv->tone[k];
+            int hi = e + 1 < lv->len && lv->cell[e + 1] == kind && lv->tone[e + 1] == lv->tone[k];
+            vis_k = base_k * lv->fade * Note_Far(at, CV_NOTE_FROM, CV_ROWS);
+            float a = lv->alpha[k] / 255.f * (lv->dim ? 0.5f : 1.f) * (1.f - la / 5.f);
+            Cv_Run(lv, k, e, a, sx0, y0, sx1, y1, lo, hi);
+            k = e;
+        }
+    }
+    vis_k = base_k;
+
     for (int j = 0; j < n; j++)
     {
         MeterRow *r = &meter[order[j]];
-        float lift = Cv_Lift(r);
-        for (int k = 0; k < CV_ROWS && k < r->len; k++)
+        float lift = Cv_Lift(r), in_a = 1.f - r->arrive;
+        for (int k = 0; k < r->len && k < MT_CELLS; k++)
         {
             // what's drawn here: a note in its share, or lag across the
             // belt where no note is
-            int kind = r->cell[k];
-            if (slot[j][k] < 0 && !(kind == CELL_LAG && cnt[k] == 0))
+            int kind = r->cell[k], d = k + sh[j];
+            if (d < 0 || d >= CV_ROWS || k + r->slide < -0.01f)
+                continue; // (slid past the line: frames before its first target)
+            if (slot[j][k] < 0 && !(kind == CELL_LAG && cnt[d] == 0))
                 continue;
             if (r->parked && !Cv_Claims(kind))
                 continue; // only the room it hovers into, kept clear above a note
             int e = k;
-            while (e + 1 < CV_ROWS && e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k] &&
-                   r->alpha[e + 1] == r->alpha[k] && slot[j][e + 1] == slot[j][k] &&
-                   (slot[j][k] < 0 ? cnt[e + 1] == 0 : cnt[e + 1] == cnt[k]))
+            while (e + 1 + sh[j] < CV_ROWS && e + 1 < r->len && e + 1 < MT_CELLS && r->cell[e + 1] == kind &&
+                   r->tone[e + 1] == r->tone[k] && r->alpha[e + 1] == r->alpha[k] && slot[j][e + 1] == slot[j][k] &&
+                   (slot[j][k] < 0 ? cnt[e + 1 + sh[j]] == 0 : cnt[e + 1 + sh[j]] == cnt[d]))
                 e++;
             float sx0 = bl + 0.15f, sx1 = br - 0.15f;
-            int most = slot[j][k] >= 0 ? cnt[k] : 1;
+            int most = slot[j][k] >= 0 ? cnt[d] : 1;
             if (r->parked && slot[j][k] >= 0)
             {
                 // the preload is last in the belt's order: the far share, as narrow as the most crowded frame it
                 // hovers over, so it keeps one place and clears the rest
-                for (int f = k; f <= e + 1 && f < CV_ROWS; f++)
+                for (int f = d; f <= d + (e - k) + 1 && f < CV_ROWS; f++)
                     if (cnt[f] > most)
                         most = cnt[f];
                 float share = (CV_W - 0.3f) / most;
@@ -258,14 +381,16 @@ static void Conveyor_Draw(FighterData *fp)
             }
             else if (slot[j][k] >= 0)
             {
-                float share = (CV_W - 0.3f) / cnt[k];
-                sx0 = bl + 0.15f + slot[j][k] * share + (cnt[k] > 1 ? 0.06f : 0);
-                sx1 = sx0 + share - (cnt[k] > 1 ? 0.12f : 0);
+                float share = (CV_W - 0.3f) / cnt[d];
+                sx0 = bl + 0.15f + slot[j][k] * share + (cnt[d] > 1 ? 0.06f : 0);
+                sx1 = sx0 + share - (cnt[d] > 1 ? 0.12f : 0);
             }
-            float y0 = line_y + k * CV_PITCH, y1 = line_y + (e + 1) * CV_PITCH;
+            float y0 = line_y + (k + r->slide) * CV_PITCH, y1 = line_y + (e + 1 + r->slide) * CV_PITCH;
+            if (y1 > top)
+                y1 = top;
             int lo = k > 0 && r->cell[k - 1] == kind && r->tone[k - 1] == r->tone[k];
             int hi = e + 1 < r->len && r->cell[e + 1] == kind && r->tone[e + 1] == r->tone[k];
-            vis_k = base_k * r->fade * Note_Far(k, CV_NOTE_FROM, CV_ROWS);
+            vis_k = base_k * r->fade * Note_Far(k + r->slide, CV_NOTE_FROM, CV_ROWS);
             // where it will set down: a light outline on the belt under it
             // (a dark shadow was lost on the dark belt, 0.9.14 test)
             // (0.9.15 test: right under the note it was hidden, so the note
@@ -273,8 +398,8 @@ static void Conveyor_Draw(FighterData *fp)
             float lean = most > 1 ? 0 : -0.4f * lift; // (not into a neighbour's share)
             if (lift > 0 && kind != CELL_LAG)
                 Hud_Frame(sx0, y0 + 0.05f, sx1, y1 - 0.05f, 1.5f * PX, Color_Over(color_white, 0.5f * (1.f - r->settle / 4.f)));
-            float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f);
-            Cv_Note(r, kind, r->tone[k], a, sx0 + lean, y0 + lift, sx1 + lean, y1 + lift, lo, hi);
+            float a = r->alpha[k] / 255.f * (r->dim ? 0.5f : 1.f) * in_a;
+            Cv_Run(r, k, e, a, sx0 + lean, y0 + lift, sx1 + lean, y1 + lift, lo, hi);
             if (r->settle == 1 && kind != CELL_LAG)
                 Hud_Frame(sx0 - PX, y0 - PX, sx1 + PX, y1 + PX, 1.4f * PX, Color_Fill(color_white, 0.8f)); // set down
             k = e;
@@ -310,12 +435,14 @@ static void Conveyor_Draw(FighterData *fp)
     {
         MeterRow *r = &meter[order[j]];
         float lift = Cv_Lift(r);
-        for (int k = 0; k < r->len && k < CV_ROWS; k++)
+        for (int k = 0; k < r->len && k < MT_CELLS; k++)
         {
-            vis_k = base_k * r->fade * Note_Far(k, CV_NOTE_FROM, CV_ROWS);
-            if (r->glyph[k])
-                Glyph_Draw(r->glyph[k], glyph_x, line_y + (k + 0.5f) * CV_PITCH + lift, 0.3f,
-                           Color_Fill(color_white, 0.95f * (r->dim ? 0.5f : 1.f)));
+            float at = k + r->slide;
+            if (!r->glyph[k] || at < -0.01f || at > CV_ROWS - 0.5f)
+                continue;
+            vis_k = base_k * r->fade * Note_Far(at, CV_NOTE_FROM, CV_ROWS);
+            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * CV_PITCH + lift, 0.3f,
+                       Color_Fill(color_white, 0.95f * (r->dim ? 0.5f : 1.f) * (1.f - r->arrive)));
         }
     }
 

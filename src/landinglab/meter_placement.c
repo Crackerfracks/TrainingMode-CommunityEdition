@@ -113,8 +113,10 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
 #define CV_PITCH_BASE 0.46f   // ... in about a third more height than it had
 // Cell Size stretches the highway's and conveyor's frames as it does the
 // cells', a little more: a thin note read early (Stephen, 0.9.29: it should
-// work on every timer; 0.9.30: the conveyor should scale a teensy bit more)
-#define WIDE_K (1.f + 1.5f * CELL_WIDE / MT_PITCH)
+// work on every timer; 0.9.30: the conveyor should scale a teensy bit more.
+// Conveyor measurements, 2026-10-16: 1.5 gave 5.0 to 7.65 px a frame, so
+// 1.8 for 5.0 to 8.2; the belt at Widest still ends under the panel)
+#define WIDE_K (1.f + 1.8f * CELL_WIDE / MT_PITCH)
 #define HW_PITCH (HW_PITCH_BASE * WIDE_K)
 #define CV_PITCH (CV_PITCH_BASE * WIDE_K)
 #define HW_LANE 2.1f
@@ -130,9 +132,18 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
 #define STRIP_PAD 0.35f
 #define CV_W (2 * HW_LANE + HW_LANE_GAP) // the conveyor's belt
 #define CV_BASE 1.5f // under the window: the key's swatches
-#define SLOT_DIM 0.6f // an empty slot's swatch (vis_k squares it: about a third as strong)
+#define SLOT_DIM 0.75f // an empty slot's swatch (vis_k squares it: about half as strong; a third was lost over the stage, 0.9.30 stills)
 
 static float hw_pitch = HW_PITCH_BASE; // a frame's height in the window the highway and conveyor share
+
+// The rows the fixed strip shows ahead, for how far up a swapped-in plan
+// drops from (Lane_Track).
+static int Strip_Track(void)
+{
+    int look = Options_Timers[TOPT_STRIP].val;
+    // (a dial's hand shows from 21 frames out)
+    return look == STRIP_CONVEYOR ? CV_ROWS : look == STRIP_HIGHWAY ? HW_ROWS : look == STRIP_DIAL ? 21 : MT_FIXED_MAX;
+}
 
 static int Strip_Glyphs(void)
 {

@@ -30,7 +30,8 @@
 #define JT_STICKS 5
 #define JT_CANDIDATES (JT_D * JT_STICKS * 2) // frame, stick, and then holding its x or not
 #define JT_SIM 80           // frames simulated after the jump
-#define JT_BEST 8           // routes kept per kind
+#define JT_BEST 12          // routes kept per kind
+#define JT_VERT_KEEP 4      // ... of them straight-up ones, however late (Jump_Insert)
 #define JT_BOTTOM 30.f      // how far under the lowest floor a fall is given up on
 #define JT_REANCHOR (JT_D - 5) // from the ground: frames after which the anchor has too few jump frames left
 #define JT_STICK_TOL 0.05f  // how far the stick may move before the anchor's fall is wrong
@@ -374,35 +375,28 @@ static void Jump_Insert(JumpRoute *a, int *count, JumpRoute *r)
         *count = n + 1;
         return;
     }
-    // full: one goes, the last, except that the best straight-up one keeps
-    // its place, so Prefer has one to weigh (Fable's Conveyor feel plan,
-    // 2026-10-16)
-    int verts = 0, drop = n - 1;
-    for (int i = 0; i < n; i++)
-        verts += Jump_Vertical(&a[i]);
-    if (at == n)
+    // full: one goes, the last, except that the best JT_VERT_KEEP
+    // straight-up ones keep their places, so Prefer has some to weigh. One
+    // isn't enough: the soonest is the first hop, gone a few frames on, and
+    // nothing took its place (1b6d32e: walking, none was ever shown)
+    JumpRoute tmp[JT_BEST + 1];
+    int m = 0, verts = 0;
+    for (int i = 0; i <= n; i++)
     {
-        // worse than all of them: in only as the one straight-up one
-        if (verts || !Jump_Vertical(r))
-            return;
+        tmp[m] = i == at ? *r : a[i < at ? i : i - 1];
+        verts += Jump_Vertical(&tmp[m++]);
     }
-    else if (Jump_Vertical(&a[n - 1]) && verts == 1 && !Jump_Vertical(r))
-    {
-        drop = n - 2;
-        while (drop >= 0 && Jump_Vertical(&a[drop]))
+    int drop = n;
+    if (verts <= JT_VERT_KEEP)
+        while (drop >= 0 && Jump_Vertical(&tmp[drop]))
             drop--;
-        if (drop < at)
-            return; // no place for it before the straight-up one
-    }
-    for (int j = drop; j < n - 1; j++)
-        a[j] = a[j + 1];
-    n--;
-    if (at > drop)
-        at--;
-    for (int j = n; j > at; j--)
-        a[j] = a[j - 1];
-    a[at] = *r;
-    *count = n + 1;
+    if (drop < 0)
+        drop = n;
+    m = 0;
+    for (int i = 0; i <= n; i++)
+        if (i != drop)
+            a[m++] = tmp[i];
+    *count = m;
 }
 
 // One jump: d frames of fall with the stick as at the anchor, the double

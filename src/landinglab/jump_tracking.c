@@ -862,7 +862,7 @@ static void Jump_Follow(ScriptInput *in)
 static void Jump_Log(void)
 {
     JumpRoute *b = Jump_Pick(-1000); // the best of all, however near
-    char buf[480];
+    char buf[640];
     int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d edge %d", jt_anchor,
                     jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
                     jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found,
@@ -872,7 +872,12 @@ static void Jump_Log(void)
                      gl_direct, gl_verified, gl_rejected);
     // the soonest straight-up one too, to weigh drift against (Stephen,
     // 0.9.30: vertical jumps are what's played most)
-    JumpRoute *v = jt_vert.valid ? &jt_vert : 0;
+    // (kept in the lists, so still ahead; the soonest found at all can be a
+    // hop already gone by)
+    JumpRoute *v = 0;
+    for (int i = 0; i < jt_best_n[1]; i++)
+        if (Jump_Vertical(&jt_best[1][i]) && (!v || Jump_Better(&jt_best[1][i], v)))
+            v = &jt_best[1][i];
     if (b)
         n += sprintf(buf + n, " act %d cost %d", b->act, Jump_Cost(b));
     if (v)
@@ -880,6 +885,8 @@ static void Jump_Log(void)
     else
         n += sprintf(buf + n, " vert none");
     n += sprintf(buf + n, " neutral found %d", jt_neutral_n);
+    if (jt_vert.valid)
+        n += sprintf(buf + n, " vertany d %d act %d late %d neutral %d", jt_vert.d, jt_vert.act, jt_vert.late, jt_vert.neutral);
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)

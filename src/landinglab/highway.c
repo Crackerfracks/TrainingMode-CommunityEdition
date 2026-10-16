@@ -265,7 +265,7 @@ static void Hw_Lane(MeterRow *r, MeterRow *o, float glyph_x, float lx, float rx,
         float at = Note_At(r, k, HW_ROWS) + r->slide;
         vis_k = base_k * Note_Far(at, HW_NOTE_FROM, HW_ROWS);
         if (r->glyph[k] && at < HW_ROWS - 0.5f && at > -0.01f)
-            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * HW_PITCH, 0.3f, Color_Fill(color_white, 0.95f * dim * in_a));
+            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * HW_PITCH, Glyph_Strip(r->glyph[k], 0.3f), Color_Fill(color_white, 0.95f * dim * in_a));
     }
     vis_k = base_k;
 }

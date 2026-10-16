@@ -441,7 +441,7 @@ static void Conveyor_Draw(FighterData *fp)
             if (!r->glyph[k] || at < -0.01f || at > CV_ROWS - 0.5f)
                 continue;
             vis_k = base_k * r->fade * Note_Far(at, CV_NOTE_FROM, CV_ROWS);
-            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * CV_PITCH + lift, 0.3f,
+            Glyph_Draw(r->glyph[k], glyph_x, line_y + (at + 0.5f) * CV_PITCH + lift, Glyph_Strip(r->glyph[k], 0.3f),
                        Color_Fill(color_white, 0.95f * (r->dim ? 0.5f : 1.f) * (1.f - r->arrive)));
         }
     }

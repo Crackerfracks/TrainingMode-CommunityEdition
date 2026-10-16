@@ -824,6 +824,15 @@ static void Glyph_Chevrons(float x, float y, float r, float dx, float dy, float 
     }
 }
 
+// A glyph's size on the strips: the jump button bigger, so the way its
+// arrow points and the held drift's bar read at a glance (Stephen's
+// playtest note on 0.9.33's: "close to unreadable" at 1x)
+static float Glyph_Strip(int glyph, float s)
+{
+    int g = glyph & ~GLYPH_HELD;
+    return g == GLYPH_JUMP || (g >= GLYPH_JUMP_UL && g <= GLYPH_JUMP_R) ? s * 1.4f : s;
+}
+
 static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
 {
     GXColor shade = Color_Fill(color_plate, c.a / 255.f * 0.9f);
@@ -835,7 +844,7 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
         {
             // the drift held after the jump: a bar under the button (Fable's
             // Conveyor feel plan: drift should say so)
-            float hw = 0.8f * s + (pass ? 0 : 0.12f), by = y - s * 1.2f, bh = 0.14f * s + (pass ? 0 : 0.12f);
+            float hw = 0.9f * s + (pass ? 0 : 0.12f), by = y - s * 1.25f, bh = 0.2f * s + (pass ? 0 : 0.12f);
             Hud_Rect(x - hw, by - bh, x + hw, by + bh, pass ? c : shade);
         }
         float r = pass ? s : s + 0.12f;
@@ -1052,7 +1061,7 @@ static void Meter_Draw(float gx, float base, float scale, int max_cells, int lab
                 float cx0 = gx + at * pitch, cx1 = cx0 + cw;
                 Mt_Cell(kind, col, a, cx0, cx1, y0, y1, ch, scale);
                 if (r->glyph[k])
-                    Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, 0.36f * scale, Color_Fill(color_white, 0.95f * dim * in_a));
+                    Glyph_Draw(r->glyph[k], (cx0 + cx1) / 2, top + 0.22f * scale + glyph_h / 2, Glyph_Strip(r->glyph[k], 0.36f * scale), Color_Fill(color_white, 0.95f * dim * in_a));
             }
         }
     }

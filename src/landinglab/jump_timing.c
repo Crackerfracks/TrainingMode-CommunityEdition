@@ -88,7 +88,8 @@ static int jt_anchor;           // its game frame
 static int jt_next;             // the next candidate to simulate
 static JumpRoute jt_vert;       // the best straight-up AI found, kept or not (Jump_Insert), for the log
 static int jt_neutral_n;        // ... and how many AIs with the stick let go through the hop were found
-static int jt_twin;             // ... tried again, the stick let go through the hop (Jump_Solve)
+static int jt_twin;
+static int jt_hop_now_age;      // frames the shown hop has been the same plan a frame on (Jump_Again)             // ... tried again, the stick let go through the hop (Jump_Solve)
 static int jt_done;             // the search has been through every candidate
 static int jt_found;            // routes it found
 static float jt_bottom;         // how far down a fall is followed
@@ -261,27 +262,36 @@ static int Jump_Wide(JumpRoute *r)
     return r->kind == LAND_NIL ? 99 : r->press_w;
 }
 
+// A jump with no drift: the double jump (or the hop alone) straight up,
+// the stick let go after it
+static int Jump_Vertical(JumpRoute *r)
+{
+    return r->stick == JT_UP && !r->hold;
+}
+
 // What a route costs the player, in frames of acting sooner it's worth
 // giving up: a double jump backwards turns him around (and its aerial is
-// the turned one), and a one- or two-frame aerial window is hard to hit
-// (Stephen, 0.9.29: the shown route leaned to backward double jumps whose
-// landing press was the strict one, a frame sooner was all they had).
+// the turned one), a one- or two-frame aerial window is hard to hit (Stephen,
+// 0.9.29: the shown route leaned to backward double jumps whose landing
+// press was the strict one), and drift is harder to repeat than straight up:
+// a drift-back held diagonal gives a straight-up one 10 frames (Stephen,
+// 0.9.30: mostly vertical jumps are what's played). Letting go is free.
+// Prefer Soonest keeps only the window's term.
 static int Jump_Cost(JumpRoute *r)
 {
     int cost = r->act;
-    int dj = !r->hop || r->hj >= 0;
-    if (dj && jt_stick_xy[r->stick][0] * jt_start.facing < 0)
-        cost += 4;
-    // drift costs too: a double jump straight up, and a stick let go, are
-    // what's played most and easiest to repeat (Stephen, 0.9.30: it still
-    // favored drifting jumps over mostly vertical ones)
-    if (dj && r->stick != JT_UP)
-        cost += r->stick == JT_UPLEFT || r->stick == JT_UPRIGHT ? 2 : 3;
-    if (r->hold && (dj ? r->stick != JT_UP : 1))
-        cost += 1;
     int w = Jump_Wide(r);
     if (w < 3)
         cost += 2 * (3 - w);
+    if (Options_Jump[JOPT_PREFER].val == PREFER_SOONEST)
+        return cost;
+    int dj = !r->hop || r->hj >= 0;
+    if (dj && jt_stick_xy[r->stick][0] * jt_start.facing < 0)
+        cost += 4;
+    if (dj && r->stick != JT_UP)
+        cost += r->stick == JT_UPLEFT || r->stick == JT_UPRIGHT ? 4 : 6;
+    if (r->hold && !Jump_Vertical(r))
+        cost += 2;
     return cost;
 }
 
@@ -293,6 +303,8 @@ static int Jump_Better(JumpRoute *a, JumpRoute *b)
         return 0;
     if (a->late != b->late)
         return b->late;
+    if (Options_Jump[JOPT_PREFER].val == PREFER_VERTICAL && Jump_Vertical(a) != Jump_Vertical(b))
+        return Jump_Vertical(a);
     if (Jump_Cost(a) != Jump_Cost(b))
         return Jump_Cost(a) < Jump_Cost(b);
     if (a->act != b->act)
@@ -354,16 +366,43 @@ static void Jump_Insert(JumpRoute *a, int *count, JumpRoute *r)
     int at = n;
     while (at > 0 && Jump_Better(r, &a[at - 1]))
         at--;
-    if (at < JT_BEST)
+    if (n < JT_BEST)
     {
-        if (n == JT_BEST)
-            n--;
         for (int j = n; j > at; j--)
             a[j] = a[j - 1];
         a[at] = *r;
-        n++;
+        *count = n + 1;
+        return;
     }
-    *count = n;
+    // full: one goes, the last, except that the best straight-up one keeps
+    // its place, so Prefer has one to weigh (Fable's Conveyor feel plan,
+    // 2026-10-16)
+    int verts = 0, drop = n - 1;
+    for (int i = 0; i < n; i++)
+        verts += Jump_Vertical(&a[i]);
+    if (at == n)
+    {
+        // worse than all of them: in only as the one straight-up one
+        if (verts || !Jump_Vertical(r))
+            return;
+    }
+    else if (Jump_Vertical(&a[n - 1]) && verts == 1 && !Jump_Vertical(r))
+    {
+        drop = n - 2;
+        while (drop >= 0 && Jump_Vertical(&a[drop]))
+            drop--;
+        if (drop < at)
+            return; // no place for it before the straight-up one
+    }
+    for (int j = drop; j < n - 1; j++)
+        a[j] = a[j + 1];
+    n--;
+    if (at > drop)
+        at--;
+    for (int j = n; j > at; j--)
+        a[j] = a[j - 1];
+    a[at] = *r;
+    *count = n + 1;
 }
 
 // One jump: d frames of fall with the stick as at the anchor, the double

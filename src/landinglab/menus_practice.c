@@ -171,6 +171,7 @@ enum options_jump
     JOPT_LEAD,
     JOPT_PATH,
     JOPT_TEXT,
+    JOPT_PREFER,
 #ifdef LL_GROUND_GUIDE
     JOPT_BANDS,
     JOPT_MARKS,
@@ -207,6 +208,13 @@ static const char *jump_target_names[] = {"Any", "Top Platform", "Left Platform"
 // chased (Stephen, 0.8.4). The search looks this far ahead instead.
 static const char *jump_lead_names[] = {"12 Frames", "16 Frames", "20 Frames", "24 Frames", "30 Frames"};
 static const u8 jump_leads[] = {12, 16, 20, 24, 30};
+
+// Which jump to show when more than one lands: the one that acts soonest, a
+// straight-up one when it's no more than about 10 frames later, or a
+// straight-up one whenever there is one (Stephen, 0.9.30: mostly vertical
+// jumps are what's played)
+enum { PREFER_SOONEST, PREFER_BALANCED, PREFER_VERTICAL };
+static const char *jump_prefer_names[] = {"Soonest", "Balanced", "Vertical"};
 
 static EventOption Options_Jump[JOPT_COUNT] = {
     {
@@ -259,6 +267,17 @@ static EventOption Options_Jump[JOPT_COUNT] = {
         .name = "Plan Text", // off by default: the plan text was self-defeating (Stephen, 0.8.6)
         .desc = {"Spell the shown jump out in the info panel, as",
                  "in \"DJ up in 6f, nair +11-13: AI\"."},
+    },
+    {
+        .kind = OPTKIND_STRING,
+        .name = "Prefer",
+        .val = PREFER_BALANCED,
+        .value_num = countof(jump_prefer_names),
+        .values = jump_prefer_names,
+        .desc = {"Soonest: the jump that lets you act first.",
+                 "Balanced: a straight-up double jump when it's",
+                 "about 10 frames later at most. Vertical: a",
+                 "straight-up one whenever one lands."},
     },
 #ifdef LL_GROUND_GUIDE
     {

@@ -362,6 +362,8 @@ static void Jump_Publish(FighterData *fp)
     // JT_SETTLE frames ago, or when it no longer works. (Stephen, 0.8.3: the
     // route changed every frame as the search found slightly better ones.)
     JumpRoute *cur = jt_have ? Jump_Find(&jt_route, jt_route_abs) : 0;
+    // frames the same hop has been offered "now" (Meter_AddJump)
+    jt_hop_now_age = has_again && Jump_Find(&again, jt_anchor) ? jt_hop_now_age + 1 : 0;
     if (has_again)
         cur = Jump_Find(&again, jt_anchor);
     else if (cur && b && Jump_HopGone(cur, e))
@@ -531,8 +533,11 @@ static void Meter_AddJump(void)
         for (int n = e + 1; n < at; n++)
             Route_Cell(row, -e - 1, n, CELL_AIR, 0);
         Route_Cell(row, -e - 1, at, CELL_PRESS, GLYPH_JUMP);
+        // a hop offered "now" frame after frame while he walks is an offer,
+        // not an alarm: white only on its first frame, its own color after
+        // (Fable's Conveyor feel plan, 2026-10-16)
         if (until == 0)
-            row->hot = 2;
+            row->hot = step == 0 && jt_hop_now_age > 0 ? 1 : 2;
         const char *what = step == 0 ? (r->hop == GT_SH ? "SH " : "FH ") : "";
         if (until > 0)
             sprintf(row->info, "%s%df", what, until);

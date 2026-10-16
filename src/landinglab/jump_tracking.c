@@ -851,7 +851,7 @@ static void Jump_Follow(ScriptInput *in)
 static void Jump_Log(void)
 {
     JumpRoute *b = Jump_Pick(-1000); // the best of all, however near
-    char buf[400];
+    char buf[480];
     int n = sprintf(buf, "LLJUMP anchor %d %.3f %.3f %s%s%s at %d tried %d of %d steps %d target %d found %d edge %d", jt_anchor,
                     jt_start.pos.X, jt_start.pos.Y, jt_ground ? "ground " : "", jt_ground && gt_still ? "still " : "",
                     jt_done ? "done" : "partial", event_vars->game_timer, jt_tries, jt_next, jt_steps, jt_target, jt_found,
@@ -859,6 +859,22 @@ static void Jump_Log(void)
     if (jt_ground)
         n += sprintf(buf + n, " lib pass %d skip %d builds %d direct %d verified %d rejected %d", gl_pass, gl_skip, gl_builds,
                      gl_direct, gl_verified, gl_rejected);
+    // the soonest straight-up one too, to weigh drift against (Stephen,
+    // 0.9.30: vertical jumps are what's played most)
+    JumpRoute *v = 0;
+    for (int k = 0; k < 2; k++)
+        for (int i = 0; i < jt_best_n[k]; i++)
+        {
+            JumpRoute *x = &jt_best[k][i];
+            if ((x->hop ? x->hj >= 0 : 1) && x->stick == JT_UP && x->kind == LAND_AI && (!v || Jump_Better(x, v)))
+                v = x;
+        }
+    if (b)
+        n += sprintf(buf + n, " act %d cost %d", b->act, Jump_Cost(b));
+    if (v)
+        n += sprintf(buf + n, " vert d %d act %d cost %d", v->d, v->act, Jump_Cost(v));
+    else
+        n += sprintf(buf + n, " vert none");
     if (!b)
         sprintf(buf + n, " best none\n");
     else if (b->kind == LAND_AI)

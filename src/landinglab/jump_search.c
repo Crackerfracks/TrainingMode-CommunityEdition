@@ -308,28 +308,32 @@ static JumpRoute *Jump_Verify(FighterData *fp, int e)
 static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int hp, JumpRoute *out)
 {
     int k = was->kind == LAND_AI, made = 0;
-    for (int tries = 0; tries < JT_VERIFY; tries++)
+    // a few more than Jump_Verify: before the hop library is done (the first
+    // walk on a floor after boot, 0.9.39 REPORT-039) both holds can be laid
+    // out from it, and each predicted for real took a try, so none was left
+    // to take the real one
+    for (int tries = 0; tries < JT_VERIFY + 2; tries++)
     {
-        // the held one's hold first, else the other: the lists keep one of
-        // the two (Jump_Same), so asking for the one let go found nothing,
-        // and the prediction below, no better than the kept one, wasn't put
-        // in. One frame in three walking under the top platform (0.9.38
-        // topR: every hop and double jump a frame either way "failed")
-        JumpRoute *x = 0, *other = 0;
-        for (int i = 0; i < jt_best_n[k] && !x; i++)
+        // a real one before one from the library, then the held one's hold
+        // before the other: the lists keep one of the two (Jump_Same), so
+        // asking for the one let go found nothing, and the prediction below,
+        // no better than the kept one, wasn't put in
+        JumpRoute *x = 0;
+        int x_rank = 4;
+        for (int i = 0; i < jt_best_n[k]; i++)
         {
             JumpRoute *y = &jt_best[k][i];
             if (y->hop == was->hop && y->hj == hj && y->stick == was->stick && y->neutral == was->neutral &&
                 y->aerial == was->aerial && y->hp == hp)
             {
-                if (y->hold == was->hold)
+                int rank = 2 * (y->lib != 0) + (y->hold != was->hold);
+                if (rank < x_rank)
+                {
                     x = y;
-                else if (!other)
-                    other = y;
+                    x_rank = rank;
+                }
             }
         }
-        if (!x)
-            x = other;
         if (!x)
         {
             // not among the ones kept (the lists fill with other shapes,
@@ -342,11 +346,23 @@ static int Jump_Again1(FighterData *fp, JumpRoute *was, int hj, int hp, JumpRout
             made = 1;
             JumpCand c = {hp - 1, was->stick, was->hold, was->hop, hj, 0, was->neutral};
             JumpRoute found[JT_TRY];
-            int found_n;
+            int found_n, forced = 0;
             Jump_Try(fp, &c, found, &found_n, 0, 0, 0);
             for (int i = 0; i < found_n; i++)
-                if (Jump_OnTarget(&found[i]))
-                    Jump_Insert(jt_best[found[i].kind == LAND_AI], &jt_best_n[found[i].kind == LAND_AI], &found[i]);
+            {
+                JumpRoute *f = &found[i];
+                if (!Jump_OnTarget(f))
+                    continue;
+                int fk = f->kind == LAND_AI;
+                Jump_Insert(jt_best[fk], &jt_best_n[fk], f);
+                // a full list drops the last, which it may be: it's the
+                // held plan's, so it takes the last place instead
+                if (!forced && fk == k && f->aerial == was->aerial && !Jump_Find(f, jt_anchor) && jt_best_n[k] > 0)
+                {
+                    jt_best[k][jt_best_n[k] - 1] = *f;
+                    forced = 1;
+                }
+            }
             tries--; // the prediction isn't a try: look again
             continue;
         }
@@ -397,8 +413,14 @@ static void Jump_Publish(FighterData *fp)
         {
             has_again = Jump_Again(fp, was, e, &again);
             if (Log_Level() >= LOG_ALL)
-                OSReport("LLAGAIN %d e %d hj %d -> %d hp %d dj %d age %d\n", event_vars->game_timer, e, was->hj,
-                         has_again ? again.hj : -9, has_again ? again.hp : -1, has_again ? again.dj : -1, jt_hop_now_age);
+            {
+                int k = was->kind == LAND_AI, libs = 0;
+                for (int i = 0; i < jt_best_n[k]; i++)
+                    libs += jt_best[k][i].lib != 0;
+                OSReport("LLAGAIN %d e %d hj %d -> %d hp %d dj %d age %d list %d lib %d\n", event_vars->game_timer, e, was->hj,
+                         has_again ? again.hj : -9, has_again ? again.hp : -1, has_again ? again.dj : -1, jt_hop_now_age,
+                         jt_best_n[k], libs);
+            }
         }
     }
     Jump_Prune(e);

@@ -49,6 +49,7 @@ static void Jump_Prune(int e)
 #define JT_SWITCH 3
 #define JT_SETTLE 4 // ... in the first frames after it comes up (Warning frames ahead)
 static int jt_route_abs; // the anchor the shown route's frames count from
+static int jt_had;       // an AI plan shown as this frame began, before Jump_Update (Jump_Ending)
 static JumpRoute *Jump_Find(JumpRoute *r, int anchor)
 {
     int kinds = Options_Jump[JOPT_KIND].val, shift = anchor - jt_anchor;
@@ -598,10 +599,14 @@ static void Jump_Ending(FighterData *fp, int sid, int prev_sid)
     int dj = (Is_DoubleJump(jts) || Is_MultiJump(jts)) && prev_sid != sid;
     // the double jump out: the plan ends, but its lead goes on to the
     // aerial's gate (0.9.36: nothing led to the nair after the DJ)
-    if (dj && jt_have && jt_route.kind == LAND_AI && jt_path_anchor == jt_route_abs)
+    // (the shown plan as the frame began: the double jump used up the
+    // jumps, and Jump_Update has already dropped it; 0.9.36 bf26fe1)
+    if (dj && jt_had && jt_path_anchor == jt_route_abs)
     {
         jt_tail = jt_route;
         jt_tail_abs = jt_route_abs;
+        if (cue_log)
+            OSReport("LLJUMPTAIL %d anchor %d press %d land %d\n", event_vars->game_timer, jt_tail_abs, jt_tail.press, jt_tail.land);
     }
     if (jt_due >= 0 && (dj || jt_due == 0))
     {
@@ -649,6 +654,7 @@ static void Jump_KeepHop(FighterData *fp, JumpRoute *was, int d); // at the end,
 // when too few of its jump frames are left.
 static void Jump_Update(FighterData *fp, int ts, int tracked_air)
 {
+    jt_had = jt_have && jt_route_abs == jt_path_anchor && jt_route.kind == LAND_AI;
     int e = event_vars->game_timer - jt_anchor;
     jt_squat = fp->state_id == ASID_KNEEBEND;
     if (fp->state_id == ASID_KNEEBEND)

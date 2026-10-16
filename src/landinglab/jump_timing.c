@@ -268,6 +268,13 @@ static int Jump_Cost(JumpRoute *r)
     int dj = !r->hop || r->hj >= 0;
     if (dj && jt_stick_xy[r->stick][0] * jt_start.facing < 0)
         cost += 4;
+    // drift costs too: a double jump straight up, and a stick let go, are
+    // what's played most and easiest to repeat (Stephen, 0.9.30: it still
+    // favored drifting jumps over mostly vertical ones)
+    if (dj && r->stick != JT_UP)
+        cost += r->stick == JT_UPLEFT || r->stick == JT_UPRIGHT ? 2 : 3;
+    if (r->hold && (dj ? r->stick != JT_UP : 1))
+        cost += 1;
     int w = Jump_Wide(r);
     if (w < 3)
         cost += 2 * (3 - w);

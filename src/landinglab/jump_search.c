@@ -346,6 +346,8 @@ static void Jump_Publish(FighterData *fp)
         cur = Jump_Find(&again, jt_anchor);
     else if (cur && b && Jump_HopGone(cur, e))
         cur = 0; // its press has come: the next hop takes over
+    else if (!cur && jt_have)
+        cur = Jump_Near(&jt_route, jt_route_abs, e); // the same plan, a frame or two off
     if (cur && (!b || (b != cur && !(Jump_Cost(b) + JT_SWITCH <= Jump_Cost(cur) && cur->dj - e - 1 >= Jump_Lead() - JT_SETTLE))))
         b = cur;
     jt_have = b != 0;

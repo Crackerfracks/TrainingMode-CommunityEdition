@@ -22,7 +22,7 @@ The Timers menu, in menu order.
 | --- | --- | --- | --- |
 | Near You | Off, Bubble, Halo, Pincers, ECB Fill, Lights, Old Strip | Off | A countdown that rides with you. Bubble: a ring closes on where your body will be. Halo: a bead runs into a notch. Pincers, ECB Fill and Lights close, fill or count in on you. |
 | Fixed Strip | Off, Cells, Highway, Dial, Conveyor | Conveyor | A countdown in a corner. Cells slide into a gate, Dial sweeps a hand in, Highway and Conveyor (one moving belt) send notes: yellow tab JUMP, pink solid AI, green notched NIL, cyan hollow WAVE. |
-| Wide Cells | Off, On | On | Gives each frame a little more room: wider cells in Cells and the Near You strips, taller notes on the Highway and Conveyor. The Dial is unchanged. |
+| Cell Size | Normal, Wide, Wider, Widest | Wider | How much room each frame gets: wider cells in Cells and the Near You strips, taller notes (and a taller strip) on the Highway and Conveyor. The Dial is the same at every size. |
 | Landing Spot | Off, On | On | Brackets close in on the landing spot of an AI or NIL and meet it on the frame to press. |
 | Waveland | Off, Ticks, Rails, Chevrons | Off | Drawn at the slide. Ticks run in from its ends and spike where they meet, rails fill in, or chevrons hop in a notch a frame. They meet on the frame to airdodge. |
 | Wavedash | Off, Cells, Pips, Ring | Off | Drawn out of the [jumpsquat](glossary.md#jumpsquat). Cells: a WD lane in the Fixed Strip. Pips: a pip a frame under your feet. Ring: a ring on the floor that closes on the airdodge frame. Works with Waveland Cues off. |

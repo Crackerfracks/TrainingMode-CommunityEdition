@@ -21,7 +21,7 @@
 
 static float Meter_Pitch(void)
 {
-    return MT_PITCH + (Options_Timers[TOPT_WIDE].val ? MT_WIDE : 0);
+    return MT_PITCH + CELL_WIDE;
 }
 
 static void Spot_Bracket(float x, float y, int side, float stem, GXColor c)

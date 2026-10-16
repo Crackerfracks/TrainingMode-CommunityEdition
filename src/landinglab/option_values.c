@@ -46,6 +46,7 @@ static const char *ai_filter_names[] = {"Useful", "All"};
 static const char *ai_aerial_names[] = {"Any", "Nair", "Fair", "Bair", "Uair", "Dair"}; // after Any, in TS_AIRN order
 static const char *wl_cue_names[] = {"Off", "Platforms", "All Floors"};
 static const char *near_names[] = {"Off", "Bubble", "Halo", "Pincers", "ECB Fill", "Lights", "Old Strip"};
+static const char *cell_size_names[] = {"Normal", "Wide", "Wider", "Widest"};
 static const char *strip_names[] = {"Off", "Cells", "Highway", "Dial", "Conveyor"};
 static const char *wl_timer_names[] = {"Off", "Ticks", "Rails", "Chevrons"};
 static const char *wd_timer_names[] = {"Off", "Cells", "Pips", "Ring"};

@@ -67,6 +67,37 @@ static JumpRoute *Jump_Find(JumpRoute *r, int anchor)
     return 0;
 }
 
+// The route r's plan (the same hop, stick, hold and aerial) found again
+// with its frames moved by at most JT_NEAR: re-anchored while he walks or
+// runs, a speed a little off moves its double jump a frame or two, and
+// that's the same plan, not a new one to switch to (Stephen, 0.9.30: jump
+// timings on the Conveyor moved oddly while moving). The nearest, or 0.
+#define JT_NEAR 2
+static JumpRoute *Jump_Near(JumpRoute *r, int anchor, int e)
+{
+    int kinds = Options_Jump[JOPT_KIND].val, shift = anchor - jt_anchor, k = r->kind == LAND_AI;
+    if ((k == 0 && kinds == ROUTES_AI) || (k == 1 && kinds == ROUTES_NIL))
+        return 0;
+    JumpRoute *best = 0;
+    int bd = JT_NEAR + 1;
+    for (int i = 0; i < jt_best_n[k]; i++)
+    {
+        JumpRoute *x = &jt_best[k][i];
+        if (x->stick != r->stick || x->hold != r->hold || x->aerial != r->aerial || x->hop != r->hop ||
+            x->hj != r->hj || Jump_HopGone(x, e))
+            continue;
+        int d = x->dj - (r->dj + shift);
+        if (d < 0)
+            d = -d;
+        if (d < bd)
+        {
+            bd = d;
+            best = x;
+        }
+    }
+    return best;
+}
+
 // The best jump that may come up now: one whose jump is still Warning
 // frames off. One found in time but not shown then (another was better)
 // would otherwise pop up late, once the one shown went by (Stephen, 0.8.5).

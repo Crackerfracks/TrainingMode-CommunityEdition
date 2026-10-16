@@ -111,9 +111,10 @@ static void Cv_Note(MeterRow *r, int kind, int tone, float a, float x0, float y0
 #define HW_PITCH_BASE 0.68f   // one frame's height
 #define CV_ROWS 36       // ... the conveyor's: twice (18 was way too short for a preloaded wavedash, Stephen 0.9.19)
 #define CV_PITCH_BASE 0.46f   // ... in about a third more height than it had
-// Wide Cells stretches the highway's and conveyor's frames as it does the
-// cells' (Stephen, 0.9.29: it should work on every timer)
-#define WIDE_K (Options_Timers[TOPT_WIDE].val ? (MT_PITCH + MT_WIDE) / MT_PITCH : 1.f)
+// Cell Size stretches the highway's and conveyor's frames as it does the
+// cells', a little more: a thin note read early (Stephen, 0.9.29: it should
+// work on every timer; 0.9.30: the conveyor should scale a teensy bit more)
+#define WIDE_K (1.f + 1.5f * CELL_WIDE / MT_PITCH)
 #define HW_PITCH (HW_PITCH_BASE * WIDE_K)
 #define CV_PITCH (CV_PITCH_BASE * WIDE_K)
 #define HW_LANE 2.1f
@@ -196,7 +197,7 @@ static void Strip_CellsAt(FighterData *fp, float *gx, float *base)
     // clear of the gate's lit ticks (Stephen, 0.9.8: JUMP ran into them)
     *gx = x0 + x1 < 0 ? 3.6f : -SAFE_W + 0.3f + MT_LABEL_W + MT_LABEL_GAP * MT_FIXED;
     *base = -SAFE_H + 0.4f;
-    float far = *gx + (MT_FIXED_MAX - 1) * Meter_Pitch() * MT_FIXED + (MT_CW + MT_WIDE) * MT_FIXED + 0.3f;
+    float far = *gx + (MT_FIXED_MAX - 1) * Meter_Pitch() * MT_FIXED + (MT_CW + MT_WIDE_STEPS * MT_WIDE) * MT_FIXED + 0.3f;
     Box b = {*gx, *base, far, *base + 2.f}, wm = Wm_Box();
     if (Box_Hit(&b, &wm))
         *base = wm.y1 + 0.4f;
@@ -226,7 +227,7 @@ static float Pct_Left(float x, float y)
 // row ran into the stock icon and "0%").
 static int Strip_CellsMax(float gx, float base)
 {
-    float cw = (MT_CW + (Options_Timers[TOPT_WIDE].val ? MT_WIDE : 0)) * MT_FIXED;
+    float cw = (MT_CW + CELL_WIDE) * MT_FIXED;
     int n = (int)((Pct_Left(gx, base) - 0.5f - gx - cw) / (Meter_Pitch() * MT_FIXED)) + 1;
     return n > MT_FIXED_MAX ? MT_FIXED_MAX : n < 6 ? 6 : n;
 }
@@ -388,9 +389,8 @@ static void Meter_Above(FighterData *fp)
     float head_x, head_y;
     Hud_FromWorld(fp->phys.pos.X, fp->phys.pos.Y + 18.f, &head_x, &head_y);
 
-    int wide = Options_Timers[TOPT_WIDE].val;
-    float pitch = MT_PITCH + (wide ? MT_WIDE : 0);
-    float cw = MT_CW + (wide ? MT_WIDE : 0);
+    float pitch = MT_PITCH + CELL_WIDE;
+    float cw = MT_CW + CELL_WIDE;
     int len = 1;
     for (int i = 0; i < meter_rows; i++)
         if (meter[i].len > len)

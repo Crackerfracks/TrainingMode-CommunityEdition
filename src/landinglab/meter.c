@@ -43,7 +43,9 @@ enum lane_slot
 #define MT_CW 0.498f
 #define MT_CH 0.949f
 #define MT_GAP 0.271f
-#define MT_WIDE 0.074f   // Wide Cells: a fifth of the mockup's cell width
+#define MT_WIDE 0.074f   // Cell Size: a fifth of the mockup's cell width a step
+#define MT_WIDE_STEPS 3  // Normal, Wide, Wider, Widest (Stephen, 0.9.30: a size, not a toggle)
+#define CELL_WIDE (Options_Timers[TOPT_WIDE].val * MT_WIDE)
 #define MT_FIXED 1.5f    // the fixed strip's scale
 #define MT_FIXED_MAX 20  // ... and its most cells, leaving room for the stick
 #define ST_TEXT 0.36f      // every fixed strip label's and note's text size (Stephen, 0.9.9: they should match)
@@ -695,9 +697,8 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
 // has the four, an empty one with its label dimmed and no cells.
 static void Meter_Draw(float gx, float base, float scale, int max_cells, int labels)
 {
-    int wide = Options_Timers[TOPT_WIDE].val;
-    float pitch = (MT_PITCH + (wide ? MT_WIDE : 0)) * scale;
-    float cw = (MT_CW + (wide ? MT_WIDE : 0)) * scale;
+    float pitch = (MT_PITCH + CELL_WIDE) * scale;
+    float cw = (MT_CW + CELL_WIDE) * scale;
     float ch = MT_CH * scale, gap = MT_GAP * scale;
     int rows = labels ? Slot_Shown() : Slot_Count();
 

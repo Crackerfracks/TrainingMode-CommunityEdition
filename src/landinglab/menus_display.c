@@ -354,11 +354,14 @@ static EventOption Options_Timers[TOPT_COUNT] = {
                  "solid AI, green notched NIL, cyan hollow WAVE."},
     },
     {
-        .kind = OPTKIND_TOGGLE,
-        .name = "Wide Cells",
-        .val = 1,
-        .desc = {"Give each frame a little more room: wider cells,",
-                 "taller Highway and Conveyor notes."},
+        .kind = OPTKIND_STRING,
+        .name = "Cell Size",
+        .val = 2, // Wider: on the Conveyor a thin note read early (Stephen, 0.9.30)
+        .value_num = countof(cell_size_names),
+        .values = cell_size_names,
+        .desc = {"How much room each frame gets: wider cells,",
+                 "taller Highway and Conveyor notes. The Dial is",
+                 "the same at every size."},
     },
     {
         .kind = OPTKIND_TOGGLE,

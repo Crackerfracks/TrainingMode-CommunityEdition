@@ -471,6 +471,15 @@ static void Row_Jump(MeterRow *row, JumpRoute *r, int e)
     }
 }
 
+// The double jump's glyph: the button's arrow as the stick, a bar under it
+// for drift held after the jump, so a drifting plan says why it drifts
+// (Fable's Conveyor feel plan, 2026-10-16)
+static int Jump_DJGlyph(JumpRoute *r)
+{
+    static const u8 g[JT_STICKS] = {GLYPH_JUMP, GLYPH_JUMP_UL, GLYPH_JUMP_UR, GLYPH_JUMP_L, GLYPH_JUMP_R};
+    return g[r->stick] | (r->hold && r->stick != JT_UP ? GLYPH_HELD : 0);
+}
+
 // Its rows: JUMP counts down to the jump, the one under it is the aerial's
 // window as an AI shows it (or the NIL's touchdown).
 static void Meter_AddJump(void)
@@ -510,7 +519,7 @@ static void Meter_AddJump(void)
         {
             for (int n = t0 + 1; n < r->dj; n++)
                 Route_Cell(row, -t0 - 1, n, CELL_AIR, 0);
-            Route_Cell(row, -t0 - 1, r->dj, CELL_PRESS, GLYPH_JUMP);
+            Route_Cell(row, -t0 - 1, r->dj, CELL_PRESS, Jump_DJGlyph(r));
         }
         sprintf(row->info, "%s", r->hop == GT_SH ? "SH" : "FH");
         route_rows_active = 1;
@@ -537,7 +546,7 @@ static void Meter_AddJump(void)
             return;
         for (int n = e + 1; n < at; n++)
             Route_Cell(row, -e - 1, n, CELL_AIR, 0);
-        Route_Cell(row, -e - 1, at, CELL_PRESS, GLYPH_JUMP);
+        Route_Cell(row, -e - 1, at, CELL_PRESS, step == 0 ? GLYPH_JUMP : Jump_DJGlyph(r));
         // a hop offered "now" frame after frame while he walks is an offer,
         // not an alarm: white only on its first frame, its own color after
         // (Fable's Conveyor feel plan, 2026-10-16)

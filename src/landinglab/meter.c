@@ -86,7 +86,12 @@ enum glyph_kind
     GLYPH_FF,            // fastfall: a double chevron, where a plain hold down is one solid arrow
     GLYPH_FF_DOWN_LEFT,
     GLYPH_FF_DOWN_RIGHT,
+    GLYPH_JUMP_UL, // a double jump with the stick up-left: the jump button's arrow turned
+    GLYPH_JUMP_UR,
+    GLYPH_JUMP_L,
+    GLYPH_JUMP_R,
 };
+#define GLYPH_HELD 0x40 // or'd in: the stick's drift kept after the jump, a bar under the glyph
 
 typedef struct MeterRow
 {
@@ -786,8 +791,17 @@ static void Glyph_Chevrons(float x, float y, float r, float dx, float dy, float 
 static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
 {
     GXColor shade = Color_Fill(color_plate, c.a / 255.f * 0.9f);
+    int held = glyph & GLYPH_HELD;
+    glyph &= ~GLYPH_HELD;
     for (int pass = 0; pass < 2; pass++)
     {
+        if (held)
+        {
+            // the drift held after the jump: a bar under the button (Fable's
+            // Conveyor feel plan: drift should say so)
+            float hw = 0.8f * s + (pass ? 0 : 0.12f), by = y - s * 1.2f, bh = 0.14f * s + (pass ? 0 : 0.12f);
+            Hud_Rect(x - hw, by - bh, x + hw, by + bh, pass ? c : shade);
+        }
         float r = pass ? s : s + 0.12f;
         GXColor col = pass ? c : shade;
         switch (glyph)
@@ -814,11 +828,24 @@ static void Glyph_Draw(int glyph, float x, float y, float s, GXColor c)
             break;
         }
         case GLYPH_JUMP:
-            // a button with an up arrow cut into it
+        case GLYPH_JUMP_UL:
+        case GLYPH_JUMP_UR:
+        case GLYPH_JUMP_L:
+        case GLYPH_JUMP_R:
+        {
+            // a button with an arrow cut into it, pointing as the stick
+            float ux = glyph == GLYPH_JUMP_UL ? -0.707f : glyph == GLYPH_JUMP_UR ? 0.707f : glyph == GLYPH_JUMP_L ? -1.f
+                       : glyph == GLYPH_JUMP_R ? 1.f : 0;
+            float uy = glyph == GLYPH_JUMP_L || glyph == GLYPH_JUMP_R ? 0 : glyph == GLYPH_JUMP ? 1.f : 0.707f;
             Hud_Disc(x, y, r, col);
             if (pass)
-                Hud_Tri(x + s * 0.55f, y - s * 0.3f, x - s * 0.55f, y - s * 0.3f, x, y + s * 0.5f, shade);
+            {
+                float bx = x - ux * s * 0.3f, by = y - uy * s * 0.3f; // the base, then the tip
+                Hud_Tri(bx + uy * s * 0.55f, by - ux * s * 0.55f, bx - uy * s * 0.55f, by + ux * s * 0.55f, x + ux * s * 0.5f,
+                        y + uy * s * 0.5f, shade);
+            }
             break;
+        }
         case GLYPH_AERIAL:
             Hud_Disc(x, y, r, col);
             break;

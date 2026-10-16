@@ -115,6 +115,23 @@ static void Markers_Flush(int side)
             m->cy = low;
         if (m->cy > high)
             m->cy = high;
+        // never under the controller display: over it, out of the others'
+        // way (0.9.30 audit: the Medium pad covered a ledge route's chip)
+        if (Options_Hud[HOPT_STICK].val != STICK_OFF)
+        {
+            FighterData *fp = Fighter_GetGObj(0)->userdata;
+            float px0, py0, px1, py1;
+            Pad_Box(fp, &px0, &py0, &px1, &py1);
+            if (m->cx + m->w / 2 > px0 - gap && m->cx - m->w / 2 < px1 + gap && m->cy - h / 2 < py1 + gap &&
+                m->cy + h / 2 > py0 - gap)
+            {
+                m->cy = py1 + gap + h / 2;
+                for (int tries = 0, j; tries < 2 * MK_MAX && (j = Marker_Hit(i, h, gap)) >= 0; tries++)
+                    m->cy = mk[j].cy + h + gap;
+                if (m->cy > high)
+                    m->cy = high;
+            }
+        }
     }
     for (int i = 0; i < mk_num; i++)
     {

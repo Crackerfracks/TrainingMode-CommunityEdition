@@ -90,7 +90,7 @@ static void Ring_Trigger(float cx, float cy, float s, int side, float analog, in
         px[i] = cx + m * px[i];
         py[i] += cy;
     }
-    GXColor plate = Color_Fill(color_plate, 0.55f);
+    GXColor plate = Color_Fill(color_plate, 0.55f * pad_dim);
     for (int k = 0; k < RING_SEGS; k++)
         Quad_Add(px[k], py[k], px[k + 1], py[k + 1], px[n - 2 - k], py[n - 2 - k], px[n - 1 - k], py[n - 1 - k], plate);
     {
@@ -173,7 +173,7 @@ static void Ring_Backing(float cx, float cy, float s)
         px[i] = cx + cos(ang) * RING_A * s;
         py[i] = cy + sin(ang) * RING_B * s;
     }
-    Hud_Fan(cx, cy, px, py, 32, Color_Fill(color_plate, 0.45f)); // the triggers' outlines soften its edge
+    Hud_Fan(cx, cy, px, py, 32, Color_Fill(color_plate, 0.45f * pad_dim)); // the triggers' outlines soften its edge
 }
 
 // A button's fill: its own color at rest, lighter and fully opaque the more

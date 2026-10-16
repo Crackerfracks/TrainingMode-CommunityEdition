@@ -186,6 +186,11 @@ static HSD_Pad *Pad_Live(FighterData *fp)
     return paused ? PadGetMaster(fp->pad_index) : PadGetEngine(fp->pad_index);
 }
 
+// The display's plates fade while the fighter stands over them, as the
+// strip's do, so he shows through; the buttons and sticks never fade
+// (Fable's Conveyor feel plan, 2026-10-16: the Medium pad covered a boot)
+static float pad_dim = 1.f;
+
 // Where the display goes: the bottom of the screen, in a corner or beside
 // the player's percent. Other drawing keeps clear of this box.
 static void Pad_Box(FighterData *fp, float *x0, float *y0, float *x1, float *y1)
@@ -256,7 +261,7 @@ static void Pad_Gate(float cx, float cy, float R, float rim_w, GXColor rim)
         vx[i] = cx + cos(ang) * R;
         vy[i] = cy + sin(ang) * R;
     }
-    GXColor plate = Color_Fill(color_plate, 0.6f);
+    GXColor plate = Color_Fill(color_plate, 0.6f * pad_dim);
     for (int i = 0; i < 8; i++)
         Hud_Tri(cx, cy, vx[i], vy[i], vx[i + 1], vy[i + 1], plate);
     if (pad_soft)
@@ -287,7 +292,7 @@ static void Pad_Backing(float x0, float y0, float x1, float y1)
             py[k * 4 + i] = my + sin(ang) * PAD_BACK_R;
         }
     }
-    Hud_Fan((x0 + x1) / 2, (y0 + y1) / 2, px, py, 16, Color_Over(color_plate, 0.6f));
+    Hud_Fan((x0 + x1) / 2, (y0 + y1) / 2, px, py, 16, Color_Over(color_plate, 0.6f * pad_dim));
 }
 
 // A pill's ten corners: half circles joined by straight edges, its length
@@ -342,7 +347,7 @@ static void Pad_Button(float cx, float cy, float r, GXColor c, int in, float glo
 static void Pad_Trigger(float x, float by, float analog, float glow)
 {
     GXColor c = land_kind_colors[LAND_PERFECT_WL];
-    GXColor plate = Color_Fill(color_plate, 0.6f);
+    GXColor plate = Color_Fill(color_plate, 0.6f * pad_dim);
     float x1 = x + 0.5f;
     Hud_Rect(x, by + 0.2f, x1, by + 4.6f, plate);
     Hud_Frame(x, by + 0.2f, x1, by + 4.6f, 0.06f, Color_Fill(c, 0.4f));

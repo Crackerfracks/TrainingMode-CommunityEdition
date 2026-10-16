@@ -116,7 +116,7 @@ static void Crest_Wing(float cx, float cy, float k, int side, float analog, int 
             Crest_BladePoint(i, u, 1, m, k, cx, cy, &px[j], &py[j]);
             Crest_BladePoint(i, u, 0, m, k, cx, cy, &px[n - 1 - j], &py[n - 1 - j]);
         }
-        Crest_BladeQuads(i, 0, 1, m, k, cx, cy, Color_Fill(color_plate, 0.62f));
+        Crest_BladeQuads(i, 0, 1, m, k, cx, cy, Color_Fill(color_plate, 0.62f * pad_dim));
         // a lighter facet along the top edge, an edge that catches the light
         for (int j = 0; j < CREST_SEGS; j++)
         {
@@ -241,7 +241,7 @@ static void Crest_Draw(FighterData *fp, HSD_Pad *pad, float bx, float by)
         px[i] = cx + crest_plate[i][0] * k;
         py[i] = cy + crest_plate[i][1] * k;
     }
-    Hud_Fan(cx, cy - 0.4f * k, px, py, n, Color_Fill(color_plate, 0.5f));
+    Hud_Fan(cx, cy - 0.4f * k, px, py, n, Color_Fill(color_plate, 0.5f * pad_dim));
     Hud_Line(px, py, n, 1, 0.05f * k, PX, Color_Over(color_white, 0.5f)); // 0.22 was faint (visual audit, 2026-10-15)
     Crest_Wing(cx, cy, k, -1, pad->ftriggerLeft, held[PIN_L], glow[PIN_L], pad_flash[PIN_L]);
     Crest_Wing(cx, cy, k, 1, pad->ftriggerRight, held[PIN_R], glow[PIN_R], pad_flash[PIN_R]);

@@ -97,6 +97,9 @@ static void Pad_Draw(FighterData *fp)
         return;
     float bx, by, x1, y1;
     Pad_Box(fp, &bx, &by, &x1, &y1);
+    Box pb = {bx, by, x1, y1}, body;
+    int over = Body_Box(fp->phys.pos.X, fp->phys.pos.Y - 1.f, fp->phys.pos.Y + 20.f, &body) && Box_Hit(&body, &pb);
+    pad_dim += ((over ? 0.4f : 1.f) - pad_dim) / 6.f;
     HSD_Pad *pad = Pad_Live(fp);
     int buttons = Options_Hud[HOPT_BUTTONS].val;
     memset(pin_spot, 0, sizeof(pin_spot));
